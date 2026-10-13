@@ -1,6 +1,7 @@
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/desktop/application_platform.hpp"
 #include "sketch/noninteractive_errors.hpp"
+#include "bundled_fonts.hpp"
 
 #include <QApplication>
 #include <QDebug>
@@ -118,25 +119,24 @@ QSize smoke_size(const QStringList& arguments) {
 }
 
 bool loadBundledFont(const QApplication& application) {
-    const QStringList candidates{
+    // Inter stays registered so documents, annotation styles and text-library
+    // entries that name it keep rendering with the shipped face.
+    const QStringList inter_candidates{
         QStringLiteral(":/fonts/Inter.ttf"),
         QStringLiteral(":/fonts/InterVariable.ttf"),
         QDir(application.applicationDirPath()).filePath(QStringLiteral("fonts/Inter.ttf")),
         QDir(application.applicationDirPath()).filePath(QStringLiteral("fonts/InterVariable.ttf")),
     };
-    for (const auto& candidate : candidates) {
-        const auto font_id = QFontDatabase::addApplicationFont(candidate);
-        if (font_id >= 0) {
-            const auto families = QFontDatabase::applicationFontFamilies(font_id);
-            if (!families.isEmpty()) {
-                QFont font(families.front());
-                font.setPointSize(9);
-                application.setFont(font);
-                return true;
-            }
-        }
+    for (const auto& candidate : inter_candidates) {
+        if (QFontDatabase::addApplicationFont(candidate) >= 0) break;
     }
-    return false;
+    // IBM Plex Sans is the design-system UI face; Segoe UI is its fallback.
+    if (!sketch::desktop::ensure_bundled_fonts()) return false;
+    QFont font(sketch::desktop::bundled_sans_family());
+    font.setFamilies({sketch::desktop::bundled_sans_family(), QStringLiteral("Segoe UI")});
+    font.setPointSize(9);
+    application.setFont(font);
+    return true;
 }
 
 bool seed_smoke_document(sketch::desktop::MainWindow& window, bool architectural,
@@ -334,7 +334,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     if (!font_loaded) {
-        qWarning() << "Vertex: bundled Inter font was not loaded";
+        qWarning() << "Vertex: bundled IBM Plex fonts were not loaded";
         if (smoke) {
             qCritical() << "Vertex: refusing visual smoke capture without bundled font";
             return 3;

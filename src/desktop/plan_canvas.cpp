@@ -1,5 +1,7 @@
 #include "plan_canvas.hpp"
 #include "sketch_content_bounds.hpp"
+#include "vertex_design_tokens.hpp"
+#include "measurement_format.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
 #include "sketch/desktop/symbol_svg_palette.hpp"
 #include "sketch/desktop/svg_admission.hpp"
@@ -145,19 +147,7 @@ GridSpacing grid_spacing(double scale, bool metric) noexcept {
 }
 
 QString grid_spacing_label(double metres, bool metric) {
-    if (metric) {
-        const auto unit = metres < 0.01 ? QStringLiteral("mm")
-            : metres < 1.0 ? QStringLiteral("cm") : QStringLiteral("m");
-        const auto value = metres < 0.01 ? metres * 1000.0
-            : metres < 1.0 ? metres * 100.0 : metres;
-        return QStringLiteral("%1 %2").arg(value, 0, 'g', 6).arg(unit);
-    }
-    const auto inches = metres / 0.0254;
-    if (inches < 1.0)
-        return QStringLiteral("1/%1 in").arg(qRound(1.0 / inches));
-    if (inches < 12.0)
-        return QStringLiteral("%1 in").arg(inches, 0, 'g', 6);
-    return QStringLiteral("%1 ft").arg(metres / 0.3048, 0, 'g', 6);
+    return units::length_text(metres, metric);
 }
 
 double paper_stroke_pixels(const CanvasEntity& entity, double pixels_per_mm) {
@@ -540,36 +530,34 @@ double point_segment_distance(QPointF point, QPointF start, QPointF end) {
 }
 
 QColor color_for(const CanvasEntity& entity, bool light_surface, bool selection_color = true) {
-    if (selection_color && entity.selected) {
-        return light_surface ? QColor(37, 99, 235) : QColor(75, 210, 255);
-    }
-    if (entity.type == QStringLiteral("wall")) {
-        return light_surface ? QColor(35, 77, 113) : QColor(143, 198, 245);
-    }
-    if (entity.type == QStringLiteral("room_boundary")) {
-        return light_surface ? QColor(48, 91, 128) : QColor(139, 199, 244);
-    }
-    if (entity.type == QStringLiteral("measurement_boundary")) {
-        return light_surface ? QColor(37, 91, 145) : QColor(128, 194, 246);
-    }
-    if (entity.type == QStringLiteral("boundary")) {
-        return light_surface ? QColor(37, 91, 145) : QColor(128, 194, 246);
-    }
-    if (entity.type == QStringLiteral("slab")) {
-        return light_surface ? QColor(69, 102, 129) : QColor(152, 195, 226);
-    }
-    if (entity.type == QStringLiteral("terrain_surface")) {
-        return QColor(119, 164, 113);
-    }
-    if (entity.type == QStringLiteral("dimension_line")) {
-        return light_surface ? QColor(82, 101, 121) : QColor(190, 207, 225);
-    }
-    if (entity.type == QStringLiteral("opening") ||
-        entity.type == QStringLiteral("window") ||
-        entity.type == QStringLiteral("symbol")) {
-        return light_surface ? QColor(57, 70, 84) : QColor(210, 226, 239);
-    }
-    return light_surface ? QColor(83, 99, 116) : QColor(188, 205, 222);
+    // Vertex design system drawing colors (docs/design/vertex-design-system):
+    // exterior walls and perimeters in draw-wall, interior elements and
+    // fixtures in draw-wall-interior, dimensions in draw-dimension and
+    // selection in draw-selection. Paper output is a light surface.
+    const auto& tokens = design::for_surface(light_surface);
+    if (selection_color && entity.selected) return tokens.draw_selection;
+    if (entity.type == QStringLiteral("terrain_surface")) return QColor(119, 164, 113);
+    if (entity.type == QStringLiteral("dimension_line")) return tokens.draw_dimension;
+    if (entity.type == QStringLiteral("wall") || entity.type == QStringLiteral("room_boundary") ||
+        entity.type == QStringLiteral("measurement_boundary") || entity.type == QStringLiteral("boundary"))
+        return tokens.draw_wall;
+    return tokens.draw_wall_interior;
+}
+
+// WCAG relative luminance and contrast ratio, used to keep strokes that were
+// authored for a light surface readable on a dark interactive canvas.
+double relative_luminance(const QColor& color) {
+    const auto channel = [](double value) {
+        return value <= 0.04045 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4);
+    };
+    const auto rgb = color.toRgb();
+    return 0.2126 * channel(rgb.redF()) + 0.7152 * channel(rgb.greenF()) +
+           0.0722 * channel(rgb.blueF());
+}
+
+double contrast_ratio(const QColor& first, const QColor& second) {
+    const auto a = relative_luminance(first), b = relative_luminance(second);
+    return (std::max(a, b) + 0.05) / (std::min(a, b) + 0.05);
 }
 
 Qt::BrushStyle hatch_style(QString pattern) {
@@ -2294,24 +2282,37 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         if (m_wall_snap_enabled && m_last_mouse_position) {
             const auto snap = snapResult(*m_last_mouse_position);
             if (snap.kind != SnapKind::none) {
-                const QColor color = snap.kind == SnapKind::endpoint ? QColor(57, 197, 132)
-                    : snap.kind == SnapKind::perpendicular ? QColor(85, 167, 255)
-                    : snap.kind == SnapKind::alignment ? QColor(111, 176, 245)
-                    : snap.kind == SnapKind::on_boundary ? QColor(186, 117, 255)
-                                                       : QColor(255, 196, 82);
+                // Design system: snap glyphs use draw-snap and differ by
+                // shape (never color alone); temporary guides are dashed
+                // draw-guide. The text cue below names the snap kind.
+                const auto& tokens = design::for_surface(m_canvas_background.lightnessF() > 0.5);
+                const QColor color = tokens.draw_snap;
                 if (snap.guide) {
-                    painter.setPen(QPen(color, 0.0, Qt::DashLine));
+                    QPen guide(tokens.draw_guide, 0.0, Qt::DashLine);
+                    guide.setCapStyle(Qt::RoundCap);
+                    painter.setPen(guide);
                     painter.setBrush(Qt::NoBrush);
                     drawSegment(painter, *snap.guide);
                 }
                 const auto radius = 7.0 / scale;
-                painter.setPen(QPen(color, 0.0));
+                QPen glyph(color, 1.5 / scale, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+                painter.setPen(glyph);
                 painter.setBrush(Qt::NoBrush);
-                painter.drawEllipse(QPointF(snap.point.x, snap.point.y), radius, radius);
-                painter.drawLine(QPointF(snap.point.x - radius, snap.point.y),
-                                 QPointF(snap.point.x + radius, snap.point.y));
-                painter.drawLine(QPointF(snap.point.x, snap.point.y - radius),
-                                 QPointF(snap.point.x, snap.point.y + radius));
+                const QPointF at(snap.point.x, snap.point.y);
+                if (snap.kind == SnapKind::endpoint) {
+                    painter.drawRect(QRectF(at.x() - radius, at.y() - radius, 2.0 * radius, 2.0 * radius));
+                } else if (snap.kind == SnapKind::perpendicular) {
+                    painter.drawLine(QPointF(at.x() - radius, at.y() - radius), QPointF(at.x() - radius, at.y() + radius));
+                    painter.drawLine(QPointF(at.x() - radius, at.y() - radius), QPointF(at.x() + radius, at.y() - radius));
+                    painter.drawRect(QRectF(at.x() - radius, at.y() - radius, radius, radius));
+                } else if (snap.kind == SnapKind::alignment) {
+                    painter.drawLine(QPointF(at.x() - radius, at.y() - radius), QPointF(at.x() + radius, at.y() + radius));
+                    painter.drawLine(QPointF(at.x() - radius, at.y() + radius), QPointF(at.x() + radius, at.y() - radius));
+                } else {
+                    painter.drawEllipse(at, radius, radius);
+                    painter.drawLine(QPointF(at.x() - radius, at.y()), QPointF(at.x() + radius, at.y()));
+                    painter.drawLine(QPointF(at.x(), at.y() - radius), QPointF(at.x(), at.y() + radius));
+                }
                 QString cue;
                 switch (snap.kind) {
                 case SnapKind::endpoint: cue = QStringLiteral("Endpoint"); break;
@@ -7067,7 +7068,7 @@ void PlanCanvas::drawRoofOpeningControls(QPainter& painter, const QRectF& viewpo
         drawingLengthText(frame.width_metres*frame.width_surface_scale,m_metric_units),
         drawingLengthText(frame.depth_metres*frame.depth_surface_scale,m_metric_units));
     if (m_roof_opening_capture && roof_opening_rotation_handle(m_roof_opening_handle))
-        text+=QStringLiteral("  ·  %1°").arg(frame.rotation_radians*180.0/pi,0,'f',1);
+        text+=QStringLiteral("  ·  %1").arg(units::angle_text(frame.rotation_radians*180.0/pi));
     if (invalid) text+=QStringLiteral("  ·  Invalid");
     else if (m_roof_opening_preview_pending) text+=QStringLiteral("  ·  Previewing");
     const auto bounds=polygon.boundingRect();
@@ -7117,7 +7118,7 @@ void PlanCanvas::drawRoofOpeningGroupControls(QPainter& painter,const QRectF& vi
     auto text=QStringLiteral("%1 skylights  ·  W %2  ×  D %3").arg(static_cast<qulonglong>(m_selected_roof_openings.size())).arg(
         drawingLengthText(frame->width_metres,m_metric_units),drawingLengthText(frame->depth_metres,m_metric_units));
     if (m_roof_opening_group_edit && roof_opening_rotation_handle(m_roof_opening_group_handle))
-        text+=QStringLiteral("  ·  %1°").arg(m_roof_opening_group_edit->rotation_radians*180.0/pi,0,'f',1);
+        text+=QStringLiteral("  ·  %1").arg(units::angle_text(m_roof_opening_group_edit->rotation_radians*180.0/pi));
     if (invalid) text+=QStringLiteral("  ·  Invalid");
     else if (m_roof_opening_group_pending) text+=QStringLiteral("  ·  Previewing");
     const auto bounds=polygon.boundingRect();
@@ -7727,11 +7728,7 @@ void PlanCanvas::drawVertexHandles(QPainter& painter, const QRectF& viewport) co
             if (totals.length_metres) {
                 text += QStringLiteral("\nLength %1").arg(display_cursor_length(*totals.length_metres,m_metric_units));
             } else {
-                constexpr double metres_per_foot = .3048;
-                const auto area = m_metric_units
-                    ? QStringLiteral("%1 m²").arg(totals.area_square_metres,0,'f',2)
-                    : QStringLiteral("%1 ft²").arg(totals.area_square_metres /
-                        (metres_per_foot*metres_per_foot),0,'f',2);
+                const auto area = units::area_text(totals.area_square_metres,m_metric_units);
                 const bool roof_corner=m_vertex_move_handle->vertex_id.startsWith(QStringLiteral("roof:corner:"));
                 if (roof_corner) {
                     const auto retained=std::find_if(m_entities.begin(),m_entities.end(),
@@ -7973,7 +7970,7 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
             auto degrees = std::fmod(radians * 180/pi, 360.0);
             if (degrees < 0) degrees += 360;
             if (std::abs(degrees-360) < 1e-6 || std::abs(degrees) < 1e-6) degrees = 0;
-            text += QStringLiteral("  ·  %1°").arg(degrees, 0, 'f', 1);
+            text += QStringLiteral("  ·  %1").arg(units::angle_text(degrees));
         }
         const auto c = std::cos(axes.rotation_radians), s = std::sin(axes.rotation_radians);
         // Keep the upright callout outside the screen extent at every angle.
@@ -8554,46 +8551,9 @@ void PlanCanvas::updatePlacementModifiers(Qt::KeyboardModifiers modifiers) {
 }
 
 QString PlanCanvas::drawingLengthText(double metres, bool metric) {
-    if (!std::isfinite(metres)) return QStringLiteral("—");
-    if (metric) {
-        const auto ticks = metres * 1000.0;
-        if (!std::isfinite(ticks))
-            return QStringLiteral("≈ %1 m").arg(metres,0,'g',6);
-        const auto rounded = std::round(ticks) / 1000.0;
-        const auto millimetres = std::abs(rounded) < 1.0;
-        auto number = QString::number(rounded == 0.0 ? 0.0 :
-            rounded * (millimetres ? 1000.0 : 1.0), 'f', millimetres ? 0 : 3);
-        if (!millimetres) {
-            while (number.endsWith(QLatin1Char('0'))) number.chop(1);
-            if (number.endsWith(QLatin1Char('.'))) number.chop(1);
-        }
-        // Ignore only numerical noise in ordinary exact construction values.
-        // This label is derived presentation; it never feeds geometry edits.
-        const auto prefix = std::abs(metres-rounded) > 1e-10
-            ? QStringLiteral("≈ ") : QString{};
-        return QStringLiteral("%1%2 %3").arg(prefix,number,
-            millimetres ? QStringLiteral("mm") : QStringLiteral("m"));
-    }
-    const auto inches=std::abs(metres)/0.0254;
-    const auto sixteenths=std::round(inches*16.0);
-    if (!std::isfinite(sixteenths)) return QStringLiteral("—");
-    const auto prefix = std::abs(inches*16.0-sixteenths)>1e-7
-        ? QStringLiteral("≈ ") : QString{};
-    const auto sign=metres<0 && sixteenths>0 ? QStringLiteral("-") : QString{};
-    if (sixteenths>9e15)
-        return QStringLiteral("≈ %1%2 in").arg(sign).arg(inches,0,'g',6);
-    const auto ticks=static_cast<qint64>(sixteenths);
-    const auto feet=ticks/192;
-    const auto whole=(ticks%192)/16;
-    const auto numerator=ticks%16;
-    QString inch_text=whole || !numerator ? QString::number(whole) : QString{};
-    if (numerator) {
-        const auto divisor=std::gcd(numerator,qint64{16});
-        if (!inch_text.isEmpty()) inch_text += QLatin1Char(' ');
-        inch_text += QStringLiteral("%1/%2").arg(numerator/divisor).arg(16/divisor);
-    }
-    return feet>0 ? QStringLiteral("%1%2%3 ft %4 in").arg(prefix,sign).arg(feet).arg(inch_text)
-                  : QStringLiteral("%1%2%3 in").arg(prefix,sign,inch_text);
+    // The shared Vertex measurement formatter (measurement_format.hpp) owns
+    // the design-system rules and the "≈" rule for every displayed length.
+    return units::length_text(metres, metric);
 }
 
 std::optional<Vec2> PlanCanvas::drawingOrigin() const {
@@ -10557,10 +10517,9 @@ void PlanCanvas::drawGrid(QPainter& painter, const QRectF& viewport, double scal
     const auto step = spacing.minor;
     const bool light_surface = m_canvas_background.lightnessF() > 0.5;
     const bool high_contrast = m_canvas_background == QColor(Qt::black);
-    QPen minor(high_contrast ? QColor(96, 96, 96)
-                             : light_surface ? QColor(232, 237, 243) : QColor(43, 51, 62), 0.0);
-    QPen major(high_contrast ? QColor(160, 160, 160)
-                             : light_surface ? QColor(207, 217, 229) : QColor(58, 68, 82), 0.0);
+    const auto& tokens = design::for_surface(light_surface);
+    QPen minor(high_contrast ? QColor(96, 96, 96) : tokens.grid_minor, 0.0);
+    QPen major(high_contrast ? QColor(160, 160, 160) : tokens.grid_major, 0.0);
     const auto first_x = std::floor(min_x / step) * step;
     const auto first_y = std::floor(min_y / step) * step;
     const auto major_multiple = std::round(spacing.major / step);
@@ -10768,9 +10727,8 @@ void PlanCanvas::drawCursorReadout(QPainter& painter, const QRectF& viewport,
         const auto length = std::hypot(dx, dy);
         if (std::isfinite(dx) && std::isfinite(dy) && std::isfinite(length)) {
             const auto angle = std::atan2(dy, dx) * 180.0 / pi;
-            text += QStringLiteral("\nΔ %1   ∠ %2°")
-                .arg(drawingLengthText(length, m_metric_units))
-                .arg(angle, 0, 'f', 1);
+            text += QStringLiteral("\nΔ %1   ∠ %2")
+                .arg(drawingLengthText(length, m_metric_units), units::angle_text(angle));
         }
     }
 
@@ -11042,10 +11000,13 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
         : color_for(entity, light_surface);
     // Legacy/default presentation records may supply only the light stroke.
     // Keep recognizably custom colors, but never let a semantic light default
-    // (or the annotation default black) defeat dark-canvas contrast.
+    // (current token, a pre-token default, or the annotation default black)
+    // defeat dark-canvas contrast: a stroke below the 3:1 non-text contrast
+    // floor against the dark surface falls back to the semantic dark color.
     const auto custom_stroke = entity.stroke_color.isValid() &&
         entity.stroke_color != color_for(entity, true) &&
-        entity.stroke_color != QColor(Qt::black);
+        entity.stroke_color != QColor(Qt::black) &&
+        (light_surface || contrast_ratio(entity.stroke_color, background) >= 3.0);
     const auto color = !output && entity.selected && !entity.preserve_selected_stroke
         ? default_color
         : !output && !light_surface
@@ -11335,7 +11296,7 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
             if (factor > 1.0) {
                 const auto edge = transform.map(bounds.center() + delta / factor);
                 auto color = label.color.isValid() ? label.color :
-                    background.lightnessF()>0.5 ? QColor(85,98,115) : QColor(190,195,200);
+                    design::for_surface(background.lightnessF() > 0.5).ink_muted;
                 color.setAlpha(160);
                 QPen pen(color, output ? std::max(0.7,dpi*0.15/25.4) : 0.7);
                 pen.setCosmetic(true);
@@ -11374,13 +11335,15 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
         } else {
             painter.setBrush(Qt::NoBrush);
         }
+        // On screen, room names, areas and notes are text: they use the
+        // surface's ink token, never the draw-dimension amber reserved for
+        // dimensions. Output keeps its established (theme-independent) colors.
+        const auto& label_tokens = design::for_surface(background.lightnessF() > 0.5);
         painter.setPen(label.color.isValid() ? label.color
                        : output ? (background.lightnessF() > 0.5 ? QColor(25, 25, 25)
                                                                 : QColor(255, 239, 172))
-                              : label.selected ? QColor(37, 99, 235)
-                                                : background.lightnessF() > 0.5
-                                                    ? QColor(50, 65, 84)
-                                                    : QColor(255, 239, 172));
+                              : label.selected ? label_tokens.draw_selection
+                                                : label_tokens.ink);
         painter.setBrush(Qt::NoBrush);
         const auto text_bounds = label.text_alignment == QStringLiteral("left") ||
                                  label.text_alignment == QStringLiteral("right")

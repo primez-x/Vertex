@@ -1,0 +1,120 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap");
+
+/* Vertex components — every value is a token from tokens.json */
+.vx-stage { background: var(--surface-1); color: var(--ink); font: 400 13px/18px var(--font-sans); padding: var(--space-3); box-sizing: border-box; min-height: 100vh; }
+.vx-stage--frame { background: var(--surface-0); }
+.vx-stage--canvas { background: var(--canvas); }
+.vx-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.vx-col { display: flex; flex-direction: column; gap: var(--space-3); }
+.vx-icon { flex: none; display: block; }
+
+/* Button */
+.vx-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); box-sizing: border-box; border: 1px solid transparent; border-radius: var(--radius-md); padding: 0 var(--space-3); font: 500 13px/18px var(--font-sans); cursor: pointer; white-space: nowrap; }
+.vx-btn--md { height: var(--control-md); }
+.vx-btn--sm { height: var(--control-sm); padding: 0 var(--space-2); font-size: 12px; }
+.vx-btn--icon-only { padding: 0; }
+.vx-btn--md.vx-btn--icon-only { width: var(--control-md); }
+.vx-btn--sm.vx-btn--icon-only { width: var(--control-sm); }
+.vx-btn--primary { background: var(--accent); color: var(--on-accent); }
+.vx-btn--primary:hover { box-shadow: inset 0 0 0 100px rgba(0, 0, 0, 0.08); }
+.vx-btn--secondary { background: var(--surface-2); color: var(--ink); border-color: var(--border-control); }
+.vx-btn--secondary:hover { background: var(--surface-3); }
+.vx-btn--ghost { background: transparent; color: var(--ink); }
+.vx-btn--ghost:hover { background: var(--surface-3); }
+.vx-btn--danger { background: transparent; color: var(--danger); border-color: var(--danger); }
+.vx-btn--danger:hover { background: var(--surface-3); }
+.vx-btn:disabled { background: transparent; color: var(--ink-faint); border-color: var(--border); box-shadow: none; cursor: default; }
+.vx-btn:focus-visible, .vx-tool:focus-visible, .vx-tab:focus-visible, .vx-inspector__toggle:focus-visible { outline: var(--stroke-selection) solid var(--focus-ring); outline-offset: 1px; }
+
+/* ToolButton + Toolbar */
+.vx-tool { display: inline-grid; place-items: center; width: var(--tool-button); height: var(--tool-button); border: 0; border-radius: var(--radius-md); background: transparent; color: var(--ink); cursor: pointer; padding: 0; }
+.vx-tool:hover { background: var(--surface-3); }
+.vx-tool.is-active { background: var(--accent); color: var(--on-accent); }
+.vx-tool:disabled { color: var(--ink-faint); background: transparent; cursor: default; }
+.vx-toolbar { display: inline-flex; align-items: center; gap: var(--space-1); background: var(--surface-0); padding: var(--space-1); box-sizing: border-box; border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.vx-toolbar--horizontal { height: var(--toolbar); }
+.vx-toolbar--vertical { flex-direction: column; width: var(--toolbar); }
+.vx-toolbar--floating { border: 0; border-radius: var(--radius-lg); box-shadow: var(--shadow-float); }
+.vx-toolbar__divider { flex: none; background: var(--border); border-radius: var(--radius-sm); }
+.vx-toolbar--horizontal .vx-toolbar__divider { width: 1px; height: 20px; margin: 0 var(--space-1); }
+.vx-toolbar--vertical .vx-toolbar__divider { height: 1px; width: 20px; margin: var(--space-1) 0; }
+
+/* NumberField */
+.vx-field { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.vx-field__label { font: 500 12px/16px var(--font-sans); color: var(--ink-muted); }
+.vx-field__box { display: flex; align-items: center; box-sizing: border-box; height: var(--control-md); background: var(--surface-2); border: 1px solid var(--border-control); border-radius: var(--radius-md); padding: 0 var(--space-2); gap: var(--space-1); }
+.vx-field--sm .vx-field__box { height: var(--control-sm); }
+.vx-field__box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.vx-field__input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--ink); font: 400 13px/18px var(--font-mono); text-align: right; padding: 0; outline: none; }
+.vx-field__input::placeholder { color: var(--ink-faint); }
+.vx-field__unit { font: 400 12px/16px var(--font-mono); color: var(--ink-muted); }
+.vx-field.is-invalid .vx-field__box { border-color: var(--danger); }
+.vx-field.is-invalid .vx-field__box:focus-within { box-shadow: 0 0 0 1px var(--danger); }
+.vx-field__error { display: flex; align-items: center; gap: var(--space-1); font: 400 11px/14px var(--font-sans); color: var(--danger); }
+.vx-field.is-disabled .vx-field__box { border-color: var(--border); background: transparent; }
+.vx-field.is-disabled .vx-field__input, .vx-field.is-disabled .vx-field__unit, .vx-field.is-disabled .vx-field__label { color: var(--ink-faint); }
+
+/* Tabs */
+.vx-tabs { display: flex; padding-bottom: 2px; gap: var(--space-1); border-bottom: 1px solid var(--border); padding: 0 var(--space-1); }
+.vx-tab { position: relative; height: var(--control-md); padding: 0 var(--space-3); border: 0; background: transparent; color: var(--ink-muted); font: 500 12px/16px var(--font-sans); cursor: pointer; display: inline-flex; align-items: center; gap: var(--space-1); border-radius: var(--radius-md); }
+.vx-tab:hover { color: var(--ink); background: var(--surface-3); }
+.vx-tab.is-selected { color: var(--ink); }
+.vx-tab.is-selected::after { content: ""; position: absolute; left: var(--space-2); right: var(--space-2); bottom: -1px; height: 2px; border-radius: var(--radius-sm); background: var(--accent); }
+.vx-tab__count { font: 400 11px/14px var(--font-mono); color: var(--ink-muted); }
+
+/* InspectorSection */
+.vx-inspector { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+.vx-inspector + .vx-inspector { margin-top: var(--space-1); }
+.vx-inspector__head { display: flex; align-items: center; height: var(--control-md); padding: 0 var(--space-2) 0 var(--space-1); }
+.vx-inspector__toggle { flex: 1; display: flex; align-items: center; gap: var(--space-1); background: transparent; border: 0; color: var(--ink); font: 600 13px/18px var(--font-sans); cursor: pointer; padding: 0 var(--space-1); height: 100%; text-align: left; border-radius: var(--radius-sm); }
+.vx-inspector__chev { color: var(--ink-muted); transition: transform 120ms ease-out; }
+.vx-inspector__chev.is-open { transform: rotate(90deg); }
+.vx-inspector__actions { display: flex; gap: var(--space-1); }
+.vx-inspector__body { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-1) var(--space-3) var(--space-3); }
+.vx-inspector__row { display: grid; grid-template-columns: 96px 1fr; align-items: center; gap: var(--space-2); }
+.vx-inspector__label { font: 500 12px/16px var(--font-sans); color: var(--ink-muted); }
+.vx-inspector__value { min-width: 0; display: flex; gap: var(--space-2); }
+.vx-inspector__value > * { flex: 1; }
+
+/* DimensionLabel */
+.vx-dim { position: relative; height: 36px; color: var(--draw-dimension); }
+.vx-dim__svg { display: block; overflow: visible; }
+.vx-dim__ext, .vx-dim__line, .vx-dim__tick { stroke: currentColor; stroke-width: var(--stroke-hairline); stroke-linecap: round; }
+.vx-dim__tick { stroke-width: 1.5px; }
+.vx-dim__text, .vx-dim__input { position: absolute; left: 50%; top: 0; transform: translateX(-50%); font: 500 12px/14px var(--font-mono); color: currentColor; background: var(--canvas); padding: 0 var(--space-1); border-radius: var(--radius-sm); white-space: nowrap; }
+.vx-dim--selected { color: var(--draw-selection); }
+.vx-dim--editing { color: var(--draw-selection); }
+.vx-dim__input { width: 72px; text-align: center; color: var(--ink); background: var(--surface-2); border: 1px solid var(--accent); border-radius: var(--radius-sm); top: -3px; height: 20px; box-sizing: border-box; outline: none; box-shadow: var(--shadow-float); }
+
+/* AreaTable */
+.vx-areas { width: 100%; border-collapse: separate; border-spacing: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; font: 400 13px/18px var(--font-sans); color: var(--ink); }
+.vx-areas th, .vx-areas td { padding: var(--space-1) var(--space-2); text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.vx-areas thead th { font: 500 12px/16px var(--font-sans); color: var(--ink-muted); background: var(--surface-1); }
+.vx-areas tbody tr { background: var(--surface-2); cursor: default; }
+.vx-areas tbody tr:hover { background: var(--surface-3); }
+.vx-areas tbody tr.is-selected { background: var(--accent-subtle); }
+.vx-areas .is-num { text-align: right; font: 400 13px/18px var(--font-mono); }
+.vx-areas__type { color: var(--ink-muted); }
+.vx-areas__chip { display: inline-block; width: 10px; height: 10px; border-radius: var(--radius-sm); margin-right: var(--space-2); vertical-align: -1px; border: 1px solid var(--draw-wall-interior); }
+.vx-areas__chip--gla { background: var(--area-gla); }
+.vx-areas__chip--basement { background: var(--area-basement); }
+.vx-areas__chip--garage { background: var(--area-garage); }
+.vx-areas__chip--porch { background: var(--area-porch); }
+.vx-areas__chip--other { background: var(--area-other); }
+.vx-areas tfoot th, .vx-areas tfoot td { background: var(--surface-1); font-weight: 600; }
+.vx-areas tfoot tr:last-child th, .vx-areas tfoot tr:last-child td { border-bottom: 0; }
+.vx-areas tfoot tr:first-child th, .vx-areas tfoot tr:first-child td { border-bottom: 0; }
+.vx-areas tfoot .is-num { font-weight: 500; }
+.vx-areas tfoot tr.is-sub th, .vx-areas tfoot tr.is-sub td { font-weight: 400; color: var(--ink-muted); }
+
+/* StatusBar */
+.vx-status { display: flex; align-items: center; gap: var(--space-3); height: var(--status-bar); padding: 0 var(--space-2); background: var(--surface-0); border: 1px solid var(--border); border-radius: var(--radius-md); color: var(--ink-muted); font: 400 11px/14px var(--font-sans); box-sizing: border-box; }
+.vx-status__msg { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--ink); }
+.vx-status__msg.is-success { color: var(--success); }
+.vx-status__msg.is-warning { color: var(--warning); }
+.vx-status__msg.is-danger { color: var(--danger); }
+.vx-status__spacer { flex: 1; }
+.vx-status__item { display: inline-flex; gap: var(--space-1); white-space: nowrap; }
+.vx-status__item.is-mono { font-family: var(--font-mono); }
+.vx-status__item.is-active { color: var(--accent-text); }
+.vx-status__label { font-family: var(--font-sans); color: var(--ink-faint); }

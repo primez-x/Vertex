@@ -392,7 +392,7 @@ void curved_outline_selection_preserves_wall_and_exterior_callouts() {
         "the measured exterior retains one analytical curve alongside the rectangular return");
     const auto outside_arc=curved_exterior_dimension_id(measured,boundary_id);
     const auto outside_value=visible_canvas_label(window,outside_arc);
-    require(outside_value.text==QStringLiteral("≈ 6.503 m"),
+    require(outside_value.text==QStringLiteral("6.503 m"),
         "the measured exterior callout uses the curved physical face length");
 
     require(window.selectEntity(arc_wall) && window.editSelectedWallDimension(
@@ -403,7 +403,7 @@ void curved_outline_selection_preserves_wall_and_exterior_callouts() {
     const auto styled_snapshot=window.document().snapshot();
     const auto baseline_before=visible_label(window,arc_wall);
     const auto exterior_before=visible_canvas_label(window,outside_arc);
-    require(baseline_before.text==QStringLiteral("≈ 6.283 m") &&
+    require(baseline_before.text==QStringLiteral("6.283 m") &&
         std::abs(baseline_before.position.x)<1e-9 && std::abs(baseline_before.position.y+2.8)<1e-9 &&
         baseline_before.paper_height_mm==5.5 && baseline_before.color==QColor(QStringLiteral("#A12B34")) &&
         baseline_before.bold && baseline_before.italic && baseline_before.derived_label_manual_rotation &&

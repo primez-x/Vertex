@@ -10,6 +10,9 @@
 #include "sketch/area_type_presets.hpp"
 
 #include "plan_canvas.hpp"
+#include "vertex_design_tokens.hpp"
+#include "measurement_format.hpp"
+#include "bundled_fonts.hpp"
 #include "assembly_profile_canvas_geometry.hpp"
 #include "assembly_directional_resize_authoring.hpp"
 #include "horizontal_profile_dialog.hpp"
@@ -20,6 +23,7 @@
 #include "draft_image_stamp.hpp"
 #include "sketch_pdf_output.hpp"
 #include "toolbar_svg_icon.hpp"
+#include "left_panel.hpp"
 #include "reference_import.hpp"
 #include "assistance_ocr.hpp"
 #include "pinc_project_admission.hpp"
@@ -293,6 +297,7 @@
 #include <QStandardItemModel>
 #include <QSplitter>
 #include <QSpinBox>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -1431,11 +1436,14 @@ SheetViewModel default_sheet_view_model() {
     sheet.height_mm = 297.0;
     sheet.title_block = {"Untitled property", "Default plan", "", ""};
     sheet.viewports.push_back({"viewport-plan", "view-plan", {10.0, 10.0, 400.0, 100.0}, 100.0});
-    sheet.viewports.push_back({"viewport-elevation", "view-elevation", {10.0, 120.0, 195.0, 90.0}, 100.0});
-    sheet.viewports.push_back({"viewport-section", "view-section", {215.0, 120.0, 195.0, 90.0}, 100.0});
-    sheet.schedules.push_back({"schedule-doors", "doors", {10.0, 220.0, 190.0, 45.0}});
+    // The title block (220 mm wide) and the revision table above it own the
+    // bottom-right corner of the sheet. Keep the default placements out of
+    // x >= 200 mm below y = 190 mm so adding revisions never blocks export.
+    sheet.viewports.push_back({"viewport-elevation", "view-elevation", {10.0, 120.0, 195.0, 70.0}, 100.0});
+    sheet.viewports.push_back({"viewport-section", "view-section", {215.0, 120.0, 195.0, 70.0}, 100.0});
+    sheet.schedules.push_back({"schedule-doors", "doors", {10.0, 200.0, 190.0, 45.0}});
     sheet.schedules.push_back({"schedule-objects", "building-objects",
-                               {215.0, 220.0, 195.0, 45.0}});
+                               {10.0, 250.0, 190.0, 40.0}});
     return SheetViewModel::create({std::move(section_view), std::move(plan_view),
                                    std::move(elevation_view)}, {std::move(sheet)},
                                   {"doors", "windows", "rooms", "materials", "building-objects",
@@ -1602,7 +1610,9 @@ std::optional<Vec2> point_at_segment(const Segment& segment, double fraction);
 
 struct PlanAreaPresentation {
     QColor stroke{37, 91, 145};
-    QColor dark_stroke{128, 194, 246};
+    // Interactive dark canvases draw every area perimeter in the design
+    // system's draw-wall; area classes differ by fill, hatch and label.
+    QColor dark_stroke{design::dark_theme().draw_wall};
     QColor fill{178, 210, 235};
     QString hatch{QStringLiteral("none")};
     bool filled{false};
@@ -1632,24 +1642,24 @@ bool plan_name_contains(const QString& value, std::initializer_list<const char*>
 PlanAreaPresentation plan_area_presentation(QString classification) {
     classification = classification.trimmed().toLower();
     if (plan_name_contains(classification, {"garage", "carport", "parking", "loading"})) {
-        return {QColor(194, 116, 24), QColor(242, 184, 102), QColor(237, 197, 132),
+        return {QColor(194, 116, 24), design::dark_theme().draw_wall, QColor(237, 197, 132),
                 QStringLiteral("forward_diagonal"), true};
     }
     if (plan_name_contains(classification, {"porch", "patio", "deck", "balcony", "terrace"})) {
-        return {QColor(66, 135, 92), QColor(143, 213, 169), QColor(178, 218, 189),
+        return {QColor(66, 135, 92), design::dark_theme().draw_wall, QColor(178, 218, 189),
                 QStringLiteral("solid"), true};
     }
     if (plan_name_contains(classification, {"excluded", "deduction", "void", "open to below"})) {
-        return {QColor(137, 86, 86), QColor(224, 160, 160), QColor(221, 190, 190),
+        return {QColor(137, 86, 86), design::dark_theme().draw_wall, QColor(221, 190, 190),
                 QStringLiteral("diagonal"), true};
     }
     if (plan_name_contains(classification, {"storage", "utility", "mechanical", "warehouse"})) {
-        return {QColor(92, 106, 121), QColor(186, 199, 214), QColor(197, 206, 216),
+        return {QColor(92, 106, 121), design::dark_theme().draw_wall, QColor(197, 206, 216),
                 QStringLiteral("solid"), true};
     }
     if (plan_name_contains(classification,
                            {"living", "gross", "building area", "residential"})) {
-        return {QColor(37, 91, 145), QColor(128, 194, 246), QColor(178, 210, 235),
+        return {QColor(37, 91, 145), design::dark_theme().draw_wall, QColor(178, 210, 235),
                 QStringLiteral("solid"), true};
     }
     return {};
@@ -1869,26 +1879,12 @@ std::optional<Boundary> dimension_overlay(const Segment& source, Vec2 text_posit
 }
 
 QString format_dimension_angle(double radians) {
-    if (!std::isfinite(radians)) {
-        return QStringLiteral("—");
-    }
-    const auto degrees = radians * 180.0 / std::numbers::pi;
-    if (!std::isfinite(degrees)) {
-        return QStringLiteral("—");
-    }
-    return QStringLiteral("%1°").arg(degrees, 0, 'f', 1);
+    if (!std::isfinite(radians)) return QStringLiteral("—");
+    return units::angle_text(radians * 180.0 / std::numbers::pi);
 }
 
 QString format_dimension_area(double square_metres, bool metric) {
-    if (!std::isfinite(square_metres)) {
-        return QStringLiteral("—");
-    }
-    if (metric) {
-        return QStringLiteral("%1 m²").arg(square_metres, 0, 'f', 2);
-    }
-    constexpr double square_metres_per_square_foot = 0.09290304;
-    return QStringLiteral("%1 ft²")
-        .arg(square_metres / square_metres_per_square_foot, 0, 'f', 1);
+    return units::area_text(square_metres, metric);
 }
 
 std::optional<Vec2> dimension_tangent_at_vertex(const IdentifiedSegment& identified,
@@ -2001,14 +1997,17 @@ QRectF plan_area_label_footprint(const CanvasLabel& label,QFont base_font,const 
 }
 
 QFont sheet_text_font(double point_size, double pixels_per_mm) {
-    QFont font(QStringLiteral("Inter"));
+    // Printed and PDF sheet text uses the bundled IBM Plex Sans face.
+    ensure_bundled_fonts();
+    QFont font(bundled_sans_family());
     // Sheet geometry already uses the output's millimetre-to-pixel scale.
     // Pixel-sized text avoids applying the printer DPI a second time.
     font.setPixelSize(std::max(1, static_cast<int>(std::lround(
         point_size * (25.4 / 72.0) * pixels_per_mm))));
-    // Inter's contextual punctuation alternates have private-use cmap entries.
-    // Qt's PDF subset maps those glyphs to PUA characters on copy/extraction.
-    // Keep ordinary punctuation glyphs while retaining normal text shaping.
+    // Contextual and case-sensitive alternates can map to glyphs without a
+    // plain Unicode cmap entry, which Qt's PDF subset exposes as private-use
+    // characters on copy/extraction. Keep ordinary punctuation glyphs while
+    // retaining normal text shaping.
     font.setFeature("calt", 0);
     font.setFeature("case", 0);
     return font;
@@ -2384,17 +2383,15 @@ struct DimensionCanvasProjection {
 };
 
 QString format_boundary_length(double metres, bool metric, bool ansi) {
+    // ANSI Z765 readouts keep the appraisal basis (tenths of a foot) in a
+    // single system; see measurement_format.hpp.
     if (!ansi) return PlanCanvas::drawingLengthText(metres, metric);
-    auto text = QStringLiteral("%1 ft").arg(QString::number(std::round(metres / 0.3048 * 10) / 10, 'f', 1));
-    if (metric) text += QStringLiteral(" (%1 m)").arg(QString::number(metres, 'f', 3));
-    return text;
+    return units::ansi_length_text(metres);
 }
 
 QString format_boundary_area(double square_metres, bool metric, bool ansi) {
     if (!ansi) return format_dimension_area(square_metres, metric);
-    auto text = QStringLiteral("%1 sq ft").arg(QString::number(std::round(square_metres / 0.09290304), 'f', 0));
-    if (metric) text += QStringLiteral(" (%1 m²)").arg(QString::number(square_metres, 'f', 2));
-    return text;
+    return units::ansi_area_text(square_metres);
 }
 
 std::optional<Segment> assembly_dimension_plan_segment(const BoundaryDimensionResolution& resolved) {
@@ -3392,20 +3389,11 @@ json calculation_profile_json(const CalculationProfile& profile) {
 }
 
 QString area_unit_suffix(AreaUnit unit) {
-    switch (unit) {
-    case AreaUnit::square_metre:
-        return QStringLiteral("m²");
-    case AreaUnit::square_foot:
-        return QStringLiteral("ft²");
-    case AreaUnit::acre:
-        return QStringLiteral("ac");
-    }
-    return QStringLiteral("area");
+    return units::area_unit_suffix(unit);
 }
 
 QString format_display_area(const DisplayArea& display) {
-    return QString::fromStdString(display.text) + QStringLiteral(" ") +
-           area_unit_suffix(display.unit);
+    return units::area_text(display);
 }
 
 double read_number(const json& object, std::string_view key, double fallback) {
@@ -3418,26 +3406,8 @@ double read_number(const json& object, std::string_view key, double fallback) {
 }
 
 QString format_length(double metres, bool metric) {
-    if (!std::isfinite(metres)) {
-        return QStringLiteral("—");
-    }
-    if (metric) {
-        if (std::abs(metres) < 1.0) {
-            return QStringLiteral("%1 mm").arg(metres * 1000.0, 0, 'f', 1);
-        }
-        return QStringLiteral("%1 m").arg(metres, 0, 'f', 3);
-    }
-    const auto sign = metres < 0.0 ? QStringLiteral("-") : QString{};
-    const auto total_inches = std::abs(metres) / 0.0254;
-    const auto feet = static_cast<int>(std::floor(total_inches / 12.0));
-    const auto inches = total_inches - static_cast<double>(feet) * 12.0;
-    if (feet > 0) {
-        return QStringLiteral("%1%2' %3\"")
-            .arg(sign)
-            .arg(feet)
-            .arg(inches, 0, 'f', 1);
-    }
-    return QStringLiteral("%1%2\"").arg(sign).arg(inches, 0, 'f', 1);
+    // Also used to initialize editable fields, so never "≈" (parseable).
+    return units::length_input_text(metres, metric);
 }
 
 QString schedule_value_text(const ScheduleValue& value) {
@@ -3652,7 +3622,7 @@ bool render_sheet_schedule(QPainter& painter, const QRectF& bounds, double paper
     return true;
 }
 
-std::string appraisal_category_label(AppraisalAreaCategory category) {
+std::string appraisal_category_text(AppraisalAreaCategory category) {
     switch (category) {
     case AppraisalAreaCategory::none: return "Unassigned";
     case AppraisalAreaCategory::above_grade_finished: return "Above-grade finished (GLA)";
@@ -3774,7 +3744,7 @@ std::vector<ScheduleRow> appraisal_schedule_rows(const AppraisalDocumentReport& 
         const auto token = appraisal_category_name(category);
         rows.push_back(appraisal_area_row(
             report, "category:" + std::string(token), "CATEGORY",
-            appraisal_category_label(category), bucket.total.square_metres, bucket.area_ids));
+            appraisal_category_text(category), bucket.total.square_metres, bucket.area_ids));
     }
     std::vector<std::string> property_sources;
     for (const auto& [category, bucket] : report.calculation->property.by_category) {
@@ -5486,17 +5456,23 @@ bool has_entity(const Document& document, const QString& entity_id) {
 
 constexpr int visibility_type_role = Qt::UserRole + 1;
 constexpr int symbol_family_role = Qt::UserRole + 2;
+// Navigator: the stored name a hierarchy row was presented with (inline
+// rename compares against it) and the "layer\nkind" key of a kind group row.
+constexpr int navigator_name_role = Qt::UserRole + 3;
+constexpr int navigator_group_role = Qt::UserRole + 4;
 
+// Every hierarchy level has an eye. Floors and layers keep their own view
+// filter; a property or building eye shows or hides all of its floors.
 bool is_visibility_container_type(std::string_view type) {
-    return type == "floor" || type == "layer";
+    return type == "floor" || type == "layer" || type == "building" || type == "property";
 }
 
 bool is_visibility_container_item(const QTreeWidgetItem* item) {
     if (item == nullptr) {
         return false;
     }
-    const auto type = item->data(0, visibility_type_role).toString();
-    return type == QStringLiteral("floor") || type == QStringLiteral("layer");
+    return is_visibility_container_type(
+        item->data(0, visibility_type_role).toString().toStdString());
 }
 
 // QTreeWidget changes the current item while it handles a mouse press on a
@@ -5506,7 +5482,31 @@ bool is_visibility_container_item(const QTreeWidgetItem* item) {
 class SymbolLibraryList final : public QListWidget {
 public:
     using QListWidget::QListWidget;
+    // Tiles share the available width evenly and are tall enough for a
+    // thumbnail plus two lines of name, so names are never clipped mid-word.
+    void updateTileGrid() {
+        const auto metrics = fontMetrics();
+        const int minimum_width = std::max(iconSize().width() + design::space_5,
+                                           metrics.horizontalAdvance(QStringLiteral("Refrigerator 00")));
+        const int available = std::max(minimum_width, viewport()->width() - 2);
+        const int columns = std::max(1, available / minimum_width);
+        const int width = available / columns;
+        const int height = iconSize().height() + design::space_3 + 2 * metrics.lineSpacing() + design::space_1;
+        const QSize grid(width, height);
+        if (gridSize() == grid) return;
+        setGridSize(grid);
+        const auto tile = grid - QSize(design::space_1, design::space_1);
+        for (int row = 0; row < count(); ++row) item(row)->setSizeHint(tile);
+    }
 protected:
+    void resizeEvent(QResizeEvent* event) override {
+        QListWidget::resizeEvent(event);
+        updateTileGrid();
+    }
+    void changeEvent(QEvent* event) override {
+        QListWidget::changeEvent(event);
+        if (event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange) updateTileGrid();
+    }
     void startDrag(Qt::DropActions) override {
         if (!currentItem()) return;
         const auto id = currentItem()->data(Qt::UserRole).toString();
@@ -10331,10 +10331,20 @@ public:
         // Dependencies can include a selected callout's source even when the
         // source itself was not explicitly selected (for example a deduction).
         discard_source_owned_dimension_moves();
+        // A moved exterior uses the rigid TransformBoundaries lane below, which
+        // requires each retained deduction among its transformed owners. Route
+        // every identified closed boundary in that copy graph (for example a
+        // drawn garage deduction of a pasted wall-shell parent) through it.
+        const bool rigid_exterior_lane=std::any_of(model_ids.begin(),model_ids.end(),[&](const auto& id) {
+            const auto& entity=source.entities().at(id.toStdString());
+            return is_closed_boundary_entity(entity.type) && entity.properties.contains("wall_measurement_source") &&
+                (entity.properties.contains("boundary_authoring") || entity.extensions.contains("boundary_geometry_derivation"));
+        });
         for (const auto& id : model_ids) {
             const auto& entity = source.entities().at(id.toStdString());
             if (is_closed_boundary_entity(entity.type)) {
-                if (entity.properties.contains("boundary_authoring") || entity.extensions.contains("boundary_geometry_derivation"))
+                if (entity.properties.contains("boundary_authoring") || entity.extensions.contains("boundary_geometry_derivation") ||
+                    (rigid_exterior_lane && inspect_boundary_entity_version(entity).format==BoundaryEntityFormat::identified_v1))
                     translations.push_back({entity.id,offset});
                 else {
                     auto ordinary=makeUnownedBoundaryTranslationCommand(source,entity,offset);
@@ -12094,23 +12104,34 @@ public:
 
     [[nodiscard]] Workspace workspace() const noexcept { return m_workspace; }
 
+    // The toolbar's draw-mode buttons are the visible control; the hidden
+    // "drawingMode" combo remains for automation and older integrations.
+    void syncDrawingModeControls() {
+        const auto index = static_cast<int>(m_creation_mode);
+        if (m_drawing_mode_combo) {
+            const QSignalBlocker blocker(m_drawing_mode_combo);
+            m_drawing_mode_combo->setCurrentIndex(index);
+        }
+        for (std::size_t mode = 0; mode < m_drawing_mode_actions.size(); ++mode) {
+            auto* action = m_drawing_mode_actions[mode];
+            if (!action) continue;
+            // Actions react to `triggered` (user activation) only, so
+            // updating the checked state here never re-enters setDrawingMode.
+            action->setChecked(static_cast<int>(mode) == index);
+            if (m_drawing_mode_combo) action->setEnabled(m_drawing_mode_combo->isEnabled());
+        }
+    }
+
     bool setDrawingMode(DrawingMode mode) {
         cancelAreaClass();
         if (m_linework_drawing || m_boundary_session || m_pending_wall_start || !m_pending_opening_kind.isEmpty() ||
             !m_pending_symbol_id.isEmpty()) {
             setError(QStringLiteral("Finish or cancel the active drawing before changing modes."));
-            if (m_drawing_mode_combo) {
-                const QSignalBlocker blocker(m_drawing_mode_combo);
-                m_drawing_mode_combo->setCurrentIndex(
-                    static_cast<int>(m_creation_mode));
-            }
+            syncDrawingModeControls();
             return false;
         }
         m_creation_mode = mode;
-        if (m_drawing_mode_combo) {
-            const QSignalBlocker blocker(m_drawing_mode_combo);
-            m_drawing_mode_combo->setCurrentIndex(static_cast<int>(mode));
-        }
+        syncDrawingModeControls();
         if (m_tool != CanvasTool::select) setTool(CanvasTool::select);
         syncToolControls();
         clearError();
@@ -12165,137 +12186,201 @@ public:
     }
 
     void applyTheme(WorkspaceTheme theme) {
-        const bool dark = theme == WorkspaceTheme::dark;
+        // Light and dark come from the Vertex design system tokens
+        // (docs/design/vertex-design-system, vertex_design_tokens.hpp).
+        // High contrast is an accessibility theme outside the system and maps
+        // the same roles onto black, white and yellow.
         const bool contrast = theme == WorkspaceTheme::high_contrast;
-        const QString background = contrast ? "#000000" : dark ? "#111827" : "#f3f6fa";
-        const QString surface = contrast ? "#000000" : dark ? "#1b2638" : "#ffffff";
-        const QString foreground = contrast ? "#ffffff" : dark ? "#edf2fb" : "#182536";
-        const QString muted = contrast ? "#ffffff" : dark ? "#a8b7cc" : "#63748a";
-        const QString border = contrast ? "#ffffff" : dark ? "#33435a" : "#d9e2ed";
-        const QString accent = contrast ? "#ffff00" : dark ? "#7db3ff" : "#2563eb";
-        const QString selection = contrast ? "#ffff00" : dark ? "#243e67" : "#e7efff";
-        const QString selectedText = contrast ? "#000000" : foreground;
-        const QString selectedAccent = contrast ? selectedText : accent;
+        const auto& tokens = theme == WorkspaceTheme::light ? design::light_theme() : design::dark_theme();
+        const auto pick = [&](const QColor& token, const char* high_contrast) {
+            return contrast ? QString::fromLatin1(high_contrast) : design::css(token);
+        };
+        const QString frame = pick(tokens.surface_0, "#000000");
+        const QString panel = pick(tokens.surface_1, "#000000");
+        const QString inset = pick(tokens.surface_2, "#000000");
+        const QString hover = pick(tokens.surface_3, "#ffff00");
+        const QString hoverText = pick(tokens.ink, "#000000");
+        const QString ink = pick(tokens.ink, "#ffffff");
+        const QString muted = pick(tokens.ink_muted, "#ffffff");
+        const QString faint = pick(tokens.ink_faint, "#ffffff");
+        const QString border = pick(tokens.border, "#ffffff");
+        const QString controlBorder = pick(tokens.border_control, "#ffffff");
+        const QString accent = pick(tokens.accent, "#ffff00");
+        const QString onAccent = pick(tokens.on_accent, "#000000");
+        const QString accentText = pick(tokens.accent_text, "#ffff00");
+        const QString selection = pick(tokens.accent_subtle, "#ffff00");
+        const QString selectedText = pick(tokens.ink, "#000000");
+        const QString danger = pick(tokens.danger, "#ffffff");
         QPalette palette = owner->style()->standardPalette();
-        palette.setColor(QPalette::Window, QColor(background));
-        palette.setColor(QPalette::WindowText, QColor(foreground));
-        palette.setColor(QPalette::Base, QColor(surface));
-        palette.setColor(QPalette::AlternateBase, QColor(background));
-        palette.setColor(QPalette::Text, QColor(foreground));
-        palette.setColor(QPalette::Button, QColor(surface));
-        palette.setColor(QPalette::ButtonText, QColor(foreground));
-        palette.setColor(QPalette::Highlight, QColor(selection));
+        palette.setColor(QPalette::Window, QColor(frame));
+        palette.setColor(QPalette::WindowText, QColor(ink));
+        palette.setColor(QPalette::Base, QColor(inset));
+        palette.setColor(QPalette::AlternateBase, QColor(panel));
+        palette.setColor(QPalette::Text, QColor(ink));
+        palette.setColor(QPalette::Button, QColor(inset));
+        palette.setColor(QPalette::ButtonText, QColor(ink));
+        palette.setColor(QPalette::PlaceholderText, QColor(faint));
+        palette.setColor(QPalette::Highlight, contrast ? QColor(selection) : tokens.accent_subtle);
         palette.setColor(QPalette::HighlightedText, QColor(selectedText));
-        palette.setColor(QPalette::Link, QColor(accent));
-        palette.setColor(QPalette::Disabled, QPalette::Text, QColor(muted));
-        palette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(muted));
+        // Toolbar SVG icons paint checked (accent-filled) buttons in BrightText.
+        palette.setColor(QPalette::BrightText, QColor(onAccent));
+        palette.setColor(QPalette::Link, QColor(accentText));
+        palette.setColor(QPalette::ToolTipBase, QColor(inset));
+        palette.setColor(QPalette::ToolTipText, QColor(ink));
+        palette.setColor(QPalette::Disabled, QPalette::Text, QColor(faint));
+        palette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(faint));
+        palette.setColor(QPalette::Disabled, QPalette::WindowText, QColor(faint));
         owner->setPalette(palette);
+        // Metrics follow the design system: 28px controls (24px dense),
+        // 40px toolbar, 24px status bar, radius 4/6/10, 13px body text.
         QString stylesheet = QStringLiteral(R"(
-            QMainWindow { background: $background; }
-            QWidget { font-size: 13px; }
-            QDialog { background: $background; }
-            QDialog QLabel, QDialog QCheckBox, QDialog QRadioButton, QDialog QGroupBox { color: $foreground; }
+            QMainWindow { background: $frame; }
+            QWidget { font-family: $fontSans; font-size: 13px; }
+            QDialog { background: $panel; }
+            QDialog QLabel, QDialog QCheckBox, QDialog QRadioButton, QDialog QGroupBox { color: $ink; }
             QDialog QLabel:disabled, QDialog QCheckBox:disabled, QDialog QRadioButton:disabled,
-                QDialog QGroupBox:disabled { color: $muted; }
-            QToolBar#primaryToolbar { background: $surface; border: 0; border-bottom: 1px solid $border;
-                       padding: 0 2px; spacing: 1px; min-height: 28px; max-height: 28px; }
-            QToolBar::separator { background: $border; width: 1px; margin: 0 1px; }
-            QPushButton, QToolButton { color: $foreground; background: $surface;
-                border: 1px solid $border; border-radius: 8px; padding: 8px 11px; }
-            QToolBar QToolButton { border-color: transparent; border-radius: 3px; padding: 1px 4px; min-height: 20px; max-height: 20px; }
-            QToolBar QToolButton:hover { background: $selection; color: $selectedText; border-color: $selection; }
-            QToolBar QToolButton:checked { background: $selection; color: $selectedAccent; border-color: $accent; }
-            QWidget#canvasStatusControls QToolButton { border: 0; border-radius: 4px;
-                padding: 2px; min-width: 22px; min-height: 20px; }
-            QWidget#canvasStatusControls QToolButton:hover { background: $selection; color: $selectedText; }
-            QWidget#canvasStatusControls QToolButton:checked { background: $selection;
-                color: $selectedAccent; }
-            QWidget#canvasStatusControls QPushButton { border-radius: 4px; padding: 2px 8px; }
-            QPushButton:hover, QToolButton:hover { background: $selection; color: $selectedText; border-color: $accent; }
-            QPushButton:pressed, QToolButton:pressed, QToolButton:checked {
-                background: $selection; color: $selectedText; border-color: $accent; }
+                QDialog QGroupBox:disabled { color: $faint; }
+            QToolBar#primaryToolbar { background: $frame; border: 0; border-bottom: 1px solid $border;
+                       padding: 0 4px; spacing: 4px; }
+            QToolBar::separator { background: $border; width: 1px; margin: 10px 4px; }
+            QPushButton, QToolButton { color: $ink; background: $inset; font-weight: 500;
+                border: 1px solid $controlBorder; border-radius: 6px; padding: 0 12px; min-height: 26px; }
+            QPushButton:default { background: $accent; color: $onAccent; border-color: $accent; }
+            QToolBar QToolButton { background: transparent; border-color: transparent; border-radius: 6px;
+                padding: 0 8px; min-height: 26px; max-height: 26px; }
+            QToolBar QToolButton:hover { background: $hover; color: $hoverText; border-color: $hover; }
+            QToolBar QToolButton:checked { background: $accent; color: $onAccent; border-color: $accent; }
+            QWidget#canvasStatusControls QToolButton { background: transparent; border: 0; border-radius: 4px;
+                padding: 2px; min-width: 20px; min-height: 16px; max-height: 16px; font-size: 11px; }
+            QWidget#canvasStatusControls QToolButton:hover { background: $hover; color: $hoverText; }
+            QWidget#canvasStatusControls QToolButton:checked { background: $accent; color: $onAccent; }
+            QWidget#canvasStatusControls QPushButton { border-radius: 4px; padding: 1px 8px; min-height: 16px;
+                max-height: 16px; font-size: 11px; }
+            QWidget#canvasStatusControls QComboBox { font-size: 11px; border-radius: 4px;
+                padding: 0 18px 0 6px; min-height: 18px; max-height: 18px; }
+            QWidget#canvasStatusControls QComboBox::drop-down { width: 16px; }
+            QPushButton:hover, QToolButton:hover { background: $hover; color: $hoverText; }
+            QPushButton:default:hover { background: $accent; color: $onAccent; }
+            QPushButton:pressed, QPushButton:checked, QToolButton:pressed, QToolButton:checked {
+                background: $accent; color: $onAccent; border-color: $accent; }
             QPushButton:focus, QToolButton:focus, QComboBox:focus, QLineEdit:focus,
             QAbstractSpinBox:focus { border: 2px solid $accent; }
-            QPushButton:disabled, QToolButton:disabled { color: $muted; background: $background; }
-            QComboBox, QLineEdit, QAbstractSpinBox, QDialog#surveyCalculator QPlainTextEdit { color: $foreground; background: $surface;
-                border: 1px solid $border; border-radius: 8px; padding: 5px 10px; min-height: 20px; }
+            QPushButton:disabled, QToolButton:disabled { color: $faint; background: transparent; border-color: $border; }
+            QComboBox, QLineEdit, QAbstractSpinBox, QDialog#surveyCalculator QPlainTextEdit { color: $ink; background: $inset;
+                border: 1px solid $controlBorder; border-radius: 6px; padding: 0 8px; min-height: 26px;
+                selection-background-color: $accent; selection-color: $onAccent; }
+            QAbstractSpinBox { font-family: $fontMono; }
+            QComboBox:disabled, QLineEdit:disabled, QAbstractSpinBox:disabled { color: $faint;
+                background: transparent; border-color: $border; }
+            QLineEdit[invalid="true"], QAbstractSpinBox[invalid="true"] { border-color: $danger; }
             QComboBox { padding-right: 24px; }
             QComboBox::drop-down { border: 0; width: 24px; }
-            QToolBar QComboBox { font-size: 11px; border-radius: 3px; padding: 0 14px 0 4px; min-height: 14px; max-height: 14px; }
-            QToolBar QComboBox::drop-down { width: 12px; }
-            QComboBox QAbstractItemView, QMenu { background: $surface; color: $foreground;
+            QToolBar QComboBox { font-size: 12px; border-radius: 6px; padding: 0 16px 0 8px; min-height: 26px; max-height: 26px; }
+            QToolBar QComboBox::drop-down { width: 14px; }
+            QComboBox QAbstractItemView, QMenu { background: $panel; color: $ink;
                 border: 1px solid $border; selection-background-color: $selection;
                 selection-color: $selectedText; padding: 4px; }
-            QMenu::item { padding: 8px 20px; }
-            QMenu::item:selected { background: $selection; color: $selectedText; }
-            QLabel#panelHeading, QLabel#componentLibraryHeading { color: $muted; font-size: 10px; font-weight: 700;
-                letter-spacing: 1px; }
+            QMenu::item { padding: 6px 24px 6px 12px; border-radius: 6px; }
+            QMenu::item:selected { background: $hover; color: $hoverText; }
+            QMenu::item:disabled { color: $faint; }
+            QMenu::separator { height: 1px; background: $border; margin: 4px 8px; }
+            QLabel#panelHeading, QLabel#componentLibraryHeading { color: $muted; font-size: 12px; font-weight: 500; }
             QLabel#annotationEditorStatus { color: $muted; font-size: 11px; }
-            QLabel#inspectorHeading { color: $foreground; font-size: 18px; font-weight: 700; }
-            QWidget#navigatorPanel, QWidget#inspectorBody { background: $surface; }
+            QLabel#drawingModeLabel { color: $muted; font-size: 12px; font-weight: 500; background: transparent; }
+            QLabel#planGeometryError { color: $danger; background: $panel; border: 1px solid $danger;
+                border-left: 4px solid $danger; border-radius: 6px; padding: 6px 10px; margin: 4px 16px 0 16px; }
+            QLabel#inspectorHeading { color: $ink; font-size: 15px; font-weight: 600; }
+            QWidget#navigatorPanel, QWidget#inspectorBody { background: $panel; }
             QWidget#appraisalDetailsContent, QWidget#appraisalDetailsViewport,
-            QScrollArea#appraisalDetailsScroll { background: $surface; }
-            QWidget#appraisalDetailsPanel QLabel { color: $foreground; }
+            QScrollArea#appraisalDetailsScroll { background: $panel; }
+            QWidget#appraisalDetailsPanel QLabel { color: $ink; }
             QGroupBox#floorReferenceControls QLabel, QGroupBox#floorReferenceControls QCheckBox {
-                color: $foreground; background: transparent; }
+                color: $ink; background: transparent; }
             QDialog#appraisalFactsDialog QLabel, QDialog#appraisalSetupDialog QLabel,
             QDialog#appraisalFactsDialog QCheckBox, QDialog#appraisalSetupDialog QCheckBox,
             QDialog#surveyCalculator QLabel, QDialog#surveyCalculator QCheckBox,
             QDialog#boundaryGeometryDialog QLabel, QDialog#boundaryGeometryDialog QCheckBox {
-                color: $foreground; background: transparent; }
-            QWidget#appraisalFactsContent, QWidget#appraisalFactsViewport { background: $background; }
-            QLabel#appraisalDetailsGla { font-size: 26px; font-weight: 700; }
-            QWidget#appraisalDetailsPanel QPushButton { padding: 5px 8px; }
+                color: $ink; background: transparent; }
+            QWidget#appraisalFactsContent, QWidget#appraisalFactsViewport { background: $panel; }
+            QLabel#appraisalDetailsGla { font-family: $fontMono; font-size: 20px; font-weight: 600; }
+            QWidget#appraisalDetailsPanel QPushButton { padding: 0 8px; min-height: 22px; }
 
             QWidget#navigatorPanel { border: 1px solid $border; border-radius: 10px; }
             QTabWidget#sidebarTabs::pane { border: 0; background: transparent; }
-            QTabWidget#sidebarTabs QTabBar::tab { padding: 7px 14px; margin: 0 2px 0 0;
-                border-radius: 7px; }
-            QLabel#modelViewUnavailable { background: $surface; color: $muted;
+            QTabWidget#sidebarTabs QTabBar::tab { padding: 6px 12px; margin: 0 4px 0 0; }
+            QLabel#modelViewUnavailable { background: $panel; color: $muted;
                 border: 1px solid $border; border-radius: 10px; margin: 12px; padding: 24px; }
             QLabel#drawingContext { color: $muted; font-size: 11px; }
-            QTreeWidget, QListWidget, QTableWidget { background: $surface; color: $foreground;
-                border: 0; alternate-background-color: transparent; outline: 0;
+            QTreeWidget, QListWidget, QTableWidget, QTableView { background: $panel; color: $ink;
+                border: 0; alternate-background-color: transparent; outline: 0; gridline-color: $border;
                 selection-background-color: $selection; selection-color: $selectedText; }
-            QTreeWidget::item { min-height: 29px; border-radius: 6px; padding: 3px 6px; }
-            QTreeWidget::item:hover { background: $background; }
+            QTreeWidget::item { min-height: 24px; border-radius: 6px; padding: 2px 6px; }
+            QTreeWidget::item:hover { background: $hover; color: $hoverText; }
             QTreeWidget::item:selected { background: $selection; color: $selectedText; }
             QTreeWidget::item:focus { border: 1px solid $accent; }
-            QHeaderView::section { background: $background; color: $muted;
-                border: 0; border-bottom: 1px solid $border; padding: 6px; }
+            QHeaderView::section { background: $panel; color: $muted; font-size: 12px; font-weight: 500;
+                border: 0; border-bottom: 1px solid $border; padding: 4px 8px; }
             QTabWidget#workspaceTabs::pane { border: 0; background: transparent; }
-            QTabBar::tab { background: transparent; color: $muted; padding: 10px 18px;
-                margin: 3px 2px; border: 1px solid transparent; border-radius: 8px; }
-            QTabBar::tab:selected { background: $selection; color: $selectedAccent; border-color: $accent; }
-            QTabBar::tab:hover { color: $foreground; background: $background; }
+            QTabBar::tab { background: transparent; color: $muted; font-size: 12px; font-weight: 500;
+                padding: 6px 12px; margin: 2px 2px 0 2px; border: 0; border-bottom: 2px solid transparent;
+                border-radius: 6px; }
+            QTabBar::tab:selected { color: $ink; border-bottom: 2px solid $accent;
+                border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+            QTabBar::tab:hover { color: $hoverText; background: $hover; }
             QWidget#measurementPlanCanvas, QWidget#architecturalPlanCanvas {
-                border: 1px solid $border; border-radius: 8px; }
-            QGroupBox { color: $foreground; background: $surface; border: 1px solid $border;
-                border-radius: 10px; margin-top: 18px; padding: 16px 10px 10px; font-weight: 600; }
-            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
-            QScrollArea { border: 0; background: $surface; }
-            QSplitter::handle { background: $background; }
+                border: 1px solid $border; border-radius: 10px; }
+            QGroupBox { color: $ink; background: $panel; border: 1px solid $border;
+                border-radius: 10px; margin-top: 18px; padding: 16px 12px 12px; font-weight: 600; }
+            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 4px; }
+            QScrollArea { border: 0; background: $panel; }
+            QSplitter::handle { background: $frame; }
             QSplitter::handle:hover { background: $accent; }
-            QStatusBar { background: $surface; color: $muted; border-top: 1px solid $border; padding: 2px 8px; }
+            QStatusBar { background: $frame; color: $muted; font-size: 11px; border-top: 1px solid $border;
+                padding: 0 8px; min-height: 24px; }
             QStatusBar::item { border: 0; }
             QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
-            QScrollBar::handle:vertical { background: $border; border-radius: 5px; min-height: 28px; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
-            QToolTip { background: $surface; color: $foreground; border: 1px solid $border; padding: 7px; }
+            QScrollBar::handle:vertical { background: $controlBorder; border-radius: 4px; min-height: 28px; }
+            QScrollBar:horizontal { background: transparent; height: 10px; margin: 2px; }
+            QScrollBar::handle:horizontal { background: $controlBorder; border-radius: 4px; min-width: 28px; }
+            QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+            QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+            QToolTip { background: $inset; color: $ink; border: 1px solid $border; border-radius: 4px;
+                padding: 4px 8px; font-size: 11px; }
         )");
-        stylesheet.replace("$background", background).replace("$surface", surface)
-            .replace("$foreground", foreground).replace("$muted", muted)
-            .replace("$border", border).replace("$accent", accent)
-            .replace("$selectedAccent", selectedAccent)
-            .replace("$selection", selection).replace("$selectedText", selectedText);
+        // Longer names first so no shorter variable replaces a prefix of one.
+        stylesheet.replace("$fontSans", design::font_sans()).replace("$fontMono", design::font_mono())
+            .replace("$frame", frame).replace("$panel", panel).replace("$inset", inset)
+            .replace("$hoverText", hoverText).replace("$hover", hover)
+            .replace("$controlBorder", controlBorder).replace("$border", border)
+            .replace("$onAccent", onAccent).replace("$accentText", accentText).replace("$accent", accent)
+            .replace("$selectedText", selectedText).replace("$selection", selection)
+            .replace("$muted", muted).replace("$faint", faint).replace("$ink", ink)
+            .replace("$danger", danger);
         owner->setStyleSheet(stylesheet);
         owner->setProperty("workspaceTheme", QString::fromStdString(workspace_theme_name(theme)));
         m_theme = theme;
-        const QColor canvas_background(contrast ? "#000000" : dark ? "#141b27" : "#f8fafc");
-        if (m_measurementCanvas) m_measurementCanvas->setCanvasBackground(canvas_background);
-        if (m_architecturalCanvas) m_architecturalCanvas->setCanvasBackground(canvas_background);
+        applyCanvasBackgrounds();
         if (m_navigator) refreshNavigator();
+    }
+
+    // Workspace plan canvases follow the active theme. Called by applyTheme
+    // and again once buildUi has created the canvases.
+    void applyCanvasBackgrounds() {
+        const auto background = screenCanvasBackground();
+        if (m_measurementCanvas) m_measurementCanvas->setCanvasBackground(background);
+        if (m_architecturalCanvas) m_architecturalCanvas->setCanvasBackground(background);
+    }
+
+    // Design tokens for on-screen drawing surfaces of the active theme. High
+    // contrast draws on a black field, so it uses the dark drawing tokens.
+    const design::ThemeColors& screenTokens() const {
+        return m_theme == WorkspaceTheme::light ? design::light_theme() : design::dark_theme();
+    }
+
+    // Background for on-screen previews (dialogs, reviews). Paper and printed
+    // output keep their own light surface; this follows the workspace canvas.
+    QColor screenCanvasBackground() const {
+        return m_theme == WorkspaceTheme::high_contrast ? QColor(Qt::black) : screenTokens().canvas;
     }
 
     QString workspaceProfilesPath() const {
@@ -12694,10 +12779,14 @@ public:
         CalculationProfile persisted;
         Revision record_revision{};
         auto record_context = captureModalContext();
+        bool ansi_display = false;
         try {
             const auto source = authoringSnapshot();
             const auto property = propertyEntity();
             if (!property.has_value()) throw std::invalid_argument("The project property is unavailable.");
+            const auto policy = property->properties.find("appraisal_policy");
+            ansi_display = appraisal_editor && policy != property->properties.end() && policy->is_object() &&
+                policy->value("policy_kind", json()) == "ansi_z765_2021";
             persisted = appraisal_editor ? read_appraisal_display_configuration(property->properties)
                                          : read_calculation_profile(property->properties);
             record_revision = source.revision();
@@ -12746,6 +12835,17 @@ public:
             if (classifications->rowCount() > 0) classifications->selectRow(0);
         };
         populate();
+        if (ansi_display) {
+            // ANSI fixes the reporting basis; show it instead of an editable
+            // precision that would not change any displayed figure.
+            decimal_places->setEnabled(false);
+            decimal_places->setToolTip(QStringLiteral("ANSI totals use whole square feet; dimensions use tenths of a foot."));
+            help->setText(QStringLiteral("This property uses the ANSI Z765 profile, so GLA and every area display in whole square feet. "
+                "Choose another policy in Setup to set decimal places."));
+            buttons->button(QDialogButtonBox::Save)->setEnabled(false);
+        } else if (!buttons->button(QDialogButtonBox::Save)->isEnabled()) {
+            decimal_places->setEnabled(false);
+        }
 
         QObject::connect(add_classification, &QPushButton::clicked, &dialog, [&] {
             const auto row = classifications->rowCount();
@@ -13185,7 +13285,7 @@ public:
             auto* canvas = new PlanCanvas(pane);
             canvas->setObjectName(QString::fromLatin1(canvas_name));
             canvas->setMinimumHeight(260);
-            canvas->setCanvasBackground(QColor(248,250,253));
+            canvas->setCanvasBackground(screenCanvasBackground());
             canvas->setGridEnabled(false); canvas->setSnapEnabled(false); canvas->setWallSnapEnabled(false);
             canvas->setSelectionControlsVisible(false); canvas->setSelectionTransformEnabled(false,false);
             canvas->setSelectionAxisResizeEnabled(false); canvas->setMetricUnits(m_metric_units);
@@ -13202,7 +13302,7 @@ public:
         layout->addWidget(visual_views,2);
         auto* overlay_canvas = new PlanCanvas(&dialog);
         overlay_canvas->setObjectName(QStringLiteral("revisionOverlayCanvas"));
-        overlay_canvas->setMinimumHeight(260); overlay_canvas->setCanvasBackground(QColor(248,250,253));
+        overlay_canvas->setMinimumHeight(260); overlay_canvas->setCanvasBackground(screenCanvasBackground());
         overlay_canvas->setGridEnabled(false); overlay_canvas->setSnapEnabled(false); overlay_canvas->setWallSnapEnabled(false);
         overlay_canvas->setSelectionControlsVisible(false); overlay_canvas->setSelectionTransformEnabled(false,false);
         overlay_canvas->setSelectionAxisResizeEnabled(false); overlay_canvas->setMetricUnits(m_metric_units);
@@ -14370,7 +14470,7 @@ public:
             preview->setMetricUnits(context.metric_units);
             preview->setSelectionControlsVisible(false);
             preview->setMinimumHeight(200);
-            preview->setCanvasBackground(QColor(248, 250, 253));
+            preview->setCanvasBackground(screenCanvasBackground());
             preview->setOverviewMapEnabled(false);
             preview->setGridEnabled(false);
             layout->addWidget(preview, 1);
@@ -17829,7 +17929,7 @@ public:
             preview_canvas->setSelectionControlsVisible(false);
             new BoundaryPreviewFit(preview_canvas);
             preview_canvas->setMinimumHeight(360);
-            preview_canvas->setCanvasBackground(QColor(248, 250, 253));
+            preview_canvas->setCanvasBackground(screenCanvasBackground());
             preview_canvas->setOverviewMapEnabled(false);
             preview_canvas->setGridEnabled(false);
             layout->addWidget(preview_canvas, 1);
@@ -18496,10 +18596,10 @@ public:
             if (!candidate.affected_stairs().empty()) {
                 QStringList updates;
                 for (const auto& change : candidate.affected_stairs()) {
-                    updates << QStringLiteral("%1: %2 → %3 m")
-                        .arg(QString::fromStdString(change.stair_id))
-                        .arg(change.old_rise_m, 0, 'f', 3)
-                        .arg(change.new_rise_m, 0, 'f', 3);
+                    updates << QStringLiteral("%1: %2 → %3")
+                        .arg(QString::fromStdString(change.stair_id),
+                             units::length_text(change.old_rise_m, m_metric_units),
+                             units::length_text(change.new_rise_m, m_metric_units));
                 }
                 const auto answer = QMessageBox::question(
                     owner, QStringLiteral("Update connected stairs"),
@@ -18664,9 +18764,9 @@ public:
                 binding_level->clear();
                 for (const auto& level : record->model.levels()) {
                     auto* item = new QListWidgetItem(
-                        QStringLiteral("%1  ·  %2 m")
-                            .arg(QString::fromStdString(level.id))
-                            .arg(level.elevation_m, 0, 'f', 3), levels);
+                        QStringLiteral("%1  ·  %2")
+                            .arg(QString::fromStdString(level.id),
+                                 units::length_text(level.elevation_m, m_metric_units)), levels);
                     item->setData(Qt::UserRole, QString::fromStdString(level.id));
                     link_lower->addItem(QString::fromStdString(level.id),
                                         QString::fromStdString(level.id));
@@ -18679,11 +18779,11 @@ public:
                         : link.state == RelationshipState::frozen
                             ? QStringLiteral("frozen") : QStringLiteral("disconnected");
                     auto* item = new QListWidgetItem(
-                        QStringLiteral("%1  ·  %2 → %3  ·  %4 m  ·  %5")
+                        QStringLiteral("%1  ·  %2 → %3  ·  %4  ·  %5")
                             .arg(QString::fromStdString(link.id),
                                  QString::fromStdString(link.lower_level_id),
-                                 QString::fromStdString(link.upper_level_id))
-                            .arg(record->model.floor_to_floor_height(link.id), 0, 'f', 3)
+                                 QString::fromStdString(link.upper_level_id),
+                                 units::length_text(record->model.floor_to_floor_height(link.id), m_metric_units))
                             .arg(state), links);
                     item->setData(Qt::UserRole, QString::fromStdString(link.id));
                 }
@@ -22054,10 +22154,7 @@ public:
             drawing.history_revisions.push_back(drawing.revision);
             m_linework_drawing = std::move(drawing);
             m_creation_mode = DrawingMode::measured_lines;
-            if (m_drawing_mode_combo) {
-                const QSignalBlocker blocker(m_drawing_mode_combo);
-                m_drawing_mode_combo->setCurrentIndex(static_cast<int>(m_creation_mode));
-            }
+            syncDrawingModeControls();
             m_tool = CanvasTool::boundary;
             (void)selectEntity({}, false);
             syncToolControls(); refreshLineworkPreview(); clearError();
@@ -22384,10 +22481,7 @@ public:
 
     void selectBoundaryDrawingMode() {
         m_creation_mode = DrawingMode::measurement;
-        if (m_drawing_mode_combo) {
-            const QSignalBlocker blocker(m_drawing_mode_combo);
-            m_drawing_mode_combo->setCurrentIndex(static_cast<int>(m_creation_mode));
-        }
+        syncDrawingModeControls();
         refreshCursorLabel(m_last_cursor);
     }
 
@@ -28524,7 +28618,10 @@ public:
                                 withhold_label(label);
                                 continue;
                             }
-                            calculation=format_dimension_area(current->second.area_square_metres,metric_units);
+                            // One value per callout; a qualified area result wins
+                            // (matches the full projection's area callouts).
+                            if (calculation.isEmpty())
+                                calculation=format_dimension_area(current->second.area_square_metres,metric_units);
                         }
                         const auto fresh=area_callout_labels(entity,read_boundary(entity.properties),calculation,
                             label.selected,candidate_area_presentations);
@@ -34244,7 +34341,7 @@ public:
         preview->setTool(CanvasTool::select);
         preview->setOverviewMapEnabled(false);
         preview->setSnapEnabled(false);
-        preview->setCanvasBackground(QColor(m_theme == WorkspaceTheme::dark ? "#141b27" : "#f8fafc"));
+        preview->setCanvasBackground(screenCanvasBackground());
         preview->setMinimumSize(280, 220);
         entry_split->addWidget(preview);
         entry_split->setSizes({340, 520});
@@ -34549,7 +34646,7 @@ public:
             (void)read(m_roof_overhang_edit, m_roof_overhang_original_text, "overhang_m", "Overhang", true);
             (void)read(m_roof_thickness_edit, m_roof_thickness_original_text, "thickness_m", "Thickness", false);
             const auto pitch = std::atan(rise / (symmetric_roof ? span / 2.0 : run));
-            m_roof_pitch_value->setText(QStringLiteral("%1°").arg(pitch * 180.0 / std::numbers::pi, 0, 'f', 3));
+            m_roof_pitch_value->setText(units::angle_text(pitch * 180.0 / std::numbers::pi, 3));
             m_roof_preview_error->clear();
             m_roof_preview_error->hide();
         } catch (const std::exception& error) {
@@ -39716,7 +39813,7 @@ public:
             auto* canvas = new PlanCanvas(&dialog);
             new BoundaryPreviewFit(canvas);
             canvas->setMinimumHeight(220);
-            canvas->setCanvasBackground(QColor(248,250,253));
+            canvas->setCanvasBackground(screenCanvasBackground());
             canvas->setGridEnabled(false);
             canvas->setSnapEnabled(false);
             canvas->setOverviewMapEnabled(false);
@@ -41886,17 +41983,27 @@ public:
         OutputFingerprintInputs inputs;
         inputs.profiles = fingerprint_not_applicable(
             "Calculation profiles are stored in the document head.");
-        QFile bundled_output_font(QStringLiteral(":/fonts/Inter.ttf"));
-        if (!bundled_output_font.open(QIODevice::ReadOnly)) {
-            throw std::runtime_error("the bundled output font cannot be read");
+        // Sheet, PDF and report text uses the bundled IBM Plex Sans faces.
+        // Resource IDs are listed in sorted order.
+        std::vector<FingerprintResource> output_fonts;
+        for (const auto& [id, style, path] : std::array<std::array<const char*, 3>, 3>{{
+                 {"ibm-plex-sans-medium-font", "Medium", ":/fonts/IBMPlexSans-Medium.ttf"},
+                 {"ibm-plex-sans-regular-font", "Regular", ":/fonts/IBMPlexSans-Regular.ttf"},
+                 {"ibm-plex-sans-semibold-font", "SemiBold", ":/fonts/IBMPlexSans-SemiBold.ttf"}}}) {
+            QFile bundled_output_font(QString::fromLatin1(path));
+            if (!bundled_output_font.open(QIODevice::ReadOnly)) {
+                throw std::runtime_error("the bundled output font cannot be read");
+            }
+            const auto font_bytes = bundled_output_font.readAll();
+            if (font_bytes.isEmpty()) {
+                throw std::runtime_error("the bundled output font is empty");
+            }
+            output_fonts.push_back(fingerprint_resource(
+                id, std::string(font_bytes.constData(), font_bytes.size()),
+                json{{"family", "IBM Plex Sans"}, {"style", style}, {"embedded", true},
+                     {"source", "application-resource"}}));
         }
-        const auto font_bytes = bundled_output_font.readAll();
-        if (font_bytes.isEmpty()) {
-            throw std::runtime_error("the bundled output font is empty");
-        }
-        inputs.fonts = fingerprint_resources({fingerprint_resource(
-            "inter-font", std::string(font_bytes.constData(), font_bytes.size()),
-            json{{"family", "Inter"}, {"embedded", true}, {"source", "application-resource"}})});
+        inputs.fonts = fingerprint_resources(std::move(output_fonts));
         const json effective_view_descriptor{
             {"hidden_floor_ids", std::vector<std::string>(
                 m_view_filter.hidden_floor_ids.begin(), m_view_filter.hidden_floor_ids.end())},
@@ -46323,7 +46430,12 @@ public:
                 {{"Exterior","exterior"},{"Interior perimeter","interior_perimeter"},{"Plans","plans"},{"Unknown","unknown"}});
             auto* precision = new QSpinBox(&dialog);precision->setObjectName(QStringLiteral("appraisalSetupPrecision"));precision->setRange(0,6);
             unsigned initial_precision = 2;
-            try { initial_precision = appraisal_display_profile(property->properties).decimal_places; } catch (const std::exception&) {}
+            // Read the stored display precision independently of the policy:
+            // ANSI always displays whole square feet, but the stored value
+            // returns when another policy is chosen.
+            try { auto stored = property->properties; stored.erase("appraisal_policy");
+                initial_precision = appraisal_display_profile(stored).decimal_places; } catch (const std::exception&) {}
+            unsigned retained_precision = initial_precision;
             precision->setValue(static_cast<int>(initial_precision));form->addRow(QStringLiteral("Area decimal places"),precision);
             const auto measurement = ansi_measurement_controls(&dialog, *layout, policy, basis);
             auto* rule_version = new QComboBox(&dialog);
@@ -46338,7 +46450,12 @@ public:
             const auto update_policy = [&] {
                 const bool ansi = kind->currentData().toString() == QStringLiteral("ansi_z765_2021");
                 form->setRowVisible(rule_version, ansi); rule_note->setVisible(ansi);
-                measurement.group->setVisible(ansi); precision->setEnabled(!ansi);
+                measurement.group->setVisible(ansi);
+                // Show the precision that will actually be displayed.
+                if (ansi && precision->isEnabled()) {
+                    retained_precision = static_cast<unsigned>(precision->value()); precision->setValue(0);
+                } else if (!ansi && !precision->isEnabled()) precision->setValue(static_cast<int>(retained_precision));
+                precision->setEnabled(!ansi);
                 precision->setToolTip(ansi ? QStringLiteral("ANSI totals use whole square feet; dimensions use tenths of a foot.") : QString{});
             };
             QObject::connect(kind, &QComboBox::currentIndexChanged, &dialog, update_policy); update_policy();
@@ -46383,7 +46500,7 @@ public:
                 catch (const std::exception& exception) { error->setText(QString::fromUtf8(exception.what())); return; }
                 if (setCalculationWorkflow(enabled->isChecked() ? QStringLiteral("appraisal") : QStringLiteral("measurement"),
                     enabled->isChecked() ? std::optional<json>{std::move(declaration)} : std::nullopt,
-                    static_cast<unsigned>(precision->value()))) dialog.accept();
+                    precision->isEnabled() ? static_cast<unsigned>(precision->value()) : retained_precision)) dialog.accept();
                 else error->setText(lastError());
             });
             dialog.exec();
@@ -46818,13 +46935,107 @@ public:
         }
     }
 
+    // Library category filter: component categories filter the component
+    // grid; "@area-classes" and "@labels" show those views in the same place.
+    void applyLibraryCategory() {
+        if (!m_symbol_category || !m_library_pages) return;
+        const auto category = m_symbol_category->currentData().toString();
+        QWidget* page = m_library_components_page;
+        if (category == QStringLiteral("@area-classes")) page = m_area_class_palette;
+        else if (category == QStringLiteral("@labels")) page = m_inline_text_library;
+        if (page && m_library_pages->currentWidget() != page) m_library_pages->setCurrentWidget(page);
+        if (page == m_inline_text_library) refreshInlineTextLibrary();
+        if (m_wall_opening_palette) {
+            // Wall and opening tools stay with every view that can place an
+            // opening; furniture and fixture families get the full height.
+            const bool openings = category.isEmpty() || category == QStringLiteral("@walls") ||
+                category == QStringLiteral("09_doors") || category == QStringLiteral("10_windows");
+            m_wall_opening_palette->setVisible(openings || !m_pending_opening_kind.isEmpty());
+        }
+        populateSymbolLibrary();
+    }
+
+    void showLibraryCategory(const QString& category) {
+        if (!m_symbol_category) return;
+        const auto index = m_symbol_category->findData(category);
+        if (index >= 0 && index != m_symbol_category->currentIndex()) m_symbol_category->setCurrentIndex(index);
+        else applyLibraryCategory();
+    }
+
+    // Keeps the category filter truthful when a view is shown directly.
+    void syncLibraryCategoryToPage() {
+        if (!m_symbol_category || !m_library_pages) return;
+        const auto* page = m_library_pages->currentWidget();
+        const auto current = m_symbol_category->currentData().toString();
+        QString wanted = current;
+        if (page == m_area_class_palette) wanted = QStringLiteral("@area-classes");
+        else if (page == m_inline_text_library) wanted = QStringLiteral("@labels");
+        else if (current == QStringLiteral("@area-classes") || current == QStringLiteral("@labels")) wanted = QString{};
+        if (wanted == current) return;
+        const QSignalBlocker blocker(m_symbol_category);
+        m_symbol_category->setCurrentIndex(std::max(0, m_symbol_category->findData(wanted)));
+    }
+
+    // Inline rename of a hierarchy row (F2, double-click or context menu).
+    void beginNavigatorRename(const QString& id) {
+        if (!m_navigator || !m_document->is_editable()) return;
+        const auto found = m_navigator_items.find(id.toStdString());
+        if (found == m_navigator_items.end() || !(found->second->flags() & Qt::ItemIsEditable)) return;
+        m_navigator->scrollToItem(found->second);
+        m_navigator->editItem(found->second, 0);
+    }
+
+    // Add actions for a hierarchy row: property adds buildings, floors and
+    // layers; a building adds floors and layers; a floor adds layers.
+    void addNavigatorChildActions(QMenu& menu, const QString& id, const std::string& type) {
+        const bool editable = m_document->is_editable();
+        const auto add = [&](const QString& label, const char* child) {
+            auto* action = menu.addAction(label);
+            action->setEnabled(editable);
+            const std::string kind = child;
+            QObject::connect(action, &QAction::triggered, owner, [this, id, type, kind] {
+                if (type == "property") {
+                    showOrganizationDialog(kind, id);
+                } else if (selectEntity(id)) {
+                    // The selected building or floor is the dialog's parent.
+                    if (kind == "layer" && type == "building") {
+                        const auto organization = organize_project(m_document->snapshot());
+                        std::vector<std::string> floors;
+                        for (const auto& [node_id, node] : organization.nodes)
+                            if (node.type == "floor" && node.issues.empty() &&
+                                node.context.building_id == id.toStdString()) floors.push_back(node_id);
+                        if (floors.size() == 1 && selectEntity(id_from(floors.front()))) {
+                            showOrganizationDialog("layer");
+                            return;
+                        }
+                        const auto property = read_string(
+                            m_document->snapshot().entities().at(id.toStdString()).properties, "property_id");
+                        showOrganizationDialog("layer", property ? QString::fromStdString(*property) : QString{});
+                        return;
+                    }
+                    showOrganizationDialog(kind);
+                }
+            });
+        };
+        if (type == "property") add(QStringLiteral("Add building…"), "building");
+        if (type == "property" || type == "building") add(QStringLiteral("Add floor…"), "floor");
+        if (type != "layer") add(QStringLiteral("Add layer…"), "layer");
+    }
+
     void populateSymbolLibrary() {
         if (!m_symbol_category || !m_symbol_search || !m_symbol_list) return;
         const auto previous_family = m_symbol_list->currentItem()
             ? m_symbol_list->currentItem()->data(symbol_family_role).toString() : QString{};
         const auto query = m_symbol_search->text().trimmed().toLower().toStdString();
-        const auto category = m_symbol_category->currentData().toString().toStdString();
+        const auto selected_category = m_symbol_category->currentData().toString();
+        // "@..." entries are library views, not catalog categories. Walls
+        // and openings lists the hosted door and window families.
+        const bool walls_and_openings = selected_category == QStringLiteral("@walls");
+        const auto category = selected_category.startsWith(QLatin1Char('@'))
+            ? std::string{} : selected_category.toStdString();
         auto filtered = filter_symbol_catalog(desktop_placeable_symbol_catalog(), query, category);
+        if (walls_and_openings)
+            std::erase_if(filtered, [](const auto& definition) { return !is_hosted_opening_symbol(definition); });
         std::stable_sort(filtered.begin(), filtered.end(), [](const auto& left, const auto& right) {
             if (left.svg_asset.has_value() != right.svg_asset.has_value())
                 return left.svg_asset.has_value();
@@ -46852,17 +47063,14 @@ public:
                        }); nominal != filtered.end()) {
                 definition = &*nominal;
             }
-            auto label = QString::fromStdString(
-                definition->name.empty() ? definition->family : definition->name);
-            if (definition->name.empty()) {
-                label.replace(QLatin1Char('-'), QLatin1Char(' '));
-                if (!label.isEmpty()) label[0] = label[0].toUpper();
-            }
+            const auto label = library_display_name(QString::fromStdString(
+                definition->name.empty() ? definition->family : definition->name));
             auto* entry = new QListWidgetItem(label, m_symbol_list);
             entry->setIcon(symbol_library_thumbnail(*definition));
             entry->setData(Qt::UserRole, QString::fromStdString(definition->id));
             entry->setData(symbol_family_role, QString::fromStdString(definition->family));
-            entry->setSizeHint(QSize(112, 82));
+            entry->setTextAlignment(Qt::AlignHCenter | Qt::AlignTop);
+            entry->setSizeHint(m_symbol_list->gridSize() - QSize(design::space_1, design::space_1));
             const auto size_description =
                 definition->svg_asset.has_value() &&
                         !definition->svg_asset->dimensions_are_nominal
@@ -48243,7 +48451,7 @@ public:
         chain_preview->setSnapEnabled(false);
         chain_preview->setOverviewMapEnabled(false);
         chain_preview->setSelectionTransformEnabled(false, false);
-        chain_preview->setCanvasBackground(QColor(m_theme == WorkspaceTheme::light ? "#f8fafc" : "#141b27"));
+        chain_preview->setCanvasBackground(screenCanvasBackground());
         layout->addWidget(chain_preview);
         auto* chain_summary = new QLabel(&dialog);
         chain_summary->setObjectName(QStringLiteral("dimensionChainSummary"));
@@ -55362,9 +55570,10 @@ private:
             toolbar_layout->setContentsMargins(0, 0, 0, 0);
             toolbar_layout->setSpacing(1);
         }
-        // One compact row with readable icons and usable mouse targets.
-        toolbar->setMinimumHeight(28);
-        toolbar->setMaximumHeight(28);
+        // One compact row with readable icons and usable mouse targets; the
+        // design system's toolbar is 40px with 28px controls.
+        toolbar->setMinimumHeight(design::toolbar);
+        toolbar->setMaximumHeight(design::toolbar);
         const auto add_toolbar_action = [this, toolbar](const QString& label, const char* icon_paths) {
             auto* action = toolbar->addAction(modern_toolbar_icon(icon_paths, owner), label);
             action->setToolTip(label);
@@ -55393,7 +55602,48 @@ private:
         m_architectural_action->setObjectName(QStringLiteral("workspace3D"));
         m_architectural_action->setStatusTip(QStringLiteral("Architectural workspace (Ctrl+2)"));
         toolbar->addSeparator();
-        m_palette_action = add_toolbar_action(QStringLiteral("Commands"), "<path d='M5 5h5v5H5zM14 5h5v5h-5zM5 14h5v5H5zM14 14h5v5h-5z'/>");
+        {
+            // Drawing tool group: exactly one creation mode is active. Empty
+            // plan clicks create walls (default), measured areas or loose
+            // measured lines; selection and panning stay available in each.
+            struct DrawModeButton { DrawingMode mode; const char* id; const char* label; const char* status; const char* glyph; };
+            const DrawModeButton buttons[] = {
+                {DrawingMode::wall, "drawModeWall", "Wall",
+                 "Wall: empty plan clicks draw walls",
+                 "<path d='M3 8h18M3 16h18'/><path d='M8 8v8M16 8v8'/>"},
+                {DrawingMode::measurement, "drawModeArea", "Area",
+                 "Area: empty plan clicks draw a measured area",
+                 "<path d='M4 6l11-2 5 7-4 9H6z'/>"},
+                {DrawingMode::measured_lines, "drawModeMeasuredLines", "Measured lines",
+                 "Measured lines: empty plan clicks draw loose measured lines",
+                 "<path d='M4 18 10 8l5 6 5-9'/><path d='M4 21v-3M20 8V5'/>"},
+            };
+            auto* draw_modes = new QActionGroup(owner);
+            draw_modes->setObjectName(QStringLiteral("drawingModeTools"));
+            draw_modes->setExclusive(true);
+            for (const auto& button : buttons) {
+                const auto label = QString::fromLatin1(button.label);
+                auto* action = toolbar->addAction(modern_toolbar_icon(button.glyph, owner), label);
+                action->setObjectName(QString::fromLatin1(button.id));
+                action->setCheckable(true);
+                action->setChecked(button.mode == m_creation_mode);
+                action->setToolTip(label);
+                action->setStatusTip(QString::fromLatin1(button.status));
+                draw_modes->addAction(action);
+                if (auto* tool = qobject_cast<QToolButton*>(toolbar->widgetForAction(action))) {
+                    tool->setToolButtonStyle(Qt::ToolButtonIconOnly);
+                    tool->setAccessibleName(label);
+                    tool->setFixedSize(design::tool_button, design::tool_button);
+                }
+                m_drawing_mode_actions[static_cast<std::size_t>(button.mode)] = action;
+                const auto mode = button.mode;
+                QObject::connect(action, &QAction::triggered, owner, [this, mode] {
+                    if (!setDrawingMode(mode)) syncDrawingModeControls();
+                });
+            }
+        }
+        toolbar->addSeparator();
+        m_palette_action =add_toolbar_action(QStringLiteral("Commands"), "<path d='M5 5h5v5H5zM14 5h5v5h-5zM5 14h5v5H5zM14 14h5v5h-5z'/>");
         auto* shortcut_settings = add_toolbar_action(QStringLiteral("Shortcuts"), "<rect x='3' y='6' width='18' height='12' rx='2'/><path d='M7 10h2M11 10h2M15 10h2M7 14h10'/>");
         shortcut_settings->setObjectName(QStringLiteral("keyboardShortcutSettings"));
 
@@ -55904,7 +56154,7 @@ private:
                              }
                          });
         initializeShortcuts();
-        applyTheme(WorkspaceTheme::light);
+        applyTheme(m_theme); // Design system: dark is the primary (default) theme.
 
         auto* central = new QWidget(owner);
         central->setObjectName(QStringLiteral("workspaceRoot"));
@@ -55915,8 +56165,7 @@ private:
         m_plan_error_banner = new QLabel(central);
         m_plan_error_banner->setObjectName(QStringLiteral("planGeometryError"));
         m_plan_error_banner->setWordWrap(true);
-        m_plan_error_banner->setStyleSheet(QStringLiteral(
-            "color:#8b1a1a; background:#fff0ed; border:1px solid #d38d86; padding:6px 10px;"));
+        // Colors come from the theme style sheet (danger on a panel surface).
         root_layout->addWidget(m_plan_error_banner);
 
         auto* splitter = new QSplitter(Qt::Horizontal, central);
@@ -55935,14 +56184,11 @@ private:
         auto* navigator_layout = new QVBoxLayout(navigator_panel);
         navigator_layout->setContentsMargins(10, 10, 10, 10);
         navigator_layout->setSpacing(6);
-        auto* drawing_mode_row = new QWidget(navigator_panel);
-        drawing_mode_row->setObjectName(QStringLiteral("drawingModeHeader"));
-        auto* drawing_mode_layout = new QHBoxLayout(drawing_mode_row);
-        drawing_mode_layout->setContentsMargins(0, 0, 0, 0);
-        drawing_mode_layout->setSpacing(6);
-        auto* drawing_mode_label = new QLabel(QStringLiteral("Draw"), drawing_mode_row);
-        drawing_mode_label->setObjectName(QStringLiteral("drawingModeLabel"));
-        m_drawing_mode_combo = new QComboBox(drawing_mode_row);
+        // Drawing modes are chosen with the primary toolbar's draw-mode
+        // buttons. This combo is a hidden compatibility control for
+        // automation; it is never shown in the panel.
+        m_drawing_mode_combo = new QComboBox(navigator_panel);
+        m_drawing_mode_combo->hide();
         m_drawing_mode_combo->setObjectName(QStringLiteral("drawingMode"));
         m_drawing_mode_combo->setAccessibleName(QStringLiteral("Drawing mode"));
         m_drawing_mode_combo->setToolTip(QStringLiteral(
@@ -55951,16 +56197,17 @@ private:
         m_drawing_mode_combo->addItem(QStringLiteral("Area"), QStringLiteral("measurement"));
         m_drawing_mode_combo->addItem(QStringLiteral("Measured lines"), QStringLiteral("measurement_linework"));
         m_drawing_mode_combo->setCurrentIndex(0);
-        drawing_mode_layout->addWidget(drawing_mode_label);
-        drawing_mode_layout->addWidget(m_drawing_mode_combo, 1);
-        navigator_layout->addWidget(drawing_mode_row);
         QObject::connect(m_drawing_mode_combo, &QComboBox::currentIndexChanged, owner,
                          [this](int index) {
             (void)setDrawingMode(static_cast<DrawingMode>(index));
         });
+        // One row of panel tabs (Layers | Library | Details). No page in the
+        // panel shows a nested tab row.
         auto* sidebar_tabs = new QTabWidget(navigator_panel);
+        m_sidebar_tabs = sidebar_tabs;
         sidebar_tabs->setObjectName(QStringLiteral("sidebarTabs"));
         sidebar_tabs->setDocumentMode(true);
+        sidebar_tabs->tabBar()->setExpanding(false);
         navigator_layout->addWidget(sidebar_tabs, 1);
         auto* layers_page = new QWidget(sidebar_tabs);
         layers_page->setObjectName(QStringLiteral("layersPanel"));
@@ -55978,12 +56225,33 @@ private:
         auto* symbols_page = new QWidget(sidebar_tabs);
         symbols_page->setObjectName(QStringLiteral("symbolsPanel"));
         auto* library_layout = new QVBoxLayout(symbols_page);
-        library_layout->setContentsMargins(0, 0, 0, 0);
+        library_layout->setContentsMargins(0, design::space_2, 0, 0);
+        library_layout->setSpacing(design::space_2);
+        // One full-width search and one category filter cover every library
+        // view: component families, walls and openings, area classes and
+        // labels. The views share a page stack without a tab row.
+        m_symbol_search = new QLineEdit(symbols_page);
+        m_symbol_search->setObjectName(QStringLiteral("annotationSymbolSearch"));
+        m_symbol_search->setAccessibleName(QStringLiteral("Search the library"));
+        m_symbol_search->setPlaceholderText(QStringLiteral("Search library"));
+        m_symbol_search->setClearButtonEnabled(true);
+        m_symbol_search->setMinimumWidth(0);
+        library_layout->addWidget(m_symbol_search);
+        m_symbol_category = new QComboBox(symbols_page);
+        m_symbol_category->setObjectName(QStringLiteral("annotationSymbolCategory"));
+        m_symbol_category->setAccessibleName(QStringLiteral("Library category"));
+        m_symbol_category->setToolTip(QStringLiteral("Show one part of the library"));
+        m_symbol_category->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        m_symbol_category->setMinimumWidth(0);
+        library_layout->addWidget(m_symbol_category);
         auto* library_pages = new QTabWidget(symbols_page);
+        m_library_pages = library_pages;
         library_pages->setObjectName(QStringLiteral("libraryPages"));
         library_pages->setDocumentMode(true);
-        library_layout->addWidget(library_pages);
+        library_pages->tabBar()->hide();
+        library_layout->addWidget(library_pages, 1);
         auto* components_page = new QWidget(library_pages);
+        m_library_components_page = components_page;
         library_pages->addTab(components_page, QStringLiteral("Components"));
         m_area_class_palette = new AreaClassPalette(library_pages);
         library_pages->addTab(m_area_class_palette, QStringLiteral("Area classes"));
@@ -55999,7 +56267,14 @@ private:
         });
         QObject::connect(library_pages,&QTabWidget::currentChanged,owner,[this,library_pages](int) {
             if (library_pages->currentWidget()==m_inline_text_library) refreshInlineTextLibrary();
+            syncLibraryCategoryToPage();
         });
+        // The library's own search field filters every view; the embedded
+        // views keep their fields (automation drives them) but hide them.
+        for (auto* nested_search : {m_area_class_palette->findChild<QLineEdit*>(QStringLiteral("areaClassSearch")),
+                                    m_inline_text_library->findChild<QLineEdit*>(QStringLiteral("textLibraryPanelSearch"))}) {
+            if (nested_search) nested_search->hide();
+        }
         m_area_class_palette->setArmRequested([this](QString classification) { armAreaClass(classification); });
         m_area_class_palette->setAddTypesRequested([this] { addMissingAreaTypes(); });
         m_area_class_palette->setCancelRequested([this] { cancelAreaClass(); });
@@ -56007,13 +56282,19 @@ private:
             return applyAreaClass(classification,target);
         });
         auto* symbols_layout = new QVBoxLayout(components_page);
-        symbols_layout->setContentsMargins(0, 8, 0, 0);
-        symbols_layout->setSpacing(6);
-        sidebar_tabs->addTab(layers_page, QStringLiteral("Layers"));
-        sidebar_tabs->addTab(symbols_page, QStringLiteral("Library"));
+        symbols_layout->setContentsMargins(0, 0, 0, 0);
+        symbols_layout->setSpacing(design::space_2);
+        const auto layers_tab = sidebar_tabs->addTab(layers_page, QStringLiteral("Layers"));
+        sidebar_tabs->setTabToolTip(layers_tab, QStringLiteral("Buildings, floors, layers and their drawing objects"));
+        const auto library_tab = sidebar_tabs->addTab(symbols_page, QStringLiteral("Library"));
+        sidebar_tabs->setTabToolTip(library_tab, QStringLiteral("Symbols, walls and openings, area classes and labels"));
         m_appraisal_details = new AppraisalDetailsPanel(sidebar_tabs);
         const auto details_tab = sidebar_tabs->addTab(m_appraisal_details, QStringLiteral("Details"));
         sidebar_tabs->setTabToolTip(details_tab, QStringLiteral("GLA, area dimensions, deductions and appraisal report"));
+        if (const auto remembered = remembered_left_panel_tab(0); remembered > 0 && remembered < sidebar_tabs->count())
+            sidebar_tabs->setCurrentIndex(remembered);
+        QObject::connect(sidebar_tabs, &QTabWidget::currentChanged, owner,
+                         [](int index) { remember_left_panel_tab(index); });
         m_appraisal_details->setLocateRequested([this](const QString& boundary, Revision revision) {
             if (!appraisalDetailsCurrent(revision)) return;
             const auto organization = organize_project(m_document->snapshot());
@@ -56051,17 +56332,20 @@ private:
         m_drawing_context_label = new QLabel(navigator_panel);
         m_drawing_context_label->setObjectName(QStringLiteral("drawingContext"));
         m_drawing_context_label->hide();
-        auto* phase_heading = new QLabel(QStringLiteral("DESIGN PHASE"), navigator_panel);
-        m_phase_heading = phase_heading;
-        phase_heading->setObjectName(QStringLiteral("phaseHeading"));
-        phase_heading->setStyleSheet(QStringLiteral("font-weight:600;"));
-        layers_layout->addWidget(phase_heading);
+        // Design phases and remodeling alternatives are advanced: a collapsed
+        // section below the hierarchy, shown only in the 3D workspace.
+        auto* phase_section = new CollapsibleSection(QStringLiteral("Phases and alternatives"), layers_page);
+        m_phase_heading = phase_section;
+        phase_section->setObjectName(QStringLiteral("phaseSection"));
+        phase_section->header()->setObjectName(QStringLiteral("phaseHeading"));
+        phase_section->header()->setToolTip(QStringLiteral("Existing model, remodeling alternatives and design sets"));
+        auto* phase_layout = phase_section->body()->layout();
         m_phase_registry_combo = new QComboBox(navigator_panel);
         m_phase_registry_combo->setObjectName(QStringLiteral("modelPhaseRegistry"));
         m_phase_registry_combo->setMinimumWidth(0);
         m_phase_registry_combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
         m_phase_registry_combo->setToolTip(QStringLiteral("Choose the design set to edit. Each set keeps its own active alternative."));
-        layers_layout->addWidget(m_phase_registry_combo);
+        phase_layout->addWidget(m_phase_registry_combo);
         QObject::connect(m_phase_registry_combo, &QComboBox::activated, owner, [this](int index) {
             (void)selectModelPhaseRegistry(m_phase_registry_combo->itemData(index).toString());
         });
@@ -56071,11 +56355,11 @@ private:
         m_model_phase_combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
         m_model_phase_combo->setToolTip(QStringLiteral(
             "Choose the existing model or a remodeling alternative. The selection is saved in the project and filters all shared views."));
-        layers_layout->addWidget(m_model_phase_combo);
+        phase_layout->addWidget(m_model_phase_combo);
         auto* manage_phases = new QPushButton(QStringLiteral("Manage design phases…"), navigator_panel);
         m_manage_phases_button = manage_phases;
         manage_phases->setObjectName(QStringLiteral("manageDesignPhases"));
-        layers_layout->addWidget(manage_phases);
+        phase_layout->addWidget(manage_phases);
         QObject::connect(manage_phases, &QPushButton::clicked, owner,
                          [this] { showRemodelingAlternatives(); });
         QObject::connect(m_model_phase_combo, &QComboBox::activated, owner, [this](int index) {
@@ -56101,7 +56385,30 @@ private:
             m_pending_proposed_selection.clear();
             m_pending_proposed_selection_document.reset();
             const auto found = snapshot.entities().find(id.toStdString());
-            if (found == snapshot.entities().end() || !supportsSitePlacement(found->second)) return;
+            if (found == snapshot.entities().end()) return;
+            const auto row_type = found->second.type;
+            if (navigator_is_hierarchy_type(row_type)) {
+                // Hierarchy rows: rename in place and add children here.
+                QMenu menu(owner);
+                auto* rename = menu.addAction(QStringLiteral("Rename"));
+                rename->setObjectName(QStringLiteral("navigatorRenameAction"));
+                rename->setShortcut(QKeySequence(Qt::Key_F2));
+                rename->setEnabled(m_document->is_editable());
+                QObject::connect(rename, &QAction::triggered, owner, [this, id] { beginNavigatorRename(id); });
+                addNavigatorChildActions(menu, id, row_type);
+                if (supportsSitePlacement(found->second)) {
+                    menu.addSeparator();
+                    auto* placement = menu.addAction(QStringLiteral("Site placement and coordinate frame…"));
+                    placement->setObjectName(QStringLiteral("sitePlacementNavigatorAction"));
+                    placement->setEnabled(m_document->is_editable());
+                    QObject::connect(placement, &QAction::triggered, owner, [this, id] {
+                        if (selectEntity(id, false)) showSitePlacement();
+                    });
+                }
+                menu.exec(m_navigator->viewport()->mapToGlobal(point));
+                return;
+            }
+            if (!supportsSitePlacement(found->second)) return;
             if (!selectEntity(id, false)) return;
             QMenu menu(owner);
             auto* placement = menu.addAction(QStringLiteral("Site placement and coordinate frame…"));
@@ -56120,6 +56427,9 @@ private:
         m_navigator->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_navigator->setMinimumWidth(0);
         m_navigator->setMinimumHeight(100);
+        // Hierarchy rows (and only those) are editable: F2 or double-click
+        // renames a property, building, floor or layer in place.
+        m_navigator->setEditTriggers(QAbstractItemView::EditKeyPressed | QAbstractItemView::DoubleClicked);
         QObject::connect(m_navigator, &QTreeWidget::currentItemChanged, owner,
             [this](QTreeWidgetItem* item, QTreeWidgetItem*) {
                 if (m_refreshing || !item) return;
@@ -56167,6 +56477,9 @@ private:
         QObject::connect(m_navigator, &QTreeWidget::itemDoubleClicked, owner,
                          [this](QTreeWidgetItem* item, int column) {
             if (!item || column != 0 || m_navigator->checkboxInteraction()) return;
+            // Hierarchy rows rename in place (the tree's DoubleClicked edit
+            // trigger); their site placement stays in the context menu.
+            if (item->flags() & Qt::ItemIsEditable) return;
             const auto id = item->data(0, Qt::UserRole).toString();
             const auto document = m_document;
             const auto revision = document->revision();
@@ -56189,6 +56502,20 @@ private:
                              const auto id = item->data(0, Qt::UserRole).toString();
                              if (id.isEmpty()) return;
                              const auto document = m_document;
+                             // An inline rename commits a changed row name;
+                             // a check change keeps the presented name.
+                             if (const auto stored = item->data(0, navigator_name_role).toString();
+                                 (item->flags() & Qt::ItemIsEditable) && item->text(0) != stored) {
+                                 const auto name = item->text(0).trimmed();
+                                 const auto revision = document->revision();
+                                 QTimer::singleShot(0, owner, [this, id, name, document, revision] {
+                                     if (m_document != document || !has_entity(*m_document, id)) return;
+                                     // A refused or empty name restores the row.
+                                     if (name.isEmpty() || !renameOrganizationEntity(id, name, revision))
+                                         refreshNavigator();
+                                 });
+                                 return;
+                             }
                              const auto visible = item->checkState(0) == Qt::Checked;
                              // QTreeWidget is in the middle of processing the
                              // keyboard/mouse event. Rebuild only after that
@@ -56237,6 +56564,7 @@ private:
         m_floor_reference_diagnostic->setWordWrap(true);
         tracing_layout->addWidget(m_floor_reference_diagnostic);
         layers_layout->addWidget(m_floor_reference_group);
+        layers_layout->addWidget(phase_section);
         QObject::connect(m_floor_reference_source, &QComboBox::activated, owner,
             [this] { commitFloorReferenceControls(true); });
         QObject::connect(m_floor_reference_visible, &QCheckBox::toggled, owner,
@@ -56246,7 +56574,8 @@ private:
         QObject::connect(m_floor_reference_align, &QToolButton::clicked, owner,
             [this] { showFloorReferenceAlignment(); });
 
-        auto* architecture_palette = new QGroupBox(QStringLiteral("Walls & openings"), navigator_panel);
+        auto* architecture_palette = new QGroupBox(QStringLiteral("Walls and openings"), navigator_panel);
+        m_wall_opening_palette = architecture_palette;
         architecture_palette->setObjectName(QStringLiteral("wallOpeningPalette"));
         architecture_palette->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
         auto* architecture_layout = new QVBoxLayout(architecture_palette);
@@ -56513,20 +56842,6 @@ private:
         components_header_layout->addWidget(text_button);
         symbols_layout->addWidget(components_header);
 
-        m_symbol_category = new QComboBox(navigator_panel);
-        m_symbol_category->setObjectName(QStringLiteral("annotationSymbolCategory"));
-        m_symbol_category->setAccessibleName(QStringLiteral("Component category"));
-        m_symbol_search = new QLineEdit(navigator_panel);
-        m_symbol_search->setObjectName(QStringLiteral("annotationSymbolSearch"));
-        m_symbol_search->setAccessibleName(QStringLiteral("Search components"));
-        m_symbol_search->setPlaceholderText(QStringLiteral("Search components"));
-        auto* symbol_filters = new QHBoxLayout;
-        symbol_filters->setContentsMargins(0, 0, 0, 0);
-        symbol_filters->setSpacing(5);
-        symbol_filters->addWidget(m_symbol_category, 1);
-        symbol_filters->addWidget(m_symbol_search, 2);
-        symbols_layout->addLayout(symbol_filters);
-
         auto* symbol_size_row = new QHBoxLayout;
         symbol_size_row->setContentsMargins(0, 0, 0, 0);
         symbol_size_row->setSpacing(5);
@@ -56552,8 +56867,12 @@ private:
         m_symbol_list->setAcceptDrops(false);
         m_symbol_list->setUniformItemSizes(true);
         m_symbol_list->setWordWrap(true);
+        m_symbol_list->setTextElideMode(Qt::ElideRight);
+        m_symbol_list->setSpacing(0);
+        m_symbol_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_symbol_list->setIconSize(QSize(68, 54));
-        m_symbol_list->setGridSize(QSize(118, 86));
+        // The grid follows the panel width and font (see updateTileGrid).
+        m_symbol_list->updateTileGrid();
         m_symbol_list->setMinimumHeight(210);
         m_symbol_list->setProperty("symbolScale", 1.0);
         symbols_layout->addWidget(m_symbol_list, 1);
@@ -56567,15 +56886,26 @@ private:
         const auto& catalog = desktop_placeable_symbol_catalog();
         std::set<std::string> symbol_categories;
         for (const auto& definition : catalog) symbol_categories.insert(definition.category);
-        m_symbol_category->addItem(QStringLiteral("All categories"), QString{});
+        // Category filter: every component, then walls and openings, the
+        // component families, and the area class and label views.
+        m_symbol_category->addItem(QStringLiteral("All components"), QString{});
+        m_symbol_category->addItem(QStringLiteral("Walls and openings"), QStringLiteral("@walls"));
+        m_symbol_category->insertSeparator(m_symbol_category->count());
         for (const auto& category : symbol_categories) {
-            m_symbol_category->addItem(symbol_category_label(category),
+            m_symbol_category->addItem(library_display_name(symbol_category_label(category)),
                                        QString::fromStdString(category));
         }
+        m_symbol_category->insertSeparator(m_symbol_category->count());
+        m_symbol_category->addItem(QStringLiteral("Area classes"), QStringLiteral("@area-classes"));
+        m_symbol_category->addItem(QStringLiteral("Labels"), QStringLiteral("@labels"));
         QObject::connect(m_symbol_category, &QComboBox::currentIndexChanged, owner,
-                         [this] { populateSymbolLibrary(); });
-        QObject::connect(m_symbol_search, &QLineEdit::textChanged, owner,
-                         [this] { populateSymbolLibrary(); });
+                         [this] { applyLibraryCategory(); });
+        QObject::connect(m_symbol_search, &QLineEdit::textChanged, owner, [this](const QString& text) {
+            for (auto* nested_search : {m_area_class_palette->findChild<QLineEdit*>(QStringLiteral("areaClassSearch")),
+                                        m_inline_text_library->findChild<QLineEdit*>(QStringLiteral("textLibraryPanelSearch"))})
+                if (nested_search && nested_search->text() != text) nested_search->setText(text);
+            populateSymbolLibrary();
+        });
         QObject::connect(m_symbol_list, &QListWidget::currentItemChanged, owner,
                          [this](QListWidgetItem* current, QListWidgetItem*) {
                              populateSymbolVariants(current);
@@ -56584,10 +56914,9 @@ private:
                          [this](int index) { selectSymbolVariant(index); });
         QObject::connect(m_symbol_list, &QListWidget::itemActivated, owner,
                          [this](QListWidgetItem* item) { armSymbolPlacement(item); });
-        QObject::connect(text_button, &QToolButton::clicked, owner, [this,library_pages,sidebar_tabs] {
+        QObject::connect(text_button, &QToolButton::clicked, owner, [this,sidebar_tabs] {
             sidebar_tabs->setCurrentIndex(1);
-            library_pages->setCurrentWidget(m_inline_text_library);
-            refreshInlineTextLibrary();
+            showLibraryCategory(QStringLiteral("@labels"));
         });
         populateSymbolLibrary();
 
@@ -56607,7 +56936,10 @@ private:
         m_appraisal_gla_shortcut->setAccessibleName(QStringLiteral("Gross living area; open appraisal details"));
         m_appraisal_gla_shortcut->setToolButtonStyle(Qt::ToolButtonTextOnly);
         m_appraisal_gla_shortcut->setAutoRaise(true);
-        m_appraisal_gla_shortcut->setFixedHeight(24);
+        // Status-bar controls fit inside the 24px status bar (and its 1px
+        // top border) with a 2px inset; the style sheet sizes them to match.
+        constexpr int status_control_height = design::status_bar - 4;
+        m_appraisal_gla_shortcut->setFixedHeight(status_control_height);
         m_appraisal_gla_shortcut->hide();
         status_controls_layout->addWidget(m_appraisal_gla_shortcut);
         QObject::connect(m_appraisal_gla_shortcut,&QToolButton::clicked,owner,[this] {
@@ -56635,7 +56967,7 @@ private:
         m_selection_filter_combo->setMinimumContentsLength(9);
         m_selection_filter_combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
         m_selection_filter_combo->setMaximumWidth(150);
-        m_selection_filter_combo->setFixedHeight(24);
+        m_selection_filter_combo->setFixedHeight(status_control_height);
         status_controls_layout->addWidget(m_selection_filter_combo);
         QObject::connect(m_selection_filter_combo, &QComboBox::currentIndexChanged, owner, [this] {
             const auto filter = static_cast<CanvasSelectionFilter>(m_selection_filter_combo->currentData().toInt());
@@ -56659,7 +56991,8 @@ private:
         m_snap_button = new QToolButton(canvas_status_controls);
         m_snap_button->setText(QStringLiteral("Snap"));
         m_snap_button->setIcon(modern_toolbar_icon(
-            "<path fill='#92a6be' d='M4 4h5v9a3 3 0 0 0 6 0V4h5v9a8 8 0 0 1-16 0z'/><path fill='#e9eef5' d='M4 4h5v4H4zM15 4h5v4h-5z'/>", owner));
+            // Outline magnet with pole bands; color comes from the theme.
+            "<path d='M4 4h5v9a3 3 0 0 0 6 0V4h5v9a8 8 0 0 1-16 0z'/><path d='M4 8h5M15 8h5'/>", owner));
         m_snap_button->setIconSize(QSize(16, 16));
         m_snap_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
         m_snap_button->setAccessibleName(QStringLiteral("Snap"));
@@ -56698,7 +57031,7 @@ private:
         status_controls_layout->addWidget(m_overview_button);
         for (auto* button : {m_grid_button, m_snap_button, m_fit_button, m_overview_button}) {
             button->setToolButtonStyle(Qt::ToolButtonIconOnly);
-            button->setFixedSize(26, 24);
+            button->setFixedSize(status_control_height + 4, status_control_height);
         }
         owner->statusBar()->addPermanentWidget(canvas_status_controls);
         QObject::connect(m_grid_button, &QToolButton::toggled, owner,
@@ -58049,6 +58382,10 @@ private:
         splitter->setSizes({340, 1000});
         owner->setCentralWidget(central);
         owner->statusBar()->clearMessage();
+        // The early applyTheme above (palette and style sheet, which also
+        // style every widget created since) runs before the canvases exist,
+        // so give the plan canvases the active theme's background now.
+        applyCanvasBackgrounds();
     }
 
     void connectCanvas(PlanCanvas* canvas) {
@@ -60178,15 +60515,18 @@ private:
                     }
                 }
 
+                // One area value per callout. A qualified appraisal or
+                // measurement result is the reported basis for the same
+                // boundary, so it replaces the physical-room readout instead
+                // of stacking a second, differently rounded value under it
+                // (which overlapped in exported sketch PDFs: 129.17 / 129.2).
                 QString calculation;
-                if (is_physical_wall_room(entity)) {
-                    calculation = format_dimension_area(physical_rooms.at(id).area_square_metres, options.metric_units);
-                }
                 if (const auto value = appraisal_area_values.find(id); value != appraisal_area_values.end()) {
-                    if (!calculation.isEmpty()) calculation += QLatin1Char('\n');
-                    calculation += value->second;
+                    calculation = value->second;
                 } else if (const auto value = measurement_area_values.find(id); value != measurement_area_values.end()) {
                     calculation = value->second;
+                } else if (is_physical_wall_room(entity)) {
+                    calculation = format_dimension_area(physical_rooms.at(id).area_square_metres, options.metric_units);
                 }
                 auto labels=area_callout_labels(geometry_entity,segments,calculation,
                     id_from(id)==options.selected_id,area_presentations);
@@ -60202,8 +60542,9 @@ private:
                 all_labels.insert(all_labels.end(),std::make_move_iterator(labels.begin()),std::make_move_iterator(labels.end()));
             } else if (entity.type == "wall") {
                 canvas_entity.stroke_segments = wall_plans.at(id).strokes;
-                canvas_entity.stroke_color = QColor(35, 77, 113);
-                canvas_entity.dark_stroke_color = QColor(143, 198, 245);
+                // Design system draw-wall for light/paper and dark surfaces.
+                canvas_entity.stroke_color = design::light_theme().draw_wall;
+                canvas_entity.dark_stroke_color = design::dark_theme().draw_wall;
                 if (options.interactive && snapshot.is_editable())
                     if (const auto baseline = read_required_segment(entity.properties, "baseline")) {
                         canvas_entity.endpoint_baseline=*baseline;
@@ -64464,8 +64805,13 @@ private:
                 auto active_font = item->font(0);
                 active_font.setBold(true);
                 item->setFont(0, active_font);
-                item->setForeground(0, owner->palette().color(QPalette::HighlightedText));
-                item->setBackground(0, owner->palette().color(QPalette::Highlight));
+                // Active is shown by weight, the marker and the tooltip, not
+                // by color alone. Text stays the theme ink so it reads on the
+                // panel even where the style sheet suppresses item fills
+                // (high contrast must never end up dark-on-black).
+                item->setForeground(0, owner->palette().color(QPalette::Text));
+                if (m_theme != WorkspaceTheme::high_contrast)
+                    item->setBackground(0, owner->palette().color(QPalette::Highlight));
                 item->setText(1, QStringLiteral("●"));
                 item->setTextAlignment(1, Qt::AlignCenter);
                 item->setForeground(1, owner->palette().color(QPalette::Link));
@@ -64476,7 +64822,7 @@ private:
             if (!node.issues.empty() && !active_layer)
                 item->setForeground(0, m_theme == WorkspaceTheme::high_contrast
                     ? owner->palette().color(QPalette::Text)
-                    : m_theme == WorkspaceTheme::dark ? QColor("#ff9f9f") : QColor("#aa2323"));
+                    : m_theme == WorkspaceTheme::dark ? design::dark_theme().danger : design::light_theme().danger);
         }
         QTreeWidgetItem* unassigned = m_navigator_unassigned;
         for (const auto& [id, node] : organization.nodes) {
@@ -65197,7 +65543,7 @@ private:
                     const auto& q = found->second;
                     if (derived_category_authority) {
                         const auto category = q.derived_category
-                            ? QString::fromStdString(appraisal_category_label(*q.derived_category))
+                            ? sketch::desktop::appraisal_category_label(*q.derived_category)
                             : (selected_qualified_exclusion
                                    ? QStringLiteral("Excluded — no standalone contribution")
                                    : QStringLiteral("Unqualified"));
@@ -65217,7 +65563,7 @@ private:
                                     : QStringLiteral("Unqualified — complete declared appraisal facts."));
                     }
                     m_appraisal_derived_value->setText(QStringLiteral("%1\nPhysical: %2\nAdjusted: %3")
-                        .arg(q.derived_category ? QString::fromStdString(appraisal_category_label(*q.derived_category))
+                        .arg(q.derived_category ? sketch::desktop::appraisal_category_label(*q.derived_category)
                                                : (q.qualified ? QStringLiteral("Excluded — no standalone contribution") : QStringLiteral("Unqualified")),
                              q.physical_square_metres
                                  ? format_display_area(display_area(*q.physical_square_metres, display_profile))
@@ -65273,7 +65619,7 @@ private:
             m_calculation_net_value->setText(format_area(net));
             m_calculation_factored_value->setText(format_area(factored));
             m_calculation_perimeter_value->setText(
-                declared_ansi ? QStringLiteral("%1 ft").arg(QString::number(selected_result->perimeter_metres / 0.3048, 'f', 1))
+                declared_ansi ? units::ansi_length_text(selected_result->perimeter_metres)
                               : format_length(selected_result->perimeter_metres, m_metric_units));
             m_calculation_deductions_list->clear();
             if (selected_result->deductions.empty()) {
@@ -65462,16 +65808,35 @@ private:
         }
         if(m_appraisal_gla_shortcut) {
             const auto& report=m_appraisal_details->report();
-            m_appraisal_gla_shortcut->setVisible(report && report->configured);
-            if(report && report->configured) {
+            // GLA stays visible without Setup once the property has a measured
+            // building area: the figure when its basis is complete, otherwise
+            // a withheld state that says why and what to do. An empty project
+            // shows no placeholder.
+            bool measured_without_setup=false;
+            if(report && !report->configured) {
+                for(const auto& [id,entity]:source.entities()) {
+                    (void)id;
+                    if(!is_closed_boundary_entity(entity.type) ||
+                        appraisal_boundary_property_id(source,entity)!=report->property_id) continue;
+                    try { if(area_scope_name(entity.properties)=="site") continue; }
+                    catch(const std::exception&) {}
+                    measured_without_setup=true;break;
+                }
+            }
+            m_appraisal_gla_shortcut->setVisible(report && (report->configured || measured_without_setup));
+            if(report && (report->configured || measured_without_setup)) {
                 const auto* total=m_appraisal_details->findChild<QLabel*>(QStringLiteral("appraisalDetailsGla"));
-                const bool available=report->qualified && report->calculation && total;
-                m_appraisal_gla_shortcut->setText(available ? QStringLiteral("GLA %1").arg(total->text()) : QStringLiteral("GLA · review required"));
+                const bool available=report->configured && report->qualified && report->calculation && total;
+                m_appraisal_gla_shortcut->setText(available ? QStringLiteral("GLA %1").arg(total->text()) :
+                    report->configured ? QStringLiteral("GLA · review required") : QStringLiteral("GLA · setup required"));
                 m_appraisal_gla_shortcut->setMinimumWidth(m_appraisal_gla_shortcut->sizeHint().width());
                 const auto* status=m_appraisal_details->findChild<QLabel*>(QStringLiteral("appraisalDetailsStatus"));
+                const auto* rounding=m_appraisal_details->findChild<QLabel*>(QStringLiteral("appraisalDetailsRounding"));
                 m_appraisal_gla_shortcut->setToolTip((available ? QStringLiteral("Open the current property GLA, dimensions and deductions.") :
-                    QStringLiteral("Totals withheld. Open Details to resolve the measurement and declaration issues."))+
-                    (status ? QLatin1Char('\n')+status->text() : QString{}));
+                    report->configured ? QStringLiteral("GLA withheld. Open Details to resolve the measurement and declaration issues.") :
+                    QStringLiteral("GLA withheld. Open Details and use Setup to declare the appraisal policy and each area's facts."))+
+                    (status ? QLatin1Char('\n')+status->text() : QString{})+
+                    (available && rounding && !rounding->text().isEmpty() ? QLatin1Char('\n')+rounding->text() : QString{}));
             }
         }
     }
@@ -66333,8 +66698,7 @@ private:
                            read_number(entity->properties, "thickness_m", 0.0));
             const auto pitch = read_number(entity->properties, "pitch_rad", 0.0);
             QSignalBlocker pitch_blocker(m_roof_pitch_value);
-            m_roof_pitch_value->setText(QStringLiteral("%1°")
-                                            .arg(pitch * 180.0 / std::numbers::pi, 0, 'f', 3));
+            m_roof_pitch_value->setText(units::angle_text(pitch * 180.0 / std::numbers::pi, 3));
             m_roof_preview_error->clear();
             m_roof_preview_error->hide();
         }
@@ -66923,7 +67287,7 @@ private:
             if (const auto* preset = area_type_for_code(key.mid(10).toStdString()))
                 return QString::fromUtf8(preset->label.data(), static_cast<qsizetype>(preset->label.size()));
         if(const auto category=parse_appraisal_category(key.toStdString()))
-            return QString::fromStdString(appraisal_category_label(*category));
+            return sketch::desktop::appraisal_category_label(*category);
         auto label=key;label.replace(QLatin1Char('_'),QLatin1Char(' '));
         if(!label.isEmpty())label[0]=label[0].toUpper();
         return label;
@@ -70556,6 +70920,7 @@ private:
                 ? QStringLiteral("Choose walls, measured areas, or loose measured lines. Walls/lines: J jumps or arms travel; Enter lifts the pen; arrows walk corners. Selection and panning remain available.")
                 : QStringLiteral("Draw walls directly in a horizontal architectural plan. Measured areas and loose lines use the 2D workspace."));
         }
+        syncDrawingModeControls();
         m_measurementCanvas->setTool(m_tool);
         m_architecturalCanvas->setTool(m_tool);
         // Opening placement projects onto its physical host. Grid rounding
@@ -71705,8 +72070,7 @@ public:
                         m_metric_units ? AreaUnit::square_metre : AreaUnit::square_foot,2,{{"physical",{false,false}}}};
                     const auto calculated=calculate_area(MeasurementArea{id,placement->building_id,placement->floor_id,"physical",
                         read_boundary(parent.properties),deductions,read_stored_factor(parent.properties).rational},profile);
-                    net=QString::fromStdString(display_area(calculated.factored_square_metres,profile).text)+
-                        (m_metric_units ? QStringLiteral(" m²") : QStringLiteral(" ft²"));
+                    net=units::area_text(display_area(calculated.factored_square_metres,profile));
                 } catch (const std::exception&) {
                     net=QStringLiteral("Area unresolved");
                     if (before_drawing) eligible=false;
@@ -74587,7 +74951,7 @@ public:
             preview->setObjectName(QStringLiteral("boundaryGeometryPreview"));
             preview->setAccessibleName(QStringLiteral("Original and proposed boundary geometry"));
             preview->setMinimumHeight(240);
-            preview->setCanvasBackground(QColor(248, 250, 253));
+            preview->setCanvasBackground(screenCanvasBackground());
             preview->setGridEnabled(false);
             preview->setSnapEnabled(false);
             preview->setOverviewMapEnabled(false);
@@ -76817,7 +77181,7 @@ private:
     std::unique_ptr<ProjectOwnershipSession> m_project_ownership;
     Workspace m_workspace{Workspace::measurement};
     DrawingMode m_creation_mode{DrawingMode::wall};
-    WorkspaceTheme m_theme{WorkspaceTheme::light};
+    WorkspaceTheme m_theme{WorkspaceTheme::dark};
     CanvasTool m_tool{CanvasTool::select};
     bool m_metric_units{false};
     bool m_grid_enabled{true};
@@ -76827,6 +77191,15 @@ private:
     ProjectViewFilter m_view_filter;
     QString m_active_layer_id;
     QComboBox* m_drawing_mode_combo{};
+    // Toolbar draw-mode buttons, indexed by DrawingMode.
+    std::array<QAction*, 3> m_drawing_mode_actions{};
+    // Left panel: tab shell, library page stack and navigator kind groups
+    // keyed by "<layer id>\n<kind key>".
+    QTabWidget* m_sidebar_tabs{};
+    QTabWidget* m_library_pages{};
+    QWidget* m_library_components_page{};
+    QGroupBox* m_wall_opening_palette{};
+    std::map<QString, QTreeWidgetItem*> m_navigator_kind_groups;
     QComboBox* m_drawing_layer_combo{};
     QGroupBox* m_floor_reference_group{};
     QComboBox* m_floor_reference_source{};
@@ -76846,7 +77219,7 @@ private:
     std::weak_ptr<Document> m_phase_registry_document;
     QComboBox* m_pageSizeCombo{};
     QComboBox* m_architecturalViewCombo{};
-    QLabel* m_phase_heading{};
+    QWidget* m_phase_heading{};
     QPushButton* m_manage_phases_button{};
     QPointer<QLabel> m_symbol_library_status;
     QPointer<QLabel> m_component_library_heading;

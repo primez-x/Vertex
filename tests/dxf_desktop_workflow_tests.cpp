@@ -17,12 +17,14 @@
 #include <QSettings>
 #include <QDir>
 #include <QLabel>
+#include <QPushButton>
 #include <QStandardPaths>
 #include <QFontDatabase>
 #include <QFont>
 #include <QStandardItemModel>
 #include <algorithm>
 #include <exception>
+#include <functional>
 #include <cmath>
 #include <numbers>
 
@@ -58,6 +60,38 @@ void setReviewedDestination(QDialog& dialog, int row, const QString& destination
         table->item(row, 2)->setData(Qt::UserRole, destination);
         table->item(row, 2)->setText(model->item(option)->text());
     }
+}
+
+// Wall elevation edits review the old and destination room planes, even for
+// a room-free wall. Accept only that modal review; anything else fails.
+int acceptRoomReviews(const std::function<bool()>& action) {
+    int accepted = 0, waited = 0;
+    std::exception_ptr failure;
+    QTimer driver;
+    driver.setInterval(25);
+    QObject::connect(&driver, &QTimer::timeout, [&] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if (!dialog || failure) return;
+        auto* apply = dialog->findChild<QPushButton*>("physicalRoomReviewApply");
+        if (dialog->objectName() != QStringLiteral("physicalRoomReviewDialog") || !apply) {
+            failure = std::make_exception_ptr(std::runtime_error("only the required wall room review may open"));
+            dialog->reject();
+            return;
+        }
+        if (apply->isEnabled()) { waited = 0; ++accepted; apply->click(); return; }
+        if (++waited > 200) {
+            auto* status = dialog->findChild<QLabel*>("physicalRoomReviewStatus");
+            std::cerr << "room review status: " << (status ? status->text().toStdString() : std::string{}) << '\n';
+            failure = std::make_exception_ptr(std::runtime_error("room-free wall review must be acceptable"));
+            dialog->reject();
+        }
+    });
+    driver.start();
+    const bool result = action();
+    driver.stop();
+    if (failure) std::rethrow_exception(failure);
+    require(result, "reviewed wall property edit must apply");
+    return accepted;
 }
 
 template<class Review>
@@ -248,7 +282,8 @@ void dxfHostedLayerReviewDesktop(const QString& directory) {
     source.setMetricUnits(true);
     const auto wall = source.createStraightWall({1, 2}, {9, 2});
     require(!wall.isEmpty() && source.selectEntity(wall), "review fixture must create host");
-    require(source.editSelectedElevation("3 m"), "review fixture must use a nonzero host elevation");
+    require(acceptRoomReviews([&] { return source.editSelectedElevation("3 m"); }) >= 1,
+            "review fixture must use a nonzero host elevation");
     const auto door = source.createHostedOpening("door", "2 m", "0.9 m", "0 m", "2 m");
     require(!door.isEmpty(), "review fixture must create opening");
     const auto expected = source.document().snapshot();

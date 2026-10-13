@@ -32,6 +32,48 @@
       "destination": "licenses/Inter-OFL.txt"
     },
     {
+      "kind": "asset",
+      "inventory_entry": "ibm-plex-sans-font",
+      "path": "assets/fonts/IBMPlexSans-Regular.ttf",
+      "destination": "assets/fonts/IBMPlexSans-Regular.ttf"
+    },
+    {
+      "kind": "asset",
+      "inventory_entry": "ibm-plex-sans-font",
+      "path": "assets/fonts/IBMPlexSans-Medium.ttf",
+      "destination": "assets/fonts/IBMPlexSans-Medium.ttf"
+    },
+    {
+      "kind": "asset",
+      "inventory_entry": "ibm-plex-sans-font",
+      "path": "assets/fonts/IBMPlexSans-SemiBold.ttf",
+      "destination": "assets/fonts/IBMPlexSans-SemiBold.ttf"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "ibm-plex-sans-font",
+      "path": "assets/fonts/IBM-Plex-OFL.txt",
+      "destination": "licenses/IBM-Plex-Sans-OFL.txt"
+    },
+    {
+      "kind": "asset",
+      "inventory_entry": "ibm-plex-mono-font",
+      "path": "assets/fonts/IBMPlexMono-Regular.ttf",
+      "destination": "assets/fonts/IBMPlexMono-Regular.ttf"
+    },
+    {
+      "kind": "asset",
+      "inventory_entry": "ibm-plex-mono-font",
+      "path": "assets/fonts/IBMPlexMono-Medium.ttf",
+      "destination": "assets/fonts/IBMPlexMono-Medium.ttf"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "ibm-plex-mono-font",
+      "path": "assets/fonts/IBM-Plex-OFL.txt",
+      "destination": "licenses/IBM-Plex-Mono-OFL.txt"
+    },
+    {
       "kind": "notice",
       "inventory_entry": "vertex",
       "path": "LICENSE",

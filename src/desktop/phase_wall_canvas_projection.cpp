@@ -1,5 +1,6 @@
 #include "sketch/phase_wall_canvas_projection.hpp"
 #include "assembly_profile_canvas_geometry.hpp"
+#include "measurement_format.hpp"
 
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/appraisal_document.hpp"
@@ -333,18 +334,13 @@ bool full_opening_depth(const Wall& wall,const HostedOpening& opening,const Buil
     return std::isfinite(bottom) && std::isfinite(top) && std::max(bottom,top)<=depth.far_depth_m;
 }
 QString length_text(double metres,bool metric,bool ansi=false) {
+    // Shared design-system formatter; ANSI keeps tenths of a foot, one system.
     if (!ansi) return PlanCanvas::drawingLengthText(metres,metric);
-    auto text=QStringLiteral("%1 ft").arg(QString::number(std::round(metres/.3048*10)/10,'f',1));
-    if (metric) text+=QStringLiteral(" (%1 m)").arg(QString::number(metres,'f',3));
-    return text;
+    return units::ansi_length_text(metres);
 }
 QString area_text(double metres,bool metric,bool ansi=false) {
-    if (ansi) {
-        auto text=QStringLiteral("%1 sq ft").arg(QString::number(std::round(metres/.09290304),'f',0));
-        if (metric) text+=QStringLiteral(" (%1 m²)").arg(QString::number(metres,'f',2));
-        return text;
-    }
-    return metric ? QStringLiteral("%1 m²").arg(metres,0,'f',2) : QStringLiteral("%1 ft²").arg(metres/.09290304,0,'f',1);
+    if (ansi) return units::ansi_area_text(metres);
+    return units::area_text(metres,metric);
 }
 bool ansi_dimensions(const Entities& entities,const Entity& owner) {
     const auto string_property=[](const Entity& entity,const char* key) -> std::string {
@@ -602,7 +598,7 @@ QString measurement_area_text(const Entities& stage,const ProjectOrganization& o
     const auto calculation=calculate_area(MeasurementArea{entity.id,context->building_id,context->floor_id,classification,
         boundary_geometry(decode_identified_boundary_entity(entity)),std::move(deductions),area_factor(entity),
         scope=="site" ? AreaScope::site : AreaScope::building},measurement_profile(property,metric));
-    return QString::fromStdString(calculation.display.text)+(metric ? QStringLiteral(" m²") : QStringLiteral(" ft²"));
+    return units::area_text(calculation.display);
 }
 } // namespace
 
@@ -1647,7 +1643,7 @@ PhaseWallCanvasProjection project_phase_wall_canvas(const DocumentSnapshot& sour
                     if (!resolved.assembly_geometry->target.profile && resolved.assembly_geometry->target.axis==AssemblyDimensionAxis::height)
                         projected.text=QStringLiteral("H ")+projected.text;
                 }
-                else if (resolved.kind==BoundaryDimensionKind::angle) projected.text=QStringLiteral("%1°").arg(resolved.angle_radians*180/std::numbers::pi,0,'f',1);
+                else if (resolved.kind==BoundaryDimensionKind::angle) projected.text=units::angle_text(resolved.angle_radians*180/std::numbers::pi);
                 else projected.text=area_text(resolved.area_square_metres,metric_units,ansi_dimensions(stage,owner));
                 projected.position=decoded.text_position;
                 if (decoded.presentation) projected.rotation_radians=decoded.presentation->rotation_radians;

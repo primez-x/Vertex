@@ -5,6 +5,7 @@
 #include "sketch/document_digest.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/phase_wall_profile_capture.hpp"
+#include "measurement_format.hpp"
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -118,13 +119,14 @@ public:
         auto* form = new QFormLayout;
         form->addRow("Total thickness", thickness);
         layout->addLayout(form);
-        auto* order = new QLabel("Layers: negative to positive baseline normal", owner);
+        auto* order = new QLabel("Layers · right face to left face, as the wall was drawn", owner);
+        order->setObjectName("wallLayerStackOrder");
         order->setWordWrap(true);
         layout->addWidget(order);
         table = new QTableWidget(0, 3, owner);
         table->setObjectName("wallLayerStackRows");
-        table->setAccessibleName("Layers ordered from negative to positive baseline normal");
-        table->setHorizontalHeaderLabels({"Layer", "Thickness", "Material / catalog"});
+        table->setAccessibleName("Wall layers, from the right face to the left face as the wall was drawn");
+        table->setHorizontalHeaderLabels({"Layer", "Thickness", "Material"});
         table->verticalHeader()->hide();
         table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
         table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
@@ -135,20 +137,23 @@ public:
         table->setSortingEnabled(false);
         layout->addWidget(table, 1);
         auto* controls = new QHBoxLayout;
-        const auto button = [&](const char* text, auto callback) {
+        const auto button = [&](const char* text, const char* object_name, auto callback) {
             auto* result = new QPushButton(text, owner);
+            result->setObjectName(object_name);
+            result->setAccessibleName(text);
+            result->setAutoDefault(false);
             controls->addWidget(result);
             QObject::connect(result, &QPushButton::clicked, owner, callback);
             return result;
         };
-        button("Add", [this] {
+        button("Add layer", "wallLayerStackAdd", [this] {
             try {
                 fence();
-                require(rows.size() < layer_limit, "The layer inventory is full");
-                require(static_cast<bool>(allocate_layer_id), "Layer identity allocation is unavailable");
+                require(rows.size() < layer_limit, "This wall has the most layers allowed. Remove a layer before adding another.");
+                require(static_cast<bool>(allocate_layer_id), "A new layer could not be created. Reopen these layers.");
                 const auto id = allocate_layer_id();
-                require(!id.empty(), "The new layer identity is empty");
-                for (const auto& row : rows) require(row.id != id, "The new layer identity is already used");
+                require(!id.empty(), "A new layer could not be created. Reopen these layers.");
+                for (const auto& row : rows) require(row.id != id, "A new layer could not be created. Reopen these layers.");
                 capture();
                 Row row; row.id = id; row.added = true;
                 rows.push_back(std::move(row));
@@ -157,7 +162,7 @@ public:
             } catch (const std::exception& reason) { fail(QString::fromUtf8(reason.what())); }
             catch (...) { fail("A new layer could not be prepared. Reopen these layers."); }
         });
-        button("Remove", [this] {
+        button("Remove layer", "wallLayerStackRemove", [this] {
             try {
                 fence();
                 const int selected = table->currentRow();
@@ -166,12 +171,12 @@ public:
             } catch (const std::exception& reason) { fail(QString::fromUtf8(reason.what())); }
             catch (...) { fail("The layer could not be removed. Reopen these layers."); }
         });
-        button("Up", [this] { move(-1); });
-        button("Down", [this] { move(1); });
+        button("Move up", "wallLayerStackMoveUp", [this] { move(-1); });
+        button("Move down", "wallLayerStackMoveDown", [this] { move(1); });
         controls->addStretch();
         sum = new QLabel(owner);
         sum->setObjectName("wallLayerStackSum");
-        sum->setAccessibleName("Total layer thickness, read only");
+        sum->setAccessibleName("Sum of layer thicknesses");
         controls->addWidget(sum);
         layout->addLayout(controls);
         error = new QLabel(owner);
@@ -224,7 +229,7 @@ public:
                 if (!model) continue;
                 require(model->materials().size() <= material_limit - materials.size(), "The material inventory is outside the supported range");
                 for (const auto& material : model->materials())
-                    materials.push_back({q(material.name) + " / " + name(catalog, "Material catalog"), {catalog_id, material.id}});
+                    materials.push_back({q(material.name) + " · " + name(catalog, "Material catalog"), {catalog_id, material.id}});
             }
             for (std::size_t i = 0; i < wall.layers.size(); ++i) {
                 const auto& layer = wall.layers[i];
@@ -281,11 +286,11 @@ public:
             item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
             table->setItem(index, 0, item);
             row.field = new QLineEdit(row.text, table); configure(row.field);
-            row.field->setObjectName("wallLayerStackLayerThickness");
+            row.field->setObjectName(QString("wallLayerStackLayerThickness_%1").arg(index));
             row.field->setAccessibleName(QString("Thickness of layer %1").arg(index + 1));
             table->setCellWidget(index, 1, row.field);
             row.material = new QComboBox(table);
-            row.material->setObjectName("wallLayerStackLayerMaterial");
+            row.material->setObjectName(QString("wallLayerStackLayerMaterial_%1").arg(index));
             row.material->addItem("None");
             for (const auto& material : materials) {
                 row.material->addItem(material.first, q(material.second.material_id));
@@ -358,8 +363,8 @@ public:
             if (unit == Unit::foot) {
                 const auto inches = total / 0.0254;
                 require(std::isfinite(inches), "The layer sum is outside the supported range");
-                sum->setText(QString("Layer sum: %1 in").arg(QString::number(inches, 'g', 6)));
-            } else sum->setText(QString("Layer sum: %1 m").arg(QString::number(total, 'g', 8)));
+                sum->setText(QString("Layer sum: %1").arg(units::length_text(total, false)));
+            } else sum->setText(QString("Layer sum: %1").arg(units::length_text(total, true)));
             const auto replayed = replay_wall_layer_stack_entities(source.entities(), {intent}, false);
             const auto candidate = replayed.at(wall_id);
             auto captured = capture_wall_layer_stack_edit(original, candidate, intent);

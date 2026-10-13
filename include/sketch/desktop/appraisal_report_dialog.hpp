@@ -6,12 +6,38 @@
 #include <QString>
 #include <functional>
 #include <memory>
+#include <string>
+#include <string_view>
 
 namespace sketch::desktop {
 
 // Shared visible form projection in Details and paginated HTML/PDF output.
 [[nodiscard]] QString appraisal_form_projection_html(const AppraisalDocumentReport& report, bool compact = false);
 [[nodiscard]] QString appraisal_ansi_declaration_rows(const AnsiMeasurementDeclarations& value);
+
+// User-facing name for an appraisal source: its declared name, else its type,
+// an ordinal among unnamed siblings and its floor ("Area 2 · First floor").
+// Never returns a raw entity ID.
+[[nodiscard]] QString appraisal_source_label(const DocumentSnapshot& source, const std::string& id);
+// Appraisal-term label for a derived category ("GLA", "Non-GLA · garage",
+// "Basement · finished"). Used for area rows as "<type> · <name>".
+[[nodiscard]] QString appraisal_category_label(AppraisalAreaCategory category);
+[[nodiscard]] QString appraisal_area_title(const DocumentSnapshot& source, const AppraisalBoundaryStatus& status);
+// Report issues are "<source-id>: <validator message>" or property-wide text.
+// This splits the source, names it for people and states the fact, then the fix.
+struct AppraisalIssuePresentation {
+    enum class Fix { none, facts, setup, reporting, locate };
+    std::string source_id;   // empty for property-wide issues
+    QString subject;         // user-facing source name; empty for property-wide issues
+    QString text;            // plain "fact. fix." sentence(s)
+    Fix fix{Fix::none};
+};
+[[nodiscard]] AppraisalIssuePresentation appraisal_issue_presentation(
+    const DocumentSnapshot& source, const std::string& issue);
+// Plain-language fact-then-fix text for one validator or qualification message.
+[[nodiscard]] QString appraisal_issue_message(const DocumentSnapshot& source, std::string_view message);
+// The rounding basis every displayed total follows, for labels and tooltips.
+[[nodiscard]] QString appraisal_rounding_basis(const AppraisalDocumentReport& report, bool metric);
 
 class AppraisalReportingDialog final : public QDialog {
 public:

@@ -8,6 +8,8 @@
 *.ps1 text eol=crlf
 # Preserve upstream license text, including its original whitespace.
 assets/fonts/OFL.txt -text -whitespace
+assets/fonts/IBM-Plex-OFL.txt -text -whitespace
+*.ttf binary
 third_party/nlohmann-json-LICENSE.MIT -text -whitespace
 third_party/planegcs/upstream/LICENSE -text -whitespace
 third_party/notices/native/**/*.txt -text -whitespace

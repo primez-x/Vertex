@@ -201,6 +201,8 @@ public static class VertexOfflineRuntimeSecurity {
     static extern int DeriveAppContainerSidFromAppContainerName(string name, out IntPtr sid);
     [DllImport("advapi32.dll")]
     static extern IntPtr FreeSid(IntPtr sid);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    static extern int GetCurrentPackageFullName(ref uint length, System.Text.StringBuilder name);
     static IntPtr OpenOwned(string path, uint access) {
         IntPtr handle = CreateFileW(path, access, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
         if (handle == new IntPtr(-1)) throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -253,6 +255,14 @@ public static class VertexOfflineRuntimeSecurity {
         } finally { pinned.Free(); CloseHandle(handle); }
     }
     public static string WorkerSid() {
+        // AppContainer names are package-relative. A host with package
+        // identity (e.g. the Microsoft Store/MSIX pwsh) derives a child SID
+        // that the unpackaged Vertex broker never uses, leaving the worker
+        // unable to load its modules. APPMODEL_ERROR_NO_PACKAGE is 15700.
+        uint packageLength = 0;
+        if (GetCurrentPackageFullName(ref packageLength, null) != 15700)
+            throw new InvalidOperationException("worker AppContainer SID requires an unpackaged PowerShell host; " +
+                "run this installer from Windows PowerShell or an MSI/zip pwsh, not the Microsoft Store pwsh");
         IntPtr sid = IntPtr.Zero;
         try {
             int result = CreateAppContainerProfile("Vertex.ImportWorker", "Vertex import worker",

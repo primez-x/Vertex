@@ -241,7 +241,7 @@ void test_ansi_nested_partition_detection() {
         require(status.measurement && std::abs(status.measurement->net_square_metres-(status.boundary_id==outer.id?64:32))<1e-8,
             "core ANSI net measurements agree with detection preview");
     auto* details=window.findChild<QLabel*>("appraisalDetailsGla");
-    require(details && details->text()=="1033 sq ft","actual ANSI Details reports canonical whole-square-foot GLA");
+    require(details && details->text()=="1,033 sf","actual ANSI Details reports canonical whole-square-foot GLA");
     const auto edit_void_deduction=[&](bool remove) {
         require(window.selectEntity(QString::fromStdString(child.id)),"select actual ANSI child for native deductions editor");
         auto* edit=window.findChild<QPushButton*>("editDeductions");require(edit && edit->isEnabled(),"native deductions editor is available");
@@ -297,8 +297,8 @@ void test_ansi_nested_partition_detection() {
     require(pdf.load(directory.filePath("ansi-nested.pdf"))==QPdfDocument::Error::None && pdf.pageCount()>0 &&
         !pdf.render(0,QSize(1000,800)).isNull(),"actual ANSI nested PDF renders");
     QString text;for(int page=0;page<pdf.pageCount();++page)text+=pdf.getAllText(page).text();
-    if(!text.contains("1033"))std::cerr<<"ANSI nested appraisal report PDF text diagnostic:\n"<<text.toStdString()<<'\n';
-    require(text.contains("1033") && text.contains("Primary dwelling above-grade finished area (GLA)"),"actual ANSI nested PDF agrees with canonical GLA96 square metres as1033 square feet");
+    if(!text.contains("1,033"))std::cerr<<"ANSI nested appraisal report PDF text diagnostic:\n"<<text.toStdString()<<'\n';
+    require(text.contains("1,033") && text.contains("Primary dwelling above-grade finished area (GLA)"),"actual ANSI nested PDF agrees with canonical GLA96 square metres as1033 square feet");
     if(const auto capture=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");!capture.isEmpty()) {
         require(window.selectEntity(QString::fromStdString(child.id)),"select nested child for actual final Details capture");window.fitView();
         auto* tabs=window.findChild<QTabWidget*>("sidebarTabs");require(tabs,"native sidebar Details tab exists");
@@ -347,7 +347,7 @@ void test_ansi_nested_partition_detection() {
     require(sloped_report.qualified && sloped_report.calculation && sloped_report.policy && sloped_report.policy->version==2 &&
         std::abs(sloped_report.calculation->property.gla().total.square_metres-96)<1e-8,
         "actual V2 sloped room excludes real low-height leaf once for qualified GLA96");
-    require(window.findChild<QLabel*>("appraisalDetailsGla")->text()=="1033 sq ft","V2 sloped room actual Details retains1033 square feet");
+    require(window.findChild<QLabel*>("appraisalDetailsGla")->text()=="1,033 sf","V2 sloped room actual Details retains1033 square feet");
     require(window.undoCommand() && window.document().snapshot().entities()==v2_source.entities() &&
         window.redoCommand() && window.document().snapshot().entities()==sloped.entities(),"V2 complete sloped observation undoes and redoes exactly");
     require(window.saveProjectAs(directory.filePath("ansi-nested-v2.bldproj")) && window.openProject(directory.filePath("ansi-nested-v2.bldproj")) &&
@@ -356,8 +356,8 @@ void test_ansi_nested_partition_detection() {
     require(v2_pdf.load(directory.filePath("ansi-nested-v2.pdf"))==QPdfDocument::Error::None && v2_pdf.pageCount()>0 &&
         !v2_pdf.render(0,QSize(1000,800)).isNull(),"actual V2 nested sloped PDF renders");
     QString v2_text;for(int page=0;page<v2_pdf.pageCount();++page)v2_text+=v2_pdf.getAllText(page).text();
-    if(!v2_text.contains("1033"))std::cerr<<"ANSI V2 nested appraisal report PDF text diagnostic:\n"<<v2_text.toStdString()<<'\n';
-    require(v2_text.contains("1033") && v2_text.contains("Primary dwelling above-grade finished area (GLA)"),"actual V2 nested sloped PDF retains canonical1033 square feet");
+    if(!v2_text.contains("1,033"))std::cerr<<"ANSI V2 nested appraisal report PDF text diagnostic:\n"<<v2_text.toStdString()<<'\n';
+    require(v2_text.contains("1,033") && v2_text.contains("Primary dwelling above-grade finished area (GLA)"),"actual V2 nested sloped PDF retains canonical1033 square feet");
     if(const auto capture=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");!capture.isEmpty()) {
         require(window.selectEntity(QString::fromStdString(child.id)),"select V2 child for final Details capture");events();
         require(window.grab().save(QDir(capture).filePath("ansi-nested-v2-details.png")),"capture actual V2 nested Details");

@@ -5,6 +5,7 @@
 #include "sketch/document_digest.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/project_organization.hpp"
+#include "measurement_format.hpp"
 
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -111,7 +112,7 @@ QString material_name(const DocumentSnapshot& source, const SlabLayer& layer) {
     const auto material = std::find_if(model.materials().begin(), model.materials().end(),
         [&](const auto& item) { return item.id == reference.material_id; });
     require(material != model.materials().end(), "A layer material is unavailable in its catalog");
-    return QString("%1 · %2").arg(q(material->name), label(found->second, q(reference.catalog_id)));
+    return QString("%1 · %2").arg(q(material->name), label(found->second, "Material catalog"));
 }
 
 QTableWidgetItem* readonly_item(const QString& text) {
@@ -160,11 +161,11 @@ public:
         auto* total_row = new QHBoxLayout;
         sum = new QLabel(owner);
         sum->setObjectName("horizontalProfileLayerSum");
-        sum->setAccessibleName("Total layer thickness");
+        sum->setAccessibleName("Sum of layer thicknesses");
         auto* table = new QTableWidget(0, 3, owner);
         table->setObjectName("horizontalProfileLayers");
-        table->setAccessibleName("Existing layers, ordered from bottom to top");
-        table->setHorizontalHeaderLabels({"Layer / ID", "Thickness", "Material / catalog"});
+        table->setAccessibleName("Layers, from bottom to top");
+        table->setHorizontalHeaderLabels({"Layer", "Thickness", "Material"});
         table->verticalHeader()->hide();
         table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
         table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
@@ -186,13 +187,13 @@ public:
             heading->setText(label(original, "Horizontal system"));
             thickness = input(owner, "horizontalProfileThickness", slab.thickness, original,
                               {"/thickness_m", "/thickness"}, unit);
-            thickness.field->setAccessibleName("Thickness");
+            thickness.field->setAccessibleName("Total thickness");
             elevation = input(owner, "horizontalProfileElevation", slab.elevation, original,
                               {"/elevation_m", "/elevation"}, unit);
             elevation.field->setAccessibleName("Base elevation");
             total_row->addWidget(thickness.field, 1);
             total_row->addWidget(sum);
-            form->addRow("Thickness", total_row);
+            form->addRow("Total thickness", total_row);
             form->addRow("Base elevation", elevation.field);
             table->setRowCount(static_cast<int>(slab.layers.size()));
             layers.reserve(slab.layers.size());
@@ -200,9 +201,9 @@ public:
                 const auto& layer = slab.layers[i];
                 const auto row = static_cast<int>(i);
                 table->setItem(row, 0, readonly_item(QString("Layer %1").arg(row + 1)));
-                table->item(row, 0)->setToolTip(q(layer.id));
                 auto field = input(table, "horizontalProfileLayerThickness", layer.thickness, original,
                     {"/layers/" + std::to_string(i) + "/thickness_m"}, unit);
+                field.field->setObjectName(QString("horizontalProfileLayerThickness_%1").arg(row));
                 field.field->setAccessibleName(QString("Thickness of layer %1").arg(row + 1));
                 table->setCellWidget(row, 1, field.field);
                 layers.push_back(std::move(field));
@@ -217,6 +218,7 @@ public:
         layout->addLayout(form);
         if (!slab.layers.empty()) {
             auto* order = new QLabel("Layers · bottom to top", owner);
+            order->setObjectName("horizontalProfileLayerOrder");
             layout->addWidget(order);
             layout->addWidget(table, 1);
         } else {
@@ -321,15 +323,15 @@ public:
                 if (unit == Unit::foot) {
                     const auto inches = total / 0.0254;
                     require(std::isfinite(inches), "The layer sum is outside the supported range");
-                    sum->setText(QString("Layer sum: %1 in").arg(QString::number(inches, 'g', 6)));
-                } else sum->setText(QString("Layer sum: %1 m").arg(QString::number(total, 'g', 8)));
+                    sum->setText(QString("Layer sum: %1").arg(units::length_text(total, false)));
+                } else sum->setText(QString("Layer sum: %1").arg(units::length_text(total, true)));
             }
             Entity candidate = original;
             const bool has_input = intent.thickness || intent.elevation || intent.layer_thicknesses;
             if (has_input) {
                 candidate = replay_slab_profile_entity(original, intent);
                 const auto replayed = replay_slab_profile_entities(source.entities(), {intent});
-                require(replayed.at(slab_id) == candidate, "The profile replay differs from its local source");
+                require(replayed.at(slab_id) == candidate, "This profile change could not be applied. Reopen this profile.");
             } else {
                 // A true no-op still admits actual resolved native placement.
                 Slab resolved;

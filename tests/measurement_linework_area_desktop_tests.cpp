@@ -97,7 +97,7 @@ void test_define_areas_and_history() {
         const auto& placement=*label.automatic_linear_placement;
         if(placement.anchor.start.y==0 && placement.anchor.end.y==0) {
             require(placement.outward_normal.y<0 && label.position.y<0,"closed measured outline places its bottom dimension on the exterior");
-            require(label.text.contains(QStringLiteral("13 ft 1 1/2 in")) && !label.text.contains(QStringLiteral("157.480")),
+            require(label.text.contains(QStringLiteral("13' 1 1/2\"")) && !label.text.contains(QStringLiteral("157.480")),
                 "permanent measured dimensions use readable project units rather than unlimited decimal inches");
             exterior_bottom=true;
         }
@@ -129,8 +129,8 @@ void test_ansi_profile_dimensions() {
     require(canvas,"ANSI dimension canvas exists");
     bool canonical=false;
     for(const auto& label:canvas->labels()) if(label.id==QStringLiteral("outline"))
-        canonical=canonical || label.text==QStringLiteral("13.1 ft (4.000 m)");
-    require(canonical,"ANSI-profile measured dimensions remain tenths of feet with supplemental metric display");
+        canonical=canonical || label.text==QStringLiteral("13.1 ft");
+    require(canonical,"ANSI-profile measured dimensions remain tenths of feet without a mixed-unit metric parenthetical");
     require(document->snapshot().entities().at("outline")==source.entities().at("outline"),
         "dimension display rounding does not change exact retained measurements");
 }

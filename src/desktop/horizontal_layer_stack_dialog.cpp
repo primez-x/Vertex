@@ -3,6 +3,7 @@
 #include "sketch/constraint_entity.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/document_solid.hpp"
+#include "measurement_format.hpp"
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -25,10 +26,11 @@ namespace sketch::desktop {
 namespace {
 void require(bool value, const char* message) { if (!value) throw std::invalid_argument(message); }
 QString q(const std::string& value) { return QString::fromStdString(value); }
-QString name(const Entity& entity) {
+// Display name only; a stable entity ID is never shown in the UI.
+QString name(const Entity& entity, const QString& fallback) {
     const auto found = entity.properties.find("name");
     return found != entity.properties.end() && found->is_string() && !q(found->get<std::string>()).trimmed().isEmpty()
-        ? q(found->get<std::string>()) : q(entity.id);
+        ? q(found->get<std::string>()).trimmed() : fallback;
 }
 QString native_text(double metres) {
     require(std::isfinite(metres), "Thickness must be finite");
@@ -107,19 +109,23 @@ public:
         auto* layout = new QVBoxLayout(owner);
         layout->setSpacing(12);
         auto* heading = new QLabel("Horizontal system", owner);
+        heading->setObjectName("horizontalLayerStackName");
         heading->setWordWrap(true);
         layout->addWidget(heading);
         thickness = new QLineEdit(owner);
         thickness->setObjectName("horizontalLayerStackThickness");
+        thickness->setAccessibleName("Total thickness");
         configure(thickness);
         auto* form = new QFormLayout;
         form->addRow("Total thickness", thickness);
         layout->addLayout(form);
-        layout->addWidget(new QLabel("Layers · bottom to top", owner));
+        auto* order = new QLabel("Layers · bottom to top", owner);
+        order->setObjectName("horizontalLayerStackOrder");
+        layout->addWidget(order);
         table = new QTableWidget(0, 3, owner);
         table->setObjectName("horizontalLayerStackRows");
-        table->setAccessibleName("Layers ordered from bottom to top");
-        table->setHorizontalHeaderLabels({"Layer", "Thickness", "Material / catalog"});
+        table->setAccessibleName("Layers, from bottom to top");
+        table->setHorizontalHeaderLabels({"Layer", "Thickness", "Material"});
         table->verticalHeader()->hide();
         table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
         table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
@@ -130,19 +136,22 @@ public:
         table->setSortingEnabled(false);
         layout->addWidget(table, 1);
         auto* controls = new QHBoxLayout;
-        const auto button = [&](const char* text, auto callback) {
+        const auto button = [&](const char* text, const char* object_name, auto callback) {
             auto* result = new QPushButton(text, owner);
+            result->setObjectName(object_name);
+            result->setAccessibleName(text);
+            result->setAutoDefault(false);
             controls->addWidget(result);
             QObject::connect(result, &QPushButton::clicked, owner, callback);
             return result;
         };
-        button("Add", [this] {
+        button("Add layer", "horizontalLayerStackAdd", [this] {
             try {
                 fence();
-                require(static_cast<bool>(allocate_layer_id), "Layer identity allocation is unavailable");
+                require(static_cast<bool>(allocate_layer_id), "A new layer could not be created. Reopen these layers.");
                 const auto id = allocate_layer_id();
-                require(!id.empty(), "The new layer identity is empty");
-                for (const auto& row : rows) require(row.id != id, "The new layer identity is already used");
+                require(!id.empty(), "A new layer could not be created. Reopen these layers.");
+                for (const auto& row : rows) require(row.id != id, "A new layer could not be created. Reopen these layers.");
                 capture();
                 Row row; row.id = id; row.added = true;
                 rows.push_back(std::move(row));
@@ -151,25 +160,29 @@ public:
             } catch (const std::exception& reason) { fail(QString::fromUtf8(reason.what())); }
             catch (...) { fail("A new layer could not be prepared. Reopen these layers."); }
         });
-        button("Remove", [this] {
+        button("Remove layer", "horizontalLayerStackRemove", [this] {
             const int selected = table->currentRow();
             if (selected < 0) return;
             capture(); rows.erase(rows.begin() + selected); rebuild(selected); (void)validate();
         });
-        button("Up", [this] { move(-1); });
-        button("Down", [this] { move(1); });
+        button("Move up", "horizontalLayerStackMoveUp", [this] { move(-1); });
+        button("Move down", "horizontalLayerStackMoveDown", [this] { move(1); });
         controls->addStretch();
         sum = new QLabel(owner);
         sum->setObjectName("horizontalLayerStackSum");
+        sum->setAccessibleName("Sum of layer thicknesses");
         controls->addWidget(sum);
         layout->addLayout(controls);
         error = new QLabel(owner);
         error->setObjectName("horizontalLayerStackError");
+        error->setAccessibleName("Layer validation error");
         error->setWordWrap(true);
         layout->addWidget(error);
         auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, owner);
         save = buttons->button(QDialogButtonBox::Save);
         save->setObjectName("saveHorizontalLayerStack");
+        save->setAccessibleName("Save horizontal layers");
+        save->setDefault(true);
         layout->addWidget(buttons);
         QObject::connect(buttons, &QDialogButtonBox::accepted, owner, [this] { (void)owner->submit(); });
         QObject::connect(buttons, &QDialogButtonBox::rejected, owner, &QDialog::reject);
@@ -181,7 +194,7 @@ public:
             original = found->second;
             Slab slab; std::string diagnostic;
             if (!read_document_slab(original, slab, diagnostic)) throw std::invalid_argument(diagnostic);
-            heading->setText(name(original));
+            heading->setText(name(original, "Horizontal system"));
             initial_thickness = initial_text(original, {"/thickness_m", "/thickness"}, slab.thickness, unit);
             thickness->setText(initial_thickness);
             for (const auto& [catalog_id, catalog] : source.entities()) {
@@ -189,7 +202,7 @@ public:
                 try {
                     const auto model = AssemblyModel::from_json(catalog.properties.at("model"));
                     for (const auto& material : model.materials())
-                        materials.push_back({q(material.name) + " · " + name(catalog), {catalog_id, material.id}});
+                        materials.push_back({q(material.name) + " · " + name(catalog, "Material catalog"), {catalog_id, material.id}});
                 } catch (const std::exception&) { /* Unsupported catalogs are not assignable. */ }
             }
             for (std::size_t i = 0; i < slab.layers.size(); ++i) {
@@ -247,9 +260,11 @@ public:
             item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
             table->setItem(index, 0, item);
             row.field = new QLineEdit(row.text, table); configure(row.field);
+            row.field->setObjectName(QString("horizontalLayerStackLayerThickness_%1").arg(index));
             row.field->setAccessibleName(QString("Thickness of layer %1").arg(index + 1));
             table->setCellWidget(index, 1, row.field);
             row.material = new QComboBox(table);
+            row.material->setObjectName(QString("horizontalLayerStackLayerMaterial_%1").arg(index));
             row.material->addItem("None");
             for (const auto& material : materials) {
                 row.material->addItem(material.first, q(material.second.material_id));
@@ -308,10 +323,7 @@ public:
                 intent.layers.push_back(std::move(edit));
             }
             require(std::isfinite(total), "The layer sum is outside the supported range");
-            const auto inches = total / 0.0254;
-            sum->setText(unit == Unit::foot && std::isfinite(inches)
-                ? QString("Layer sum: %1 in").arg(QString::number(inches, 'g', 6))
-                : QString("Layer sum: %1 m").arg(QString::number(total, 'g', 8)));
+            sum->setText(QString("Layer sum: %1").arg(units::length_text(total, unit != Unit::foot)));
             const auto replayed = replay_slab_layer_stack_entities(source.entities(), {intent});
             const auto candidate = replayed.at(slab_id);
             fence();

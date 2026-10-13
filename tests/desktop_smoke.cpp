@@ -126,6 +126,23 @@ void require(bool condition, std::string_view message) {
     }
 }
 
+// The selection transform dialog coalesces typing for 120 ms before it
+// prepares the complete candidate graph; Apply and the status stay cleared
+// until then. Pump events until no pending debounce timer remains.
+void settle_transform_preview(QDialog* dialog) {
+    require(dialog != nullptr, "transform dialog must be open before settling its preview");
+    const auto pending = [dialog] {
+        for (auto* timer : dialog->findChildren<QTimer*>(Qt::FindDirectChildrenOnly))
+            if (timer->isSingleShot() && timer->isActive()) return true;
+        return false;
+    };
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (pending() && std::chrono::steady_clock::now() < deadline)
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+    require(!pending(), "transform preview debounce must settle");
+    QApplication::processEvents();
+}
+
 QTreeWidgetItem* navigator_item(sketch::desktop::MainWindow& window, const QString& id) {
     auto* tree = window.findChild<QTreeWidget*>(QStringLiteral("projectNavigator"));
     require(tree != nullptr, "project navigator must exist");
@@ -161,8 +178,9 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
             auto* more_tools = window.findChild<QToolButton*>(QStringLiteral("moreTools"));
             auto* theme_menu = window.findChild<QToolButton*>(QStringLiteral("themeMenu"));
             auto* page_size = window.findChild<QComboBox*>(QStringLiteral("outputPageSize"));
-            require(toolbar != nullptr && toolbar->minimumHeight() == 28 && toolbar->maximumHeight() == 28 &&
-                    toolbar->height() == 28 &&
+            // Design system toolbar token: one fixed 40px row.
+            require(toolbar != nullptr && toolbar->minimumHeight() == 40 && toolbar->maximumHeight() == 40 &&
+                    toolbar->height() == 40 &&
                     toolbar->toolButtonStyle() == Qt::ToolButtonTextBesideIcon &&
                     toolbar->iconSize() == QSize(18, 18) && more_tools && theme_menu &&
                     more_tools->toolButtonStyle() == Qt::ToolButtonTextBesideIcon &&
@@ -779,6 +797,9 @@ void test_workspace_theme_canvases() {
         canvases[i]->setOverviewMapEnabled(false);
         canvases[i]->setSelectedId({});
         output[i] = capture(canvases[i], true);
+        // Startup applies the default (dark) theme after the canvases exist.
+        require(capture(canvases[i]).pixelColor(9, 9) == QColor("#141619"),
+                "both canvases must start on the default dark theme background");
     }
     for (const auto theme : {WorkspaceTheme::high_contrast, WorkspaceTheme::dark, WorkspaceTheme::light}) {
         window.setWorkspaceTheme(theme);
@@ -791,8 +812,9 @@ void test_workspace_theme_canvases() {
                         "actual high-contrast workspace capture must be saved");
             }
         }
+        // Design system canvas tokens (tokens.json color.dark/light.canvas).
         const auto background = theme == WorkspaceTheme::high_contrast ? QColor(Qt::black)
-            : theme == WorkspaceTheme::dark ? QColor("#141b27") : QColor("#f8fafc");
+            : theme == WorkspaceTheme::dark ? QColor("#141619") : QColor("#fbfbfc");
         for (std::size_t i = 0; i < canvases.size(); ++i) {
             const auto image = capture(canvases[i]);
             require(image.width() >= 160 && image.height() >= 120 &&
@@ -1105,8 +1127,8 @@ void test_dimension_presentation_precision() {
         require(found != target->labels().end(), "fraction measurement label must be projected");
         return found->text;
     };
-    require(label_text(canvas, dimension) == QStringLiteral("12 ft 1/4 in") &&
-            label_text(canvas, wall) == QStringLiteral("12 ft 1/4 in"),
+    require(label_text(canvas, dimension) == QStringLiteral("12' 1/4\"") &&
+            label_text(canvas, wall) == QStringLiteral("12' 1/4\""),
             "non-ANSI boundary and physical wall labels must retain quarter inches honestly");
     const auto capture_directory = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
     if (!capture_directory.isEmpty()) {
@@ -1136,7 +1158,7 @@ void test_dimension_presentation_precision() {
     require(view_selection && architectural, "fraction annotation canvas must exist");
     view_selection->setCurrentIndex(view_selection->findData("view-section", Qt::UserRole + 1));
     require(label_text(architectural, "view-section/overlay/fraction-measurement") ==
-            QStringLiteral("12 ft 1/4 in"), "measured section labels must retain quarter inches honestly");
+            QStringLiteral("12' 1/4\""), "measured section labels must retain quarter inches honestly");
     auto ansi_property = window.document().snapshot().entities().at("property-1");
     ansi_property.properties["calculation_workflow"] = "appraisal";
     ansi_property.properties["appraisal_policy"] = {{"policy_kind", "ansi_z765_2021"}};
@@ -2447,6 +2469,7 @@ void test_wall_transform_workflow(const QString& capture_directory) {
     QTimer::singleShot(0,&window,[&] {
         auto* dialog=window.findChild<QDialog*>("boundaryTransformDialog");
         dialog->findChild<QLineEdit*>("boundaryRotationDegrees")->setText("45");
+        settle_transform_preview(dialog);
         require(!dialog->findChild<QDialogButtonBox*>("boundaryTransformButtons")->button(QDialogButtonBox::Apply)->isEnabled() &&
             !dialog->findChild<QLabel*>("boundaryTransformStatus")->text().isEmpty() &&
             window.document().snapshot().entities()==constrained.entities(),
@@ -2482,11 +2505,13 @@ void test_wall_transform_workflow(const QString& capture_directory) {
         require(preview && preview->entities().size()==4,"wall preview must show original and proposed wall/opening graphs");
         auto* x=dialog->findChild<QLineEdit*>("boundaryOffsetX");
         x->setText("invalid");
+        settle_transform_preview(dialog);
         require(preview->entities().empty() &&
             !dialog->findChild<QDialogButtonBox*>("boundaryTransformButtons")->button(QDialogButtonBox::Apply)->isEnabled(),
             "invalid transform must clear stale preview and disable Apply");
         x->setText("3 m");
         dialog->findChild<QLineEdit*>("boundaryRotationDegrees")->setText("45");
+        settle_transform_preview(dialog);
         require(preview->entities().size()==4 && window.document().snapshot().entities()==before_preview.entities() &&
             window.document().revision()==before_preview.revision(),"live transform preview must not mutate document or history");
         if(!capture_directory.isEmpty()) {
@@ -2503,6 +2528,7 @@ void test_wall_transform_workflow(const QString& capture_directory) {
         auto* dialog=window.findChild<QDialog*>("boundaryTransformDialog");
         dialog->findChild<QCheckBox*>("boundaryClone")->setChecked(true);
         dialog->findChild<QLineEdit*>("boundaryOffsetX")->setText("4 m");
+        settle_transform_preview(dialog);
         auto* preview=dynamic_cast<desktop::PlanCanvas*>(dialog->findChild<QWidget*>("wallTransformPreview"));
         for(const auto& entity:preview->entities()) if(entity.type=="wall" && entity.selected) preview_root=entity.id;
         require(!preview_root.isEmpty() && preview_root!=wall_id,"copy preview must allocate its own wall identity");
@@ -2516,6 +2542,9 @@ void test_wall_transform_workflow(const QString& capture_directory) {
     QTimer::singleShot(0,&window,[&] {
         auto* dialog=window.findChild<QDialog*>("boundaryTransformDialog");
         dialog->findChild<QLineEdit*>("boundaryOffsetX")->setText("4 m");
+        settle_transform_preview(dialog);
+        require(dialog->findChild<QDialogButtonBox*>("boundaryTransformButtons")->button(QDialogButtonBox::Apply)->isEnabled(),
+            "stale preview fixture must start from an admitted preview");
         require(!window.createStraightWall({20,20},{21,20}).isEmpty(),"intervening edit fixture");
         const auto changed=window.document().snapshot();
         auto* apply=dialog->findChild<QDialogButtonBox*>("boundaryTransformButtons")->button(QDialogButtonBox::Apply);
@@ -2911,7 +2940,21 @@ void test_wall_group_canvas_move_workflow() {
                 reopened.openProject(directory.filePath("mixed-group.bldproj")) &&
                 reopened.document().snapshot().entities()==mixed_moved.entities(),
             "mixed group movement must undo, redo, save and reopen exactly");
-    require(window.undoCommand() && window.selectEntity(first) && window.selectEntity(sofa,true) &&
+    // An omitted joined wall is no longer a conflict: its shared corner follows
+    // the moved wall (see the wall-only connected-corner move above). Pin that
+    // corner instead so the connected solve is genuinely contradictory.
+    require(window.undoCommand(),"mixed conflict fixture must restore the unmoved group");
+    PersistentConstraint corner_pin;
+    corner_pin.id="wall-group-corner-pin";
+    corner_pin.relation=ConstraintRelationKind::fixed_anchor;
+    corner_pin.bindings={{second.toStdString(),WallEndpointRole::start}};
+    const auto pinned_start=window.document().snapshot().entities().at(second.toStdString())
+        .properties.at("baseline").at("start");
+    corner_pin.anchor=Vec2{pinned_start[0].get<double>(),pinned_start[1].get<double>()};
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(encode_constraint_entity(corner_pin))},{},"pin joined corner for mixed conflict"});
+    const auto pinned_source = window.document().snapshot();
+    require(window.selectEntity(first) && window.selectEntity(sofa,true) &&
                 window.selectEntity(reference,true),"mixed conflict fixture must omit the other joined wall");
     mouse(QEvent::MouseButtonPress,{0.4,0});
     mouse(QEvent::MouseMove,{2.4,1});
@@ -2921,8 +2964,11 @@ void test_wall_group_canvas_move_workflow() {
         QApplication::processEvents();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    require(!window.lastError().isEmpty() && window.document().snapshot().entities()==mixed_source.entities(),
+    require(!window.lastError().isEmpty() && window.document().revision()==pinned_source.revision() &&
+                window.document().snapshot().entities()==pinned_source.entities(),
             "rejected mixed group must not publish the symbol or image part of its move");
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::erase(corner_pin.id)},{},"remove mixed conflict pin"});
 
     select_group();
     mouse(QEvent::MouseButtonPress,{0.4,0});
@@ -3776,18 +3822,23 @@ void test_mixed_constraint_workspace_workflow() {
     mouse(QEvent::MouseMove,{5,0});
     auto* poll=window.findChild<QTimer*>("boundaryVertexPreviewPoll");
     require(poll && poll->isActive(),"live vertex preview must run through the deferred native queue");
+    // An admitted physical endpoint preview stays retained until release, so
+    // its poll intentionally keeps watching for canvas-only cancellation
+    // (October 7). Completion is the canvas's pending state, not the poll.
     const auto wait_for_preview=[&] {
         QEventLoop preview_loop;
         QTimer observe;
         observe.setInterval(5);
-        QObject::connect(&observe,&QTimer::timeout,&preview_loop,[&] { if (!poll->isActive()) preview_loop.quit(); });
+        QObject::connect(&observe,&QTimer::timeout,&preview_loop,[&] {
+            if (!canvas->boundaryVertexPreviewPending()) preview_loop.quit();
+        });
         QTimer::singleShot(3000,&preview_loop,&QEventLoop::quit);
         observe.start();
         preview_loop.exec();
-        require(!poll->isActive(),"deferred joined vertex preview must finish before inspection");
+        require(!canvas->boundaryVertexPreviewPending(),"deferred joined vertex preview must finish before inspection");
     };
     wait_for_preview();
-    require(!poll->isActive() && window.document().snapshot().entities()==live_source.entities(),
+    require(!canvas->boundaryVertexPreviewPending() && window.document().snapshot().entities()==live_source.entities(),
         "live related preview must complete without mutating the document");
     const auto preview_labels=canvas->boundaryVertexPreviewLabels();
     const auto preview_metrics=canvas->boundaryVertexPreviewMetrics();
@@ -4053,11 +4104,11 @@ void test_vertex_preview_area_name_placement() {
         QEventLoop loop;
         QTimer observe;
         observe.setInterval(5);
-        QObject::connect(&observe,&QTimer::timeout,&loop,[&] { if (!poll->isActive()) loop.quit(); });
+        QObject::connect(&observe,&QTimer::timeout,&loop,[&] { if (!canvas->boundaryVertexPreviewPending()) loop.quit(); });
         QTimer::singleShot(3000,&loop,&QEventLoop::quit);
         observe.start();
         loop.exec();
-        require(!poll->isActive() && window.document().snapshot().entities()==source.entities(),
+        require(!canvas->boundaryVertexPreviewPending() && window.document().snapshot().entities()==source.entities(),
             "name placement must preview without changing source");
         const auto& labels=canvas->boundaryVertexPreviewLabels();
         const auto name=std::find_if(labels.begin(),labels.end(),[&](const auto& label) { return label.id==id; });
@@ -4413,11 +4464,25 @@ void test_direct_boundary_geometry_edit_workflow() {
             "a directly edited receipt-backed boundary must remain transformable");
     const auto transformed_snapshot = window.document().snapshot();
     const auto transformed_entity = transformed_snapshot.entities().at(accepted.boundary.id);
-    const auto& transform_proof=transformed_snapshot.history().back().boundary_transforms;
-    require(transform_proof && transform_proof->transformations.size()==1 &&
-        transform_proof->transformations.front().boundary_id==accepted.boundary.id,
+    // In-place selection transforms now publish the per-owner rigid joint
+    // lane (prepare_selection_geometry_transform, October 10). Historical
+    // projects may still carry the earlier TransformBoundaries group proof.
+    const auto rigid_owner_proof=[&](const RevisionRecord& record) -> const PlanarTransform* {
+        if (record.boundary_transforms && record.boundary_transforms->transformations.size()==1 &&
+            record.boundary_transforms->transformations.front().boundary_id==accepted.boundary.id)
+            return &record.boundary_transforms->transformations.front().transform;
+        if (record.boundary_constraint_changes && record.boundary_constraint_changes->joint_translation) {
+            const auto& joint=*record.boundary_constraint_changes->joint_translation;
+            if (joint.owner_transformations.size()==1 &&
+                joint.owner_transformations.front().owner_id==accepted.boundary.id)
+                return &joint.owner_transformations.front().transform;
+        }
+        return nullptr;
+    };
+    const auto* transform_proof=rigid_owner_proof(transformed_snapshot.history().back());
+    require(transform_proof!=nullptr,
         "in-place boundary rotation must retain one owner's typed group transform proof");
-    const auto& retained_transform=transform_proof->transformations.front().transform;
+    const auto& retained_transform=*transform_proof;
     const auto resize_bounds=boundary_bounds(boundary_geometry(resized));
     require(retained_transform.pivot.x==(resize_bounds.minimum.x+resize_bounds.maximum.x)/2 &&
         retained_transform.pivot.y==(resize_bounds.minimum.y+resize_bounds.maximum.y)/2 &&
@@ -4513,13 +4578,12 @@ void test_direct_boundary_geometry_edit_workflow() {
         [](const RevisionRecord& record) { return record.boundary_transform.has_value(); });
     const auto persisted_group_transforms = std::count_if(
         reopened_snapshot.history().begin(), reopened_snapshot.history().end(),
-        [&](const RevisionRecord& record) {
-            return record.boundary_transforms && record.boundary_transforms->transformations.size()==1 &&
-                record.boundary_transforms->transformations.front().boundary_id==accepted.boundary.id;
-        });
+        [&](const RevisionRecord& record) { return rigid_owner_proof(record)!=nullptr; });
     const auto persisted_resizes = std::count_if(
         reopened_snapshot.history().begin(), reopened_snapshot.history().end(),
-        [](const RevisionRecord& record) { return record.boundary_constraint_changes.has_value(); });
+        [&](const RevisionRecord& record) {
+            return record.boundary_constraint_changes.has_value() && rigid_owner_proof(record)==nullptr;
+        });
     const auto persisted_vertex_moves = std::count_if(
         reopened_snapshot.history().begin(), reopened_snapshot.history().end(),
         [&](const RevisionRecord& record) {
@@ -4619,8 +4683,12 @@ void test_normal_receipt_boundary_redefinition_workflow() {
             after.entities().size() == before.entities().size(), "normal redraw must replace the source in place");
         const auto& entity = after.entities().at(id.toStdString());
         const auto redefined = decode_identified_boundary_entity(entity);
+        // Independent redraw declares fresh child topology even for an equal
+        // edge count (October 10), so old edges never attach to new ones by
+        // index. The owner identity and construction history remain.
         require(redefined != decode_identified_boundary_entity(before.entities().at(id.toStdString())) &&
-            redefined.segments[0].segment_id == geometry.segments[0].segment_id &&
+            redefined.id == geometry.id && redefined.segments.size() == geometry.segments.size() &&
+            redefined.segments[0].segment_id != geometry.segments[0].segment_id &&
             entity.extensions.at("boundary_geometry_derivation").at("source_boundary_authoring") == original_receipt,
             "redraw must preserve owner/topology/history while using the new input receipts");
         for (const auto& [dimension_id, dimension] : after.entities()) {
@@ -4985,9 +5053,13 @@ void test_boundary_redefinition_workflow() {
                 window.redoCommand() &&
                 decode_identified_boundary_entity(window.document().snapshot().entities().at(
                     boundary_id.toStdString())).segments.front().segment.end.x == 5.0 &&
-                original_model.segments.front().segment_id == model.segments.front().segment_id &&
-                original_model.segments.front().start_vertex_id == model.segments.front().start_vertex_id,
-            "redefinition must be exactly undoable and retain stable edge identities");
+                original_model.id == model.id &&
+                // An independent redraw allocates fresh child identities even
+                // for an equal edge count (October 10), so nothing reattaches
+                // to a different edge by index.
+                original_model.segments.front().segment_id != model.segments.front().segment_id &&
+                original_model.segments.front().start_vertex_id != model.segments.front().start_vertex_id,
+            "redefinition must be exactly undoable, keep its owner and allocate fresh edge identities");
     const auto rejected_revision = window.document().revision();
     auto open = replacement;
     open.pop_back();
@@ -5462,10 +5534,12 @@ void test_boundary_transform_workflow(const QString& capture_directory) {
         require(freedom && freedom->text().contains("8 → 8 (0)"),
             "rigid transform must retain all eight persisted endpoint freedoms");
         rotation->setText("invalid");
+        settle_transform_preview(dialog);
         require(preview->entities().empty() && !apply->isEnabled() && freedom->text().isEmpty(),
             "invalid boundary angle must invalidate the candidate and freedom result");
         rotation->setText("35");
         dialog->findChild<QLineEdit*>("boundaryOffsetX")->setText("2 m");
+        settle_transform_preview(dialog);
         if (!apply->isEnabled()) std::cerr << "boundary preview error: " <<
             dialog->findChild<QLabel*>("boundaryTransformStatus")->text().toStdString() << '\n';
         require(preview->entities().size()==2 && apply->isEnabled() &&
@@ -5484,6 +5558,7 @@ void test_boundary_transform_workflow(const QString& capture_directory) {
         auto* dialog=window.findChild<QDialog*>("boundaryTransformDialog");
         dialog->findChild<QCheckBox*>("boundaryClone")->setChecked(true);
         dialog->findChild<QLineEdit*>("boundaryRotationDegrees")->setText("35");
+        settle_transform_preview(dialog);
         require(dialog->findChild<QLabel*>("boundaryTransformFreedom")->text() ==
             QStringLiteral("Source coordinate freedom: 8 · Copy coordinate freedom: 8"),
             "copy preview must report its own persisted component without counting unrelated source objects");
@@ -5513,6 +5588,7 @@ void test_boundary_transform_workflow(const QString& capture_directory) {
     QTimer::singleShot(0,&window,[&] {
         auto* dialog=window.findChild<QDialog*>("boundaryTransformDialog");
         dialog->findChild<QLineEdit*>("boundaryRotationDegrees")->setText("10");
+        settle_transform_preview(dialog);
         require(!dialog->findChild<QDialogButtonBox*>("boundaryTransformButtons")->button(QDialogButtonBox::Apply)->isEnabled() &&
             !dialog->findChild<QLabel*>("boundaryTransformStatus")->text().isEmpty() &&
             window.document().snapshot().entities()==guarded_snapshot.entities(),
@@ -5709,7 +5785,20 @@ void test_building_form_authoring_and_quantity_history() {
         auto edit = before;
         const auto key = before.type == "column" ? "height_m" : before.type == "beam" ? "width_m" :
                          before.type == "stair" ? "width_m" : "thickness_m";
-        edit.properties[key] = edit.properties.at(key).get<double>() * 1.1;
+        if (before.type == "roof") {
+            // Typed roof profile edits (October 8) admit a changed dimension
+            // only with its exact entered quantity receipt, as the editor
+            // records it.
+            const auto entered = parse_quantity("0.22 m", Unit::metre);
+            edit.properties[key] = entered.metres;
+            edit.properties["quantity_entries"]["/thickness_m"] = {
+                {"version", 1}, {"original_expression", entered.original_expression},
+                {"entered_unit", "m"},
+                {"exact_metres", {{"numerator", entered.exact_metres.numerator},
+                                  {"denominator", entered.exact_metres.denominator}}}};
+        } else {
+            edit.properties[key] = edit.properties.at(key).get<double>() * 1.1;
+        }
         require(!window.commitBuildingObject(edit, window.document().revision(), true).isEmpty(),
                 "each building form supports an atomic dimension edit");
         require(window.undoCommand() && window.document().snapshot().entities().at(id.toStdString()) == before,
@@ -6104,10 +6193,12 @@ void test_roof_opening_authoring(const QString& capture_directory) {
     });
     command->click();
     const auto reexpressed = window.document().snapshot().entities().at(id.toStdString());
-    require(window.document().revision() == expression_revision + 1 &&
-                reexpressed.properties == opened.properties &&
-                reexpressed.extensions.at("roof_opening_input").at("entries").at(opening_id).at("x_m").at("original_expression") == "-500 mm",
-            "equivalent entered expression commits its receipt without changing geometry");
+    // Typed roof-opening edits (October 8) treat source-equivalent input as no
+    // edit: the original entity, receipt and history are kept exactly.
+    require(window.document().revision() == expression_revision &&
+                reexpressed == opened &&
+                reexpressed.extensions.at("roof_opening_input").at("entries").at(opening_id).at("x_m").at("original_expression") == "-1/2",
+            "equivalent entered expression keeps the source exactly without adding history");
     auto tampered = reexpressed;
     tampered.extensions["roof_opening_input"]["entries"][opening_id]["x_m"]["exact_metres"]["numerator"] = 777;
     window.document().apply(ApplyEntityChanges{window.document().revision(),
@@ -6122,6 +6213,11 @@ void test_roof_opening_authoring(const QString& capture_directory) {
     });
     command->click();
     require(window.document().revision() == viewing_revision, "viewing an invalid receipt does not rewrite history");
+    // Typed opening edits (October 8) refuse to extend a malformed known
+    // receipt, so restore the valid source before the remaining edit fixtures.
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(reexpressed)}, {}, "restore valid input metadata fixture"});
+    require(window.selectEntity(id), "refresh restored receipt fixture");
     if (!capture_directory.isEmpty()) {
         window.resize(1200, 850); window.show(); QApplication::processEvents(); window.fitView();
         require(window.grab().save(capture_directory + "/roof-opening.png"), "roof opening plan capture");
@@ -6150,8 +6246,13 @@ void test_roof_opening_authoring(const QString& capture_directory) {
     });
     command->click();
     const auto closed = window.document().snapshot().entities().at(id.toStdString());
-    require(closed.properties.at("version") == 1 && !closed.properties.contains("roof_openings"),
-            "removing the final opening restores an uncut version-one roof");
+    // Typed roof-opening edits (829a9d12, docs/project-format.md v95) keep the
+    // admitted opening schema after the last removal: an empty version-two
+    // roster with empty receipts, matching building_object_dialog_tests.
+    require(closed.properties.at("version") == 2 &&
+                closed.properties.at("roof_openings") == nlohmann::json::array() &&
+                closed.extensions.at("roof_opening_input").at("entries").empty(),
+            "removing the final opening leaves an uncut roof with an empty retained opening roster");
 }
 
 void test_hip_roof_authoring(const QString& capture_directory) {
@@ -6223,7 +6324,7 @@ void test_contextual_roof_dimension_inspector() {
     auto* apply = window.findChild<QPushButton*>(QStringLiteral("applyRoofProperties"));
     require(group && run && rise && thickness && pitch && apply && !group->isHidden() &&
                 group->isEnabled() && !run->text().isEmpty() && !thickness->text().isEmpty() &&
-                pitch->text() == QStringLiteral("0.000°"),
+                pitch->text() == QStringLiteral("0°"),
             "selecting a flat roof should expose compact contextual dimensions and zero pitch");
 
     const auto before_revision = window.document().revision();
@@ -6333,7 +6434,7 @@ void test_contextual_gable_roof_inspector(const QString& capture_directory) {
     auto* pitch_preview = window.findChild<QLabel*>("roofPitch");
     auto* preview_error = window.findChild<QLabel*>("roofPreviewError");
     require(pitch_preview && preview_error && preview_error->isHidden() &&
-                pitch_preview->text() == QStringLiteral("33.690°") &&
+                pitch_preview->text() == QStringLiteral("33.69°") &&
                 window.document().revision() == revision &&
                 window.document().snapshot().entities().at(id.toStdString()) == before,
             "gable pitch must preview pending measurements without changing the document");
@@ -6346,7 +6447,7 @@ void test_contextual_gable_roof_inspector(const QString& capture_directory) {
                 "capture inline roof validation for visual review");
     }
     span->setText("6 m");
-    require(preview_error->isHidden() && pitch_preview->text() == QStringLiteral("33.690°"),
+    require(preview_error->isHidden() && pitch_preview->text() == QStringLiteral("33.69°"),
             "correcting input must restore the pitch preview and clear its error");
     apply->click();
     const auto edited = window.document().snapshot().entities().at(id.toStdString());
@@ -7190,7 +7291,11 @@ void test_hosted_opening_editor(const QString& capture_directory) {
         require(dialog,"door operation inspector opens");
         dialog->findChild<QComboBox*>("editDoorHinge")->setCurrentIndex(1);
         dialog->findChild<QComboBox*>("editDoorSide")->setCurrentIndex(1);
-        dialog->accept();
+        // Save validates and publishes in place (October 9); a bare accept()
+        // closes without editing, like any other dismissal.
+        auto* save=dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save);
+        require(save && save->isEnabled(),"door operation inspector exposes Save");
+        save->click();
     });
     window.findChild<QPushButton*>("editDoorSwing")->click();
     require(window.document().snapshot().entities().at(opening->first).properties.at("door_operation").at("side")=="right",
@@ -9978,8 +10083,10 @@ int main(int argc, char** argv) {
     const auto disto_revision = window.document().revision();
     require(window.importDistoMeasurement(
                 QString::fromStdString(sketch::disto_measurement_json(disto_height))) &&
-                window.document().revision() == disto_revision + 2,
-            "a local DISTO reading should update the selected field and retain a separate provenance command");
+                window.document().revision() == disto_revision + 1,
+            // Geometry and its device observation publish as one atomic
+            // command (October 6) so a refused reading cannot half-apply.
+            "a local DISTO reading should update the selected field and its provenance in one command");
     const auto disto_snapshot = window.document().snapshot();
     const auto& disto_wall = disto_snapshot.entities().at(wall_id.toStdString());
     require(disto_wall.properties.at("height_m") == 2.8 &&
@@ -9993,7 +10100,8 @@ int main(int argc, char** argv) {
     require(!window.importDistoMeasurement(
                 QString::fromStdString(sketch::disto_measurement_json(disto_height))) &&
                 window.document().revision() == disto_duplicate_revision &&
-                window.lastError().contains(QStringLiteral("already has"), Qt::CaseInsensitive),
+                window.lastError().contains(QStringLiteral("replacement requires explicit authorization"),
+                                            Qt::CaseInsensitive),
             "a second DISTO reading for an occupied field must fail without mutation");
     const sketch::DistoMeasurementRecord wrong_target{
         {1, 0}, "desktop-reading-2", "slab.thickness", 0.1, "m",
@@ -10402,9 +10510,12 @@ int main(int argc, char** argv) {
             "removing a sheet should preserve the remaining output page");
     require(window.undoCommand() && window.redoCommand(),
             "drawing sheet removal must participate in normal document history");
+    // Sheet output refuses placements that overlap the measured title block or
+    // revision history (October 9). Keep this fixture's whole layout clear of
+    // the right-hand footer band (x >= 200 mm, y >= ~243 mm with one revision).
     require(window.editSheetViewport(QStringLiteral("sheet-1"), QStringLiteral("viewport-plan"),
                                      QStringLiteral("15"), QStringLiteral("15"),
-                                     QStringLiteral("390"), QStringLiteral("267"),
+                                     QStringLiteral("390"), QStringLiteral("92"),
                                      QStringLiteral("75")),
             "sheet viewport must commit through the typed Document command path");
     const auto edited_viewport_entity = window.document().snapshot().entities().at("sheet-view-1");
@@ -10420,14 +10531,20 @@ int main(int argc, char** argv) {
             "sheet viewport edit must persist bounds and independent scale");
     require(window.undoCommand() && window.redoCommand(),
             "sheet viewport edit must participate in normal document history");
+    for (const auto& [viewport_id, x] : {std::pair{QStringLiteral("viewport-elevation"), QStringLiteral("10")},
+                                         std::pair{QStringLiteral("viewport-section"), QStringLiteral("215")}})
+        require(window.editSheetViewport(QStringLiteral("sheet-1"), viewport_id, x,
+                                         QStringLiteral("112"), QStringLiteral("195"),
+                                         QStringLiteral("55"), QStringLiteral("100")),
+                "secondary viewports must make room for schedules above the sheet footer");
     require(window.editSheetSchedulePlacement(QStringLiteral("sheet-1"),
                                               QStringLiteral("schedule-doors"),
-                                              QStringLiteral("235"), QStringLiteral("225"),
+                                              QStringLiteral("10"), QStringLiteral("175"),
                                               QStringLiteral("175"), QStringLiteral("55")),
             "schedule placement must commit through the typed Document command path");
     const auto edited_schedule_entity = window.document().snapshot().entities().at("sheet-view-1");
     require(edited_schedule_entity.properties.at("model").at("sheets").at(0)
-                    .at("schedules").at(0).at("bounds").at("x_mm") == 235.0 &&
+                    .at("schedules").at(0).at("bounds").at("x_mm") == 10.0 &&
                 edited_schedule_entity.properties.at("model").at("sheets").at(0)
                     .at("schedules").at(0).at("bounds").at("height_mm") == 55.0,
             "schedule placement edit must persist its page bounds");
@@ -10435,7 +10552,7 @@ int main(int argc, char** argv) {
             "schedule placement edit must participate in normal document history");
     require(window.editSheetSchedulePlacement(QStringLiteral("sheet-1"),
                                               QStringLiteral("schedule-objects"),
-                                              QStringLiteral("215"), QStringLiteral("220"),
+                                              QStringLiteral("215"), QStringLiteral("170"),
                                               QStringLiteral("195"), QStringLiteral("20")),
             "undersized schedule placement must remain editable for output overflow coverage");
     require(window.exportDraftSvg(svg_path_qstring),
@@ -10449,7 +10566,7 @@ int main(int argc, char** argv) {
     undersized_schedule_svg.close();
     require(window.editSheetSchedulePlacement(QStringLiteral("sheet-1"),
                                               QStringLiteral("schedule-objects"),
-                                              QStringLiteral("215"), QStringLiteral("220"),
+                                              QStringLiteral("215"), QStringLiteral("170"),
                                               QStringLiteral("195"), QStringLiteral("70")),
             "schedule placement should accept a height large enough for all fixture rows");
     require(window.exportDraftSvg(svg_path_qstring),

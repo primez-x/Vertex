@@ -1319,6 +1319,73 @@
       ]
     },
     {
+      "id": "ibm-plex-sans-font",
+      "kind": "asset",
+      "package": {
+        "name": "IBM Plex Sans",
+        "version": "1.1.0",
+        "license": "OFL-1.1"
+      },
+      "source": {
+        "kind": "bootstrap-dependency",
+        "dependencies_path": "third_party/dependencies.json",
+        "asset_name": "IBM Plex Sans Regular",
+        "paths": [
+          "assets/fonts/IBMPlexSans-Medium.ttf",
+          "assets/fonts/IBMPlexSans-Regular.ttf",
+          "assets/fonts/IBMPlexSans-SemiBold.ttf"
+        ]
+      },
+      "source_files": [
+        {
+          "path": "assets/fonts/IBMPlexSans-Medium.ttf",
+          "sha256": "331c8639d7598b2cde62a911a71db195e30cb655cd6bdf2e324a7e984955f907"
+        },
+        {
+          "path": "assets/fonts/IBMPlexSans-Regular.ttf",
+          "sha256": "975dcda37d80f038dcd143c22e33ca2d97a0cc5a929aace1c749153b0fe1afa5"
+        },
+        {
+          "path": "assets/fonts/IBMPlexSans-SemiBold.ttf",
+          "sha256": "a20caf8286023a6a7a85e40b1d2a4ae9fc3e3b1f9eda8f4c542dd4986af67bb1"
+        }
+      ],
+      "notice_paths": [
+        "assets/fonts/IBM-Plex-OFL.txt"
+      ]
+    },
+    {
+      "id": "ibm-plex-mono-font",
+      "kind": "asset",
+      "package": {
+        "name": "IBM Plex Mono",
+        "version": "2.5.0",
+        "license": "OFL-1.1"
+      },
+      "source": {
+        "kind": "bootstrap-dependency",
+        "dependencies_path": "third_party/dependencies.json",
+        "asset_name": "IBM Plex Mono Regular",
+        "paths": [
+          "assets/fonts/IBMPlexMono-Medium.ttf",
+          "assets/fonts/IBMPlexMono-Regular.ttf"
+        ]
+      },
+      "source_files": [
+        {
+          "path": "assets/fonts/IBMPlexMono-Medium.ttf",
+          "sha256": "98fbd727aae340b236955879dabed4d991aac9e8e90b3b2a67ce4a59221cc97c"
+        },
+        {
+          "path": "assets/fonts/IBMPlexMono-Regular.ttf",
+          "sha256": "7c6fbddca4b700be918f5f6183d9bd4464fa427fe435f0b480d77fe2bb8c5a43"
+        }
+      ],
+      "notice_paths": [
+        "assets/fonts/IBM-Plex-OFL.txt"
+      ]
+    },
+    {
       "id": "assistance-engine",
       "kind": "asset",
       "package": {

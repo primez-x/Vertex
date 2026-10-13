@@ -10,6 +10,7 @@
 #include "sketch/vertical_levels.hpp"
 #include "sketch/wall_measurement.hpp"
 #include "../src/desktop/plan_canvas.hpp"
+#include "../src/desktop/measurement_format.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <QApplication>
@@ -187,12 +188,18 @@ std::size_t curved_edge_count(const sketch::Entity& entity) {
     }));
 }
 
+// Profile-rounded appraisal totals keep the profile's two decimals.
 QString metric_area_text(double area) {
     return QStringLiteral("%1 m²").arg(area, 0, 'f', 2);
 }
 
+// Wall-measurement review readout: displayed area, one decimal.
+QString metric_review_area_text(double area) {
+    return QStringLiteral("%1 m²").arg(area, 0, 'f', 1);
+}
+
 QString metric_perimeter_text(double perimeter) {
-    return QStringLiteral("%1 m").arg(perimeter, 0, 'f', 3);
+    return sketch::desktop::units::length_input_text(perimeter, true);
 }
 
 QString appraisal_declarations(const char* area_use = "dwelling") {
@@ -354,12 +361,12 @@ void curved_d_exterior_measurement_stays_analytic_through_refresh_and_output() {
         (4.0 + 2.0 * initial_offset) + std::numbers::pi * (2.0 + initial_offset);
     select_walls(window, walls);
     const auto selected_source = window.document().snapshot();
-    review_measurement(window, false, false, 4, 0, metric_area_text(initial_area),
+    review_measurement(window, false, false, 4, 0, metric_review_area_text(initial_area),
                        metric_perimeter_text(initial_perimeter),
                        QStringLiteral("curved-exterior-create-review"), true);
     require(window.document().snapshot().entities() == selected_source.entities(),
             "canceling analytical curved-wall review leaves the complete source document unchanged");
-    review_measurement(window, true, false, 4, 0, metric_area_text(initial_area),
+    review_measurement(window, true, false, 4, 0, metric_review_area_text(initial_area),
                        metric_perimeter_text(initial_perimeter),
                        QStringLiteral("curved-exterior-create-review-accepted"), true);
 
@@ -443,12 +450,12 @@ void curved_d_exterior_measurement_stays_analytic_through_refresh_and_output() {
         (std::numbers::pi / 2.0) * std::pow(2.0 + refreshed_offset, 2.0);
     const auto refreshed_perimeter = 2.0 * (3.0 + refreshed_offset) +
         (4.0 + 2.0 * refreshed_offset) + std::numbers::pi * (2.0 + refreshed_offset);
-    review_measurement(window, false, true, 4, 0, metric_area_text(refreshed_area),
+    review_measurement(window, false, true, 4, 0, metric_review_area_text(refreshed_area),
                        metric_perimeter_text(refreshed_perimeter),
                        QStringLiteral("curved-exterior-refresh-review"), true);
     require(window.document().snapshot().entities() == changed_source.entities(),
             "canceling curved-wall refresh review leaves the stale source and outline untouched");
-    review_measurement(window, true, true, 4, 0, metric_area_text(refreshed_area),
+    review_measurement(window, true, true, 4, 0, metric_review_area_text(refreshed_area),
                        metric_perimeter_text(refreshed_perimeter),
                        QStringLiteral("curved-exterior-refresh-review-accepted"), true);
     const auto refreshed = window.document().snapshot();
@@ -511,7 +518,7 @@ void curved_d_exterior_measurement_stays_analytic_through_refresh_and_output() {
             "the curved exterior PDF opens as a real plan page");
     const auto text = pdf.getAllText(0).text();
     require(text.contains(QString::number(refreshed_area, 'f', 2)) &&
-                text.contains(sketch::desktop::PlanCanvas::drawingLengthText(refreshed_arc_length, true).remove(QChar(0x2248)).trimmed()),
+                text.contains(sketch::desktop::PlanCanvas::drawingLengthText(refreshed_arc_length, true)),
             "the PDF prints exact analytical exterior area and curved-edge physical dimension");
 }
 
@@ -930,7 +937,7 @@ void selected_wall_loop_creates_and_refreshes_one_exterior_appraisal_area() {
             "the appraisal label shows exterior area net of the retained garage deduction in metric units");
     window.setMetricUnits(false);
     require(gla->text().contains(QString::number(net_area / (0.3048*0.3048),'f',2)) &&
-                gla->text().contains(QStringLiteral("ft²")),
+                gla->text().contains(QStringLiteral(" sf")),
             "the same wall-derived net appraisal area calculates automatically in square feet");
     window.setMetricUnits(true);
 
@@ -1063,7 +1070,7 @@ void selected_wall_loop_creates_and_refreshes_one_exterior_appraisal_area() {
             const auto length = std::hypot(edge.segment.end.x-edge.segment.start.x,
                                            edge.segment.end.y-edge.segment.start.y);
             return std::abs(length-4.0) > 1e-3 && std::abs(length-3.0) > 1e-3 &&
-                   text.contains(sketch::desktop::PlanCanvas::drawingLengthText(length,true).remove(QChar(0x2248)).trimmed());
+                   text.contains(sketch::desktop::PlanCanvas::drawingLengthText(length,true));
         }),
             "the PDF includes a physical exterior edge measurement rather than only wall baseline lengths");
 }
@@ -1149,7 +1156,7 @@ void an_unsplit_partition_selects_its_exterior_shell() {
     window.setMetricUnits(false);
     auto* gla = window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"));
     require(gla && gla->text().contains(QString::number(exterior_area/(0.3048*0.3048),'f',2)) &&
-                gla->text().contains(QStringLiteral("ft²")), "appraisal square-foot totals use the full exterior footprint");
+                gla->text().contains(QStringLiteral(" sf")), "appraisal square-foot totals use the full exterior footprint");
     for (qsizetype i = 0; i < perimeter.size(); ++i)
         require(window.selectEntity(perimeter[i],i != 0), "select explicit shell candidates");
     require(window.selectEntity(partition,true), "include the partition in explicit candidates");
@@ -1757,13 +1764,46 @@ void existing_appraisal_area_transforms_its_dependencies(bool metric, bool sourc
     }
     for (const auto& provider : annotation_entities(before)) {
         auto wanted=provider;
+        const auto& actual=after.entities().at(provider.id);
+        const auto& actual_state=actual.properties.at("state");
+        const auto close=[](const nlohmann::json& value,double expected) {
+            return value.is_number() && std::abs(value.get<double>()-expected)<=1e-9;
+        };
+        bool owned_matches=true;
         for (auto& record : wanted.properties.at("state").at("overrides"))
             if (record.at("target_id")==area.toStdString() && record.contains("plan_label_offset_m")) {
                 const sketch::PlanarTransform linear{{},radians,mode==2,mode==3,{}};
                 const auto shifted=sketch::transform_point({.2,.3},linear);
-                record["plan_label_offset_m"]={shifted.x,shifted.y};
+                // Since October 7 (annotation v11, e4867a36) an oriented rigid
+                // transform also carries an authored combined callout's model
+                // rotation; the authored offset follows the same operator.
+                const auto direction=sketch::transform_point({1.0,0.0},linear);
+                const auto angle=std::atan2(direction.y,direction.x);
+                // presentation_transform writes the rotation only when the
+                // canonical orientation changes; a vertical reflection keeps
+                // the source 0 rad and leaves the provider at its version.
+                const bool rotation_unchanged=std::abs(std::remainder(angle,2.0*std::numbers::pi))<=1e-12;
+                const auto found=std::find_if(actual_state.at("overrides").begin(),actual_state.at("overrides").end(),
+                    [&](const auto& value) { return value.at("target_id")==record.at("target_id") &&
+                        value.at("target_kind")==record.at("target_kind"); });
+                owned_matches=owned_matches && found!=actual_state.at("overrides").end() &&
+                    found->contains("plan_label_offset_m") &&
+                    close(found->at("plan_label_offset_m").at(0),shifted.x) &&
+                    close(found->at("plan_label_offset_m").at(1),shifted.y) &&
+                    (found->contains("plan_label_rotation_radians") ?
+                        std::abs(std::remainder(found->at("plan_label_rotation_radians").get<double>()-angle,
+                            2.0*std::numbers::pi))<=1e-9 : rotation_unchanged);
+                if (found!=actual_state.at("overrides").end()) {
+                    if (found->contains("plan_label_offset_m")) record["plan_label_offset_m"]=found->at("plan_label_offset_m");
+                    if (found->contains("plan_label_rotation_radians"))
+                        record["plan_label_rotation_radians"]=found->at("plan_label_rotation_radians");
+                }
             }
-        require(after.entities().at(provider.id)==wanted,
+        // Only the combined-callout rotation raises the provider to version 11.
+        const auto version=actual_state.value("version",0);
+        if (version==11 && wanted.properties.at("state").value("version",0)<11)
+            wanted.properties.at("state")["version"]=11;
+        require(owned_matches && actual==wanted,
             "in-place transform patches only owned label offsets and preserves the full provider including unrelated text, furniture and overrides");
     }
     for (const auto& id : {area.toStdString(),garage.toStdString()}) {
@@ -1846,6 +1886,18 @@ void existing_appraisal_area_transforms_its_dependencies(bool metric, bool sourc
             auto* preview=dynamic_cast<sketch::desktop::PlanCanvas*>(dialog->findChild<QWidget*>("wallTransformPreview"));
             require(rotation && preview,"group transform editor has numerical controls and preview");
             rotation->setText("90");
+            // The transform dialog coalesces typing for 120 ms (its single-shot
+            // preview debounce) before it prepares the proposed group.
+            const auto preview_pending=[dialog] {
+                for (auto* timer : dialog->findChildren<QTimer*>(Qt::FindDirectChildrenOnly))
+                    if (timer->isSingleShot() && timer->isActive()) return true;
+                return false;
+            };
+            QElapsedTimer settle; settle.start();
+            while (preview_pending() && settle.elapsed()<10000)
+                QCoreApplication::processEvents(QEventLoop::AllEvents,20);
+            require(!preview_pending(),"group transform preview debounce settles");
+            QCoreApplication::processEvents();
             std::set<std::string> required{area.toStdString(),garage.toStdString()};
             if (sourced) {
                 for (const auto& record : before.entities().at(area.toStdString()).properties.at("wall_measurement_source").at("walls"))

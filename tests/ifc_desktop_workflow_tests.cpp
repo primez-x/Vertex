@@ -704,13 +704,24 @@ int main(int argc, char** argv) {
         require(source.selectEntity(boundary_id) &&
                 !source.createSlabFromSelectedBoundary("0.15 m", "0 m").isEmpty(),
                 "source slab must be created");
-        auto required_sloped_wall = source.document().snapshot().entities().at(wall_id.toStdString());
-        required_sloped_wall.id = "required-sloped-wall";
-        required_sloped_wall.required = true;
-        required_sloped_wall.properties["slope_rise_m"] = 1.0;
-        required_sloped_wall.extensions["source_note"] = "retain unsupported wall semantics";
+        // Since native format v62 a straight sloped wall exports its exact body
+        // as an editable IfcWall, so it is supported semantic content here.
+        const auto host_wall = source.document().snapshot().entities().at(wall_id.toStdString());
+        auto sloped_wall = host_wall;
+        sloped_wall.id = "supported-sloped-wall";
+        sloped_wall.properties["slope_rise_m"] = 1.0;
+        // Structural columns have no IFC product mapping: export refuses them
+        // (entity_not_representable) and retains the complete native entity on
+        // a geometry-free IfcBuildingElementProxy, which imports reference-only.
+        auto required_column = encode_building_entity(
+            RectangularColumn{"required-column", {2.0, 1.5, 0.0}, 0.3, 0.3, 2.4, 0.0});
+        for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
+            if (host_wall.properties.contains(key)) required_column.properties[key] = host_wall.properties.at(key);
+        required_column.required = true;
+        required_column.extensions["source_note"] = "retain unsupported column semantics";
         source.document().apply(ApplyEntityChanges{source.document().revision(),
-            {EntityChange::upsert(required_sloped_wall)}, {}, "Add required IFC reference fixture"});
+            {EntityChange::upsert(sloped_wall), EntityChange::upsert(required_column)}, {},
+            "Add supported sloped wall and required IFC reference fixture"});
         const auto path = temporary.filePath(QStringLiteral("mapped.ifc"));
         require(source.exportIfc(path), "native project must export IFC");
         require(QFileInfo::exists(path) && QFileInfo(path).size() > 0,
@@ -782,7 +793,15 @@ int main(int argc, char** argv) {
         const auto mapped = import_project_ifc(raw.toStdString());
         for (const auto& [id, entity] : snapshot.entities()) {
             if (entity.properties.contains("ifc_type")) {
-                if (entity.type != "ifc_reference") imported.emplace(entity.type, id);
+                if (entity.type != "ifc_reference") {
+                    // Key the two imported walls by their own semantics so the
+                    // opening host check can never pick the sloped wall.
+                    const auto key = entity.type == "wall" &&
+                        std::abs(entity.properties.value("slope_rise_m", 0.0)) > 1e-9
+                        ? std::string("sloped_wall") : entity.type;
+                    require(imported.emplace(key, id).second,
+                            "IFC import must insert exactly one object per semantic fixture role");
+                }
                 require(!entity.required, "imported objects must remain editable");
                 require(std::none_of(mapped.entities.begin(), mapped.entities.end(),
                     [&](const auto& candidate) { return candidate.id == id; }),
@@ -791,7 +810,7 @@ int main(int argc, char** argv) {
                     entity.extensions.contains("ifc_vertex_properties") &&
                     entity.extensions.at("ifc_vertex_properties").contains("native_entity") &&
                     entity.extensions.at("ifc_vertex_properties").at("native_entity")
-                        .value("id", std::string{}) == "required-sloped-wall")
+                        .value("id", std::string{}) == "required-column")
                     required_reference_id = id;
             }
             if (entity.type == "boundary" && entity.properties.contains("ifc_type"))
@@ -810,17 +829,23 @@ int main(int argc, char** argv) {
         }
         require(imported_boundary, "IFC import must create a mapped boundary");
         require(retained_source, "IFC import must retain source provenance");
-        require(imported.size() == 4 && imported.contains("wall") && imported.contains("opening") &&
+        require(imported.size() == 5 && imported.contains("boundary") && imported.contains("wall") &&
+                imported.contains("sloped_wall") && imported.contains("opening") &&
                 imported.contains("slab") && !required_reference_id.empty(),
                 "IFC import must insert semantic objects and the required reference-only object");
+        require(std::abs(snapshot.entities().at(imported.at("sloped_wall")).properties.value("slope_rise_m", 0.0) - 1.0) < 1e-9,
+                "supported sloped wall must import as an editable wall that keeps its slope");
         const auto& imported_reference = snapshot.entities().at(required_reference_id);
+        const auto& source_column = source.document().snapshot().entities().at("required-column");
+        const auto& retained_column = imported_reference.extensions.at("ifc_vertex_properties").at("native_entity");
         require(!imported_reference.properties.contains("floor_id") &&
                 !imported_reference.properties.contains("layer_id") &&
-                imported_reference.extensions.at("ifc_vertex_properties").at("native_entity")
-                    .at("properties").at("slope_rise_m") == 1.0,
+                retained_column.at("type") == "column" && retained_column.at("required") == true &&
+                retained_column.at("properties") == source_column.properties &&
+                retained_column.at("extensions") == source_column.extensions,
                 "reference-only IFC objects must remain inert and retain unsupported native semantics");
         require(snapshot.entities().at(imported.at("opening")).properties.at("wall_id") == imported.at("wall"),
-                "imported opening must reference its remapped wall");
+                "imported opening must reference its remapped flat host wall");
         const auto report = nlohmann::json::parse(readFile(path + ".fidelity.json").toStdString());
         require(report.at("inserted_entity_count") == mapped.entities.size() &&
                 report.at("rejected_entity_count") == 0,
@@ -853,10 +878,13 @@ int main(int argc, char** argv) {
         require(repeated.entities().size() == snapshot.entities().size() + mapped.entities.size() + 1,
                 "repeated import must add rather than overwrite semantic objects");
         for (const auto& [id, entity] : repeated.entities()) {
-            if (entity.type == "opening" && id != imported.at("opening"))
+            if (entity.type == "opening" && id != imported.at("opening")) {
+                const auto& host = repeated.entities().at(entity.properties.at("wall_id").get<std::string>());
                 require(entity.properties.at("wall_id") != imported.at("wall") &&
-                        repeated.entities().at(entity.properties.at("wall_id").get<std::string>()).type == "wall",
-                        "repeated import must retain its own wall host");
+                        entity.properties.at("wall_id") != imported.at("sloped_wall") &&
+                        host.type == "wall" && !host.properties.contains("slope_rise_m"),
+                        "repeated import must retain its own flat wall host");
+            }
         }
         require(destination.undoCommand(), "repeated import must undo as one operation");
         require(destination.selectEntity(QString::fromStdString(imported.at("wall"))) &&
@@ -885,14 +913,18 @@ int main(int argc, char** argv) {
         const auto second = import_project_ifc(readFile(second_path).toStdString());
         for (const auto* type : {"boundary", "wall", "opening", "slab"})
             require(std::count_if(second.entities.begin(), second.entities.end(),
-                [&](const auto& entity) { return entity.type == type; }) == 1,
+                [&](const auto& entity) { return entity.type == type; }) == (std::string(type) == "wall" ? 2 : 1),
                 "re-export must retain each supported semantic object");
+        require(std::count_if(second.entities.begin(), second.entities.end(), [](const auto& entity) {
+                    return entity.type == "wall" &&
+                        std::abs(entity.properties.value("slope_rise_m", 0.0) - 1.0) < 1e-9;
+                }) == 1, "re-export must retain the supported sloped wall as an editable wall");
         require(std::any_of(second.entities.begin(), second.entities.end(), [](const auto& entity) {
                     return entity.type == "ifc_reference" &&
                         entity.extensions.contains("ifc_vertex_properties") &&
                         entity.extensions.at("ifc_vertex_properties").contains("native_entity") &&
                         entity.extensions.at("ifc_vertex_properties").at("native_entity")
-                            .value("id", std::string{}) == "required-sloped-wall";
+                            .value("id", std::string{}) == "required-column";
                 }), "re-export must retain the named reference-only native payload");
         const auto invalid_path = temporary.filePath("invalid.ifc");
         {

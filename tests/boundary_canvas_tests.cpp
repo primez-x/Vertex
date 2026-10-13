@@ -4176,7 +4176,10 @@ void test_dark_canvas_semantic_strokes_and_overrides() {
     const auto custom_dark = capture(background);
     const auto custom_light = capture(Qt::white);
     const auto custom_output = capture(Qt::white, true);
-    entity.dark_stroke_color = QColor(143, 198, 245);
+    // Design system dark draw-wall token (tokens.json color.dark.draw-wall):
+    // equal to the semantic dark stroke, so equality proves the explicit dark
+    // stroke replaced the custom light stroke.
+    entity.dark_stroke_color = QColor("#e7e9ec");
     require(images_equal(semantic_dark, capture(background)),
             "explicit dark stroke must take precedence on dark interactive canvases");
     require(images_equal(custom_light, capture(Qt::white)) &&

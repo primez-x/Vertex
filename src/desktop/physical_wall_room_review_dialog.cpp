@@ -5,6 +5,7 @@
 #include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_phase_scope.hpp"
 #include "plan_canvas.hpp"
+#include "measurement_format.hpp"
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -28,11 +29,11 @@ namespace sketch::desktop {
 namespace {
 QString text(const std::string& value) { return QString::fromStdString(value); }
 QString area(double value,bool metric) {
-    return QStringLiteral("%1 %2").arg(metric?value:value/0.09290304,0,'f',2).arg(metric?QStringLiteral("m²"):QStringLiteral("sq ft"));
+    return units::area_text(value,metric);
 }
 QString quantity(const BoundaryDimensionResolution& value,bool metric) {
     if (value.kind==BoundaryDimensionKind::area) return area(value.area_square_metres,metric);
-    if (value.kind==BoundaryDimensionKind::angle) return QStringLiteral("%1°").arg(value.angle_radians*180/std::numbers::pi,0,'f',1);
+    if (value.kind==BoundaryDimensionKind::angle) return units::angle_text(value.angle_radians*180/std::numbers::pi);
     return PlanCanvas::drawingLengthText(value.segment_length_metres,metric);
 }
 QString kind(PhysicalWallRoomCorrespondenceKind value) {

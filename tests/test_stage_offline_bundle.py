@@ -27,6 +27,46 @@ stage = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(stage)
 
 
+def _is_packaged_powershell(path: str) -> bool:
+    # Microsoft Store (MSIX) pwsh runs with a package identity, which changes
+    # how AppContainer SIDs are derived for its child processes. Both its app
+    # execution alias and its install directory live under a WindowsApps tree.
+    parts = [part.casefold() for part in pathlib.PureWindowsPath(path).parts]
+    resolved = os.path.realpath(path)
+    parts += [part.casefold() for part in pathlib.PureWindowsPath(resolved).parts]
+    return "windowsapps" in parts
+
+
+def installer_powershell() -> tuple[str | None, str]:
+    """Return an out-of-package pwsh for install-offline-bundle.ps1, or a skip reason.
+
+    The installer deliberately refuses packaged hosts (worker AppContainer SID
+    derivation), so its lifecycle tests need an MSI/zip pwsh instead.
+    """
+    candidates = []
+    found = shutil.which("pwsh")
+    if found:
+        candidates.append(found)
+    if os.name == "nt":
+        for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramW6432")):
+            if base:
+                for edition in ("7", "7-preview"):
+                    candidates.append(os.path.join(base, "PowerShell", edition, "pwsh.exe"))
+    packaged = None
+    for candidate in candidates:
+        if not os.path.isfile(candidate):
+            continue
+        if os.name == "nt" and _is_packaged_powershell(candidate):
+            packaged = packaged or candidate
+            continue
+        return candidate, ""
+    if packaged is not None:
+        return None, ("only a packaged (Microsoft Store) pwsh is available at " + packaged +
+                      "; install-offline-bundle.ps1 refuses packaged hosts, so installer "
+                      "lifecycle tests need an MSI/zip PowerShell 7 installation")
+    return None, "PowerShell is unavailable"
+
+
 def digest(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -85,6 +125,12 @@ public static class FixtureNativeAcl {
 }
 '@
 """
+
+    def installer_pwsh(self) -> str:
+        pwsh, reason = installer_powershell()
+        if pwsh is None:
+            self.skipTest(reason)
+        return pwsh
 
     def run_powershell(self, script: str):
         return subprocess.run(
@@ -479,9 +525,7 @@ public static class FixtureNativeAcl {
         self.assertNotEqual(rejected.returncode, 0)
 
     def test_powershell_installer_copies_only_verified_runtime_set(self):
-        pwsh = shutil.which("pwsh")
-        if pwsh is None:
-            self.skipTest("PowerShell is unavailable")
+        pwsh = self.installer_pwsh()
         fixture = self.fixture()
         self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture
@@ -503,9 +547,7 @@ public static class FixtureNativeAcl {
         self.assertFalse((target / "source-kit").exists())
 
     def test_powershell_installer_replaces_an_existing_empty_directory_atomically(self):
-        pwsh = shutil.which("pwsh")
-        if pwsh is None:
-            self.skipTest("PowerShell is unavailable")
+        pwsh = self.installer_pwsh()
         fixture = self.fixture()
         self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture
@@ -526,9 +568,7 @@ public static class FixtureNativeAcl {
         self.assertFalse(any(path.name.startswith(".installed.") for path in target.parent.iterdir()))
 
     def test_powershell_installer_repairs_a_modified_runtime(self):
-        pwsh = shutil.which("pwsh")
-        if pwsh is None:
-            self.skipTest("PowerShell is unavailable")
+        pwsh = self.installer_pwsh()
         fixture = self.fixture()
         self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture
@@ -554,9 +594,7 @@ public static class FixtureNativeAcl {
         self.assertFalse(any(path.name.startswith(".installed.") for path in target.parent.iterdir()))
 
     def test_powershell_installer_uninstalls_only_a_marked_runtime(self):
-        pwsh = shutil.which("pwsh")
-        if pwsh is None:
-            self.skipTest("PowerShell is unavailable")
+        pwsh = self.installer_pwsh()
         fixture = self.fixture()
         self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture
@@ -579,9 +617,7 @@ public static class FixtureNativeAcl {
         self.assertFalse(target.exists())
 
     def test_powershell_uninstall_rejects_an_unmarked_directory(self):
-        pwsh = shutil.which("pwsh")
-        if pwsh is None:
-            self.skipTest("PowerShell is unavailable")
+        pwsh = self.installer_pwsh()
         fixture = self.fixture()
         self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture
@@ -716,9 +752,7 @@ try { $null=Get-OwnedModulePaths FIXTURE_ROOT $bad } catch {
             self.assertEqual(evidence["unsafe_resolutions"], manifest_relatives + ["bin/../outside.dll"])
 
     def lifecycle_fixture(self, installer_template=None):
-        pwsh = shutil.which("pwsh")
-        if pwsh is None:
-            self.skipTest("PowerShell is unavailable")
+        pwsh = self.installer_pwsh()
         fixture = self.fixture()
         self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture
@@ -806,8 +840,7 @@ try { $null=Get-OwnedModulePaths FIXTURE_ROOT $bad } catch {
     def test_installed_module_tree_is_readonly_and_lifecycle_remains_usable(self):
         # This catches inherited user write access, omitted nested module ACLs,
         # an overly broad AppContainer grant, and cleanup of a frozen runtime.
-        if shutil.which("pwsh") is None:
-            self.skipTest("PowerShell is unavailable")
+        pwsh = self.installer_pwsh()
         import ctypes
         from ctypes import wintypes
 
@@ -830,7 +863,7 @@ try { $null=Get-OwnedModulePaths FIXTURE_ROOT $bad } catch {
 
         def run(action):
             return subprocess.run(
-                [shutil.which("pwsh"), "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+                [pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
                  str(bundle / "install-offline-bundle.ps1"), "-InstallRoot", str(target), "-Action", action],
                 capture_output=True, text=True, check=False,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -932,8 +965,7 @@ try { $null=Get-OwnedModulePaths FIXTURE_ROOT $bad } catch {
 
     @unittest.skipUnless(os.name == "nt", "Windows runtime ACL rollback")
     def test_module_acl_failure_restores_existing_empty_destination(self):
-        if shutil.which("pwsh") is None:
-            self.skipTest("PowerShell is unavailable")
+        pwsh = self.installer_pwsh()
         fixture = self.fixture()
         self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture
@@ -948,7 +980,7 @@ try { $null=Get-OwnedModulePaths FIXTURE_ROOT $bad } catch {
         target = root / "installed"
         target.mkdir()
         checked = subprocess.run(
-            [shutil.which("pwsh"), "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+            [pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
              str(root / "out/rollback/install-offline-bundle.ps1"), "-InstallRoot", str(target)],
             capture_output=True, text=True, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

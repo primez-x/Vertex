@@ -2737,7 +2737,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U389 — Read practical drawing dimensions**
   - Steps: With Snap off, draw a diagonal wall or measured line. Switch Imperial/Metric, inspect its length, and select and resize a component to inspect its width and depth. Also draw a precisely entered 12-foot wall.
-  - Expected: Ordinary labels use millimetres or feet and fractional inches. A rounded display has an approximation mark (`≈`); a common exact measurement stays uncluttered. Entered measurements and the saved geometry are preserved.
+  - Expected: Ordinary labels use metres (to the millimetre) or feet-inches with 1/16" fractions (`24' 6"`), one unit per readout. Rounding within that display precision is not marked; `≈` appears only when a nonzero value would read as zero. Entered measurements and the saved geometry are preserved.
   - Result: Not tested
   - Notes: ______________________________
 

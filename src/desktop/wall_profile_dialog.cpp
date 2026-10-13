@@ -8,6 +8,8 @@
 #include "sketch/document_wall.hpp"
 #include "sketch/phase_wall_profile_capture.hpp"
 #include "sketch/project_organization.hpp"
+#include "advanced_section.hpp"
+#include "measurement_format.hpp"
 
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -118,7 +120,7 @@ QString material_name(const Entities& source, const WallLayerMaterial& reference
     const auto material = std::find_if(model.materials().begin(), model.materials().end(),
         [&](const auto& item) { return item.id == reference.material_id; });
     require(material != model.materials().end(), "A material is unavailable in its catalog");
-    return QString("%1 · %2").arg(q(material->name), label(found->second, q(reference.catalog_id)));
+    return QString("%1 · %2").arg(q(material->name), label(found->second, "Material catalog"));
 }
 
 // The physical replay resolves placement and admits native cuts/assemblies and
@@ -204,6 +206,7 @@ public:
     Input rise;
     std::vector<Input> layers;
     QLabel* sum{};
+    AdvancedSection* advanced{};
     QLabel* effective_base{};
     QLabel* error{};
     QPushButton* save{};
@@ -230,10 +233,10 @@ public:
         auto* total_row = new QHBoxLayout;
         sum = new QLabel(owner);
         sum->setObjectName("wallProfileLayerSum");
-        sum->setAccessibleName("Total layer thickness");
+        sum->setAccessibleName("Sum of layer thicknesses");
         auto* table = new QTableWidget(0, 3, owner);
         table->setObjectName("wallProfileLayers");
-        table->setAccessibleName("Existing layers ordered from negative to positive baseline normal");
+        table->setAccessibleName("Wall layers, from the right face to the left face as the wall was drawn");
         table->setHorizontalHeaderLabels({"Layer", "Thickness", "Material"});
         table->verticalHeader()->hide();
         table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
@@ -257,24 +260,25 @@ public:
                               {"/thickness_m", "/thickness"}, unit);
             thickness.field->setAccessibleName("Total wall thickness");
             height = input(owner, "wallProfileHeight", wall.height, original, {"/height_m", "/height"}, unit);
-            height.field->setAccessibleName("Wall height at baseline start");
+            height.field->setAccessibleName("Wall height at start");
             rise = input(owner, "wallProfileTopRise", wall.slope_rise.value_or(0.0), original,
                          {"/slope_rise_m", "/slope_rise"}, unit);
-            rise.field->setAccessibleName("Signed wall top rise from baseline start to end");
+            rise.field->setAccessibleName("Rise of the wall top from start to end");
             rise.field->setToolTip(rise.field->toolTip() +
-                " Signed rise follows the baseline from start to end. Zero clears a supported slope plane.");
+                " How much the top of the wall rises from its start to its end. Use a negative value for a fall. Zero makes the top level.");
             if (bound_top_plane(original)) {
                 rise.field->setReadOnly(true);
-                rise.field->setToolTip("This top plane has retained measurement bindings. Its rise cannot be changed here.");
+                rise.field->setToolTip("This sloped top is set by linked measurements, so its rise cannot be changed here.");
             }
             elevation = input(owner, "wallProfileElevation", wall.elevation, original,
                               {"/elevation_m", "/elevation"}, unit);
             const auto placement = original.properties.find("vertical_placement");
             const bool level_bound = placement != original.properties.end() &&
                 placement->is_object() && placement->value("mode", std::string{}) == "level";
-            elevation.field->setAccessibleName(level_bound ? "Stored wall base offset from floor level" : "Wall base elevation");
-            elevation.field->setToolTip(elevation.field->toolTip() +
-                " Signed stored base elevation. For a level-bound wall, this is added to the floor level and placement offset; the level binding is retained.");
+            elevation.field->setAccessibleName(level_bound ? "Wall base offset from floor level" : "Wall base elevation");
+            elevation.field->setToolTip(elevation.field->toolTip() + (level_bound
+                ? " Distance from the floor level to the bottom of the wall. Use a negative value to go below the floor. The wall stays on its floor."
+                : " Height of the bottom of the wall. Use a negative value to go below zero."));
             Wall resolved;
             if (!read_document_wall(resolve_vertical_placement(source, original), {}, resolved, diagnostic))
                 throw std::invalid_argument(diagnostic);
@@ -289,19 +293,27 @@ public:
             total_row->addWidget(thickness.field, 1);
             total_row->addWidget(sum);
             form->addRow("Total thickness", total_row);
-            form->addRow("Height at start", height.field);
+            const bool sloped = wall.slope_rise.value_or(0.0) != 0.0;
+            form->addRow(sloped ? "Height at start" : "Height", height.field);
             form->addRow(level_bound ? "Base offset from floor" : "Base elevation", elevation_row);
-            form->addRow("Top rise", rise.field);
+            // A level top is the everyday case: the rise is an expert control
+            // unless this wall already slopes.
+            if (sloped) {
+                form->addRow("Top rise", rise.field);
+            } else {
+                advanced = new AdvancedSection("wallProfileDialog", owner);
+                advanced->form()->addRow("Top rise", rise.field);
+            }
             table->setRowCount(static_cast<int>(wall.layers.size()));
             layers.reserve(wall.layers.size());
             for (std::size_t i = 0; i < wall.layers.size(); ++i) {
                 const auto& layer = wall.layers[i];
                 const auto row = static_cast<int>(i);
                 table->setItem(row, 0, readonly_item(QString("Layer %1").arg(row + 1)));
-                table->item(row, 0)->setToolTip(q(layer.id));
                 auto field = input(table, "wallProfileLayerThickness", layer.thickness, original,
                                    {"/layers/" + std::to_string(i) + "/thickness_m"}, unit);
-                field.field->setAccessibleName(QString("Thickness of layer %1").arg(q(layer.id)));
+                field.field->setObjectName(QString("wallProfileLayerThickness_%1").arg(row));
+                field.field->setAccessibleName(QString("Thickness of layer %1").arg(row + 1));
                 table->setCellWidget(row, 1, field.field);
                 layers.push_back(std::move(field));
                 table->setItem(row, 2, readonly_item(layer.material ? material_name(source.entities(), *layer.material) : "Unassigned"));
@@ -312,8 +324,10 @@ public:
             table->setEnabled(false);
         }
         layout->addLayout(form);
+        if (advanced) layout->addWidget(advanced);
         if (!wall.layers.empty()) {
-            auto* order = new QLabel("Layers · negative to positive baseline normal", owner);
+            auto* order = new QLabel("Layers · right face to left face, as the wall was drawn", owner);
+            order->setObjectName("wallProfileLayerOrder");
             order->setWordWrap(true);
             layout->addWidget(order);
             layout->addWidget(table, 1);
@@ -392,7 +406,7 @@ public:
             if (edited(height)) intent.height = read(height, unit);
             if (edited(elevation)) intent.elevation = read(elevation, unit);
             if (edited(rise)) {
-                require(!rise.field->isReadOnly(), "This retained top plane cannot be changed here");
+                require(!rise.field->isReadOnly(), "This sloped top is set by linked measurements. Change those measurements instead.");
                 intent.top_rise = read(rise, unit);
             }
             const bool layers_edited = std::any_of(layers.begin(), layers.end(), [](const auto& field) { return edited(field); });
@@ -413,9 +427,7 @@ public:
                 require(std::isfinite(total), "The layer thickness sum is outside the supported range");
                 // Derived display only. Total thickness always remains an
                 // explicit independent input; no implicit redistribution.
-                sum->setText(unit == Unit::metre
-                    ? QString("Layer sum: %1 m").arg(QString::number(total, 'g', 8))
-                    : QString("Layer sum: %1 in").arg(QString::number(total / 0.0254, 'g', 6)));
+                sum->setText(QString("Layer sum: %1").arg(units::length_text(total, unit == Unit::metre)));
             }
             if (layers_edited) {
                 intent.layer_thicknesses.emplace();
@@ -434,7 +446,7 @@ public:
                 // the actual native graph here without requiring an old room
                 // lock to accept a temporary profile stage.
                 const auto replayed = replay_wall_profile_entities(source.entities(), {intent}, false, true);
-                require(replayed.at(wall_id) == candidate, "The profile replay differs from its local source");
+                require(replayed.at(wall_id) == candidate, "This profile change could not be applied. Reopen this profile.");
                 admit_context_materials(replayed, wall_id);
                 // Replay returns exact source early for equivalent inputs;
                 // still admit current residuals before accepting a no-op.

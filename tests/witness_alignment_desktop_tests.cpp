@@ -464,7 +464,7 @@ void imperial_alignment() {
     key(canvas,Qt::Key_X,Qt::NoModifier,"x"); require(selected(canvas),"Imperial X selects a witness");
     const auto found=std::find_if(canvas.drawingWitnesses().begin(),canvas.drawingWitnesses().end(),
         [](const auto& value) {return value.selected;});
-    require(same(found->segment.end,{0,0.9144}) && found->dimension_text==QStringLiteral("4 ft 0 in"),
+    require(same(found->segment.end,{0,0.9144}) && found->dimension_text==QStringLiteral("4' 0\""),
         "Imperial witness shows a literal four-foot side");
     unchanged(before,window.document().snapshot());
     key(canvas,Qt::Key_Return); const auto accepted=window.document().snapshot();

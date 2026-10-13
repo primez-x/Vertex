@@ -3,6 +3,7 @@
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/geometry.hpp"
 #include "sketch/quantity.hpp"
+#include "measurement_format.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -36,13 +37,6 @@ enum class InputMethod {
 
 QString error_text(std::string_view value) {
     return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
-}
-
-QString number_text(double value) {
-    if (!std::isfinite(value)) {
-        return {};
-    }
-    return QString::number(value, 'g', 12);
 }
 
 QString method_name(InputMethod method) {
@@ -619,18 +613,13 @@ private:
         status->setText(QStringLiteral("D: next edge • Enter: finish stroke"));
     }
 
+    // Preview readouts use the shared design-system formatter.
     QString display_length(double metres) const {
-        const auto value = metric ? metres : metres / 0.3048;
-        return number_text(value) + (metric ? QStringLiteral(" m") : QStringLiteral(" ft"));
+        return units::length_text(metres, metric);
     }
 
     QString display_coordinate(double metres) const {
-        auto value=metric ? metres : metres/0.3048;
-        if (std::abs(value)<0.0005) value=0.0;
-        auto text=QString::number(value,'f',3);
-        while (text.endsWith(QLatin1Char('0'))) text.chop(1);
-        if (text.endsWith(QLatin1Char('.'))) text.chop(1);
-        return text+(metric ? QStringLiteral(" m") : QStringLiteral(" ft"));
+        return units::length_text(metres, metric);
     }
 
     void update_preview(const BoundaryAuthoringSession& value) {

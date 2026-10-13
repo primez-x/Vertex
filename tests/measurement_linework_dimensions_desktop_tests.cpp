@@ -859,7 +859,7 @@ void physical_wall_axis_dimension_lifecycle() {
         require(line!=surface.entities().end()&&line->type==QStringLiteral("dimension_line")&&line->dimension_end_ticks,
             "physical wall dimension must render a measurable overlay with endpoint ticks");
     };
-    projection(straight_id,"5 m");projection(curved_id,"≈ 3.142 m");
+    projection(straight_id,"5 m");projection(curved_id,"3.142 m");
     const auto before_refusal=window.document().snapshot();
     require(window.createLengthDimension(straight,"invented-edge",{0,0}).isEmpty()&&
         window.createAreaDimension(straight,{0,0}).isEmpty()&&
@@ -883,13 +883,13 @@ void physical_wall_axis_dimension_lifecycle() {
     require(edited.entities().at(curved_id.toStdString())==straight_changed.entities().at(curved_id.toStdString()),
         "curved wall edit must preserve owner identity, placement and presentation");
     require_near(dimension(edited,curved_id.toStdString()).resolve(edited).segment_length_metres,2*std::numbers::pi);
-    projection(curved_id,"≈ 6.283 m");exact_history(window,before_curve_edit,edited);
+    projection(curved_id,"6.283 m");exact_history(window,before_curve_edit,edited);
     const auto svg=temporary.filePath("physical-wall-dimensions.svg");
     require(window.exportDraftSvg(svg),"live physical wall dimensions must export through the actual SVG path");
     QFile input(svg);require(input.open(QIODevice::ReadOnly),"wall dimension SVG must reopen");
     QXmlStreamReader xml(input.readAll());QString svg_text;
     while(!xml.atEnd()){xml.readNext();if(xml.isCharacters())svg_text+=xml.text().toString();}
-    require(!xml.hasError()&&svg_text.contains("10 m")&&svg_text.contains("≈ 6.283 m"),
+    require(!xml.hasError()&&svg_text.contains("10 m")&&svg_text.contains("6.283 m")&&!svg_text.contains("≈ 6.283 m"),
         "wall dimension output must include both live axis lengths");
     const auto project=temporary.filePath("physical-wall-dimensions.bldproj");
     require(window.saveProjectAs(project)&&window.createNewProject(),"wall dimension lifecycle must save and release writer ownership");

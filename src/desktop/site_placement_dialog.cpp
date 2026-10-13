@@ -4,6 +4,8 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/quantity.hpp"
+#include "advanced_section.hpp"
+#include "measurement_format.hpp"
 
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -42,7 +44,16 @@ QString yaw_text(double radians) {
     // before division. Valid stored radians need not fit in degrees; their
     // explicit native unit also preserves unchanged-value retention.
     const auto degrees=radians*(180.0/std::numbers::pi);
+    // Readable degrees for ordinary values. An untouched field keeps the exact
+    // stored radians through its initialValue property, so rounding the shown
+    // text never changes a saved value.
+    if(std::isfinite(degrees) && std::abs(degrees)<1e9)
+        return units::trim_decimal_zeros(units::fixed_number(degrees,6))+" deg";
     return std::isfinite(degrees) ? exact(degrees)+" deg" : exact(radians)+" rad";
+}
+QString preview_yaw(double radians) {
+    const auto degrees=radians*(180.0/std::numbers::pi);
+    return std::isfinite(degrees) ? units::angle_text(degrees,2) : yaw_text(radians);
 }
 QString readable(const Entity& entity,std::size_t ordinal) {
     const auto found=entity.properties.find("name");
@@ -52,8 +63,10 @@ QString readable(const Entity& entity,std::size_t ordinal) {
     auto type=q(entity.type);type.replace('_',' ');
     return QString("%1 %2").arg(type).arg(static_cast<qulonglong>(ordinal));
 }
-QLineEdit* number(QWidget* owner,const char* name,double value,bool angle=false) {
-    auto* result=new QLineEdit(angle?yaw_text(value):exact(value)+" m",owner);
+QLineEdit* number(QWidget* owner,const char* name,double value,bool metric,bool angle=false) {
+    require(std::isfinite(value),"Placement requires finite numbers");
+    // Lengths show in the drawing units; untouched text keeps the exact value.
+    auto* result=new QLineEdit(angle?yaw_text(value):units::length_input_text(value,metric),owner);
     result->setObjectName(name);result->setProperty("initialText",result->text());result->setProperty("initialValue",value);
     result->setMaxLength(768);result->setToolTip(angle?"Yaw accepts deg or rad suffixes. A bare number uses degrees.":"Length in metres or feet and inches. A bare number uses the current drawing units.");
     return result;
@@ -74,14 +87,16 @@ bool same_pose(const SitePresentationPlacement& a,const SitePresentationPlacemen
         a.forward.translation_m.y==b.forward.translation_m.y && a.forward.translation_m.z==b.forward.translation_m.z &&
         a.forward.rotation_radians==b.forward.rotation_radians;
 }
-QString xyz(const SiteRigidTransform& value) {
-    return QString("%1, %2, %3").arg(exact(value.translation_m.x),exact(value.translation_m.y),exact(value.translation_m.z));
+QString xyz(const SiteRigidTransform& value,bool metric) {
+    return QString("%1, %2, %3").arg(units::length_text(value.translation_m.x,metric),
+        units::length_text(value.translation_m.y,metric),units::length_text(value.translation_m.z,metric));
 }
 QString frame(const SitePresentationPlacement& value,const SiteFrameEntities& entities) {
     if(value.source_frame.mode==SiteFrameMode::world)return "World";
     const auto& id=value.source_frame.mode==SiteFrameMode::building?value.source_frame.building_id:value.source_frame.property_id;
     const auto found=entities.find(id);
-    const auto name=found==entities.end()?q(id):readable(found->second,1);
+    // Never show a raw ID; an unresolved owner reads as unnamed.
+    const auto name=found==entities.end()?QString("unnamed"):readable(found->second,1);
     return (value.source_frame.mode==SiteFrameMode::building?"Building: ":"Site: ")+name;
 }
 bool same_change(const ApplyEntityChanges& a,const ApplyEntityChanges& b) {
@@ -173,7 +188,7 @@ public:
         const std::array<double,4> values{initial.translation_m.x,initial.translation_m.y,initial.translation_m.z,initial.rotation_radians};
         const std::array<const char*,4> names{"sitePlacementX","sitePlacementY","sitePlacementZ","sitePlacementYaw"};
         const std::array<const char*,4> labels{"Origin X","Origin Y","Origin Z","Yaw"};
-        for(std::size_t i=0;i<pose.size();++i) {pose[i]=number(owner,names[i],values[i],i==3);form->addRow(labels[i],pose[i]);}
+        for(std::size_t i=0;i<pose.size();++i) {pose[i]=number(owner,names[i],values[i],metric,i==3);form->addRow(labels[i],pose[i]);}
         datum_identifier=new QLineEdit(q(datum),owner);datum_identifier->setObjectName("sitePlacementDatumIdentifier");
         // The captured contract permits 1024 UTF-8 bytes. Its UTF-16 text
         // cannot require more code units; a shorter control limit would
@@ -182,7 +197,7 @@ public:
         datum_identifier->setMaxLength(1024);
         datum_identifier->setToolTip("Exact declared vertical datum identifier; height is explicitly entered, never inferred from terrain or grade.");
         form->addRow("Vertical datum identifier",datum_identifier);
-        datum_height=number(owner,"sitePlacementDatumHeight",height);form->addRow("Datum height at origin",datum_height);
+        datum_height=number(owner,"sitePlacementDatumHeight",height,metric);form->addRow("Datum height at origin",datum_height);
         auto* preview_button=new QPushButton("Preview placement",owner);preview_button->setObjectName("sitePlacementPreview");layout->addWidget(preview_button);
         table=new QTableWidget(0,7,owner);table->setObjectName("sitePlacementPreviewTable");
         table->setHorizontalHeaderLabels({"Owner","Before XYZ (m)","Before yaw","After XYZ (m)","After yaw","Before frame","After frame"});
@@ -290,8 +305,8 @@ public:
         table->setRowCount(static_cast<int>(draft.impacts.size()));
         for(std::size_t row=0;row<draft.impacts.size();++row) {
             const auto& impact=draft.impacts[row];
-            const std::array<QString,7> cells{q(impact.display_name),xyz(impact.before.forward),yaw_text(impact.before.forward.rotation_radians),
-                xyz(impact.after.forward),yaw_text(impact.after.forward.rotation_radians),frame(impact.before,source.entities()),frame(impact.after,source.entities())};
+            const std::array<QString,7> cells{q(impact.display_name),xyz(impact.before.forward,metric),yaw_text(impact.before.forward.rotation_radians),
+                xyz(impact.after.forward,metric),yaw_text(impact.after.forward.rotation_radians),frame(impact.before,source.entities()),frame(impact.after,source.entities())};
             for(std::size_t col=0;col<cells.size();++col) {
                 auto* item=new QTableWidgetItem(cells[col]);item->setToolTip(cells[col]);table->setItem(static_cast<int>(row),static_cast<int>(col),item);
             }

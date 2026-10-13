@@ -163,7 +163,7 @@ def classify_source_kit_path(path: str) -> str:
         or filename == "copying"
         or filename.startswith("copying.")
         or filename.startswith("notice")
-        or lowered == "assets/fonts/ofl.txt"
+        or lowered in {"assets/fonts/ofl.txt", "assets/fonts/ibm-plex-ofl.txt"}
     ):
         return "licenses"
     if lowered == "readme.md" or lowered.startswith("docs/") or lowered == "packaging/readme.md":

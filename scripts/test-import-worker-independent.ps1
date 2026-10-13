@@ -152,10 +152,17 @@ function New-ImmutableDesktopFixtureRoot([string]$CaptureRoot) {
     $full = [Security.AccessControl.FileSystemRights]::FullControl
     $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
         [Security.Principal.WindowsIdentity]::GetCurrent().User, $read, $inheritance, $none, $allow))
-    Add-Type @'
+    # AppContainer names are package-relative: a host with package identity
+    # (e.g. the Microsoft Store/MSIX pwsh, including children it launches from
+    # its own package) derives a child-container SID that never matches the
+    # unpackaged broker in the test binaries, so the worker cannot read its
+    # module root (STATUS_DLL_NOT_FOUND). Derive the SID only in an unpackaged
+    # process and fail closed if no such process is available.
+    $fixtureSource = @'
 using System;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
+using System.Text;
 public static class VertexAppContainerFixture {
     [DllImport("userenv.dll", CharSet=CharSet.Unicode)]
     static extern int CreateAppContainerProfile(string name, string displayName, string description,
@@ -164,7 +171,16 @@ public static class VertexAppContainerFixture {
     static extern int DeriveAppContainerSidFromAppContainerName(string name, out IntPtr sid);
     [DllImport("advapi32.dll")]
     static extern IntPtr FreeSid(IntPtr sid);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode)]
+    static extern int GetCurrentPackageFullName(ref uint length, StringBuilder name);
+    public static bool HasPackageIdentity() {
+        uint length = 0;
+        // APPMODEL_ERROR_NO_PACKAGE (15700) is the only proof of an unpackaged process.
+        return GetCurrentPackageFullName(ref length, null) != 15700;
+    }
     public static SecurityIdentifier Sid() {
+        if (HasPackageIdentity())
+            throw new InvalidOperationException("AppContainer SID derivation requires an unpackaged process.");
         IntPtr sid;
         int result = CreateAppContainerProfile("Vertex.ImportWorker", "Vertex import worker",
             "Local offline import isolation", IntPtr.Zero, 0, out sid);
@@ -176,8 +192,24 @@ public static class VertexAppContainerFixture {
     }
 }
 '@
+    Add-Type -TypeDefinition $fixtureSource
+    $workerSid = if (![VertexAppContainerFixture]::HasPackageIdentity()) {
+        [VertexAppContainerFixture]::Sid()
+    } else {
+        # Windows PowerShell is outside every app package, so it does not
+        # inherit this host's identity; Sid() itself re-verifies that.
+        $helper = Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\v1.0\powershell.exe'
+        $helperCommand = "`$ProgressPreference = 'SilentlyContinue'`nAdd-Type -TypeDefinition @'`n$fixtureSource`n'@`n" +
+            '[Console]::Out.Write([VertexAppContainerFixture]::Sid().Value)'
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($helperCommand))
+        $derived = & $helper -NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded
+        if ($LASTEXITCODE -ne 0 -or "$derived" -notmatch '^S-1-15-2(-\d+){7}$') {
+            throw "Unpackaged AppContainer SID derivation failed; run this script from an unpackaged pwsh: $derived"
+        }
+        [Security.Principal.SecurityIdentifier]::new("$derived")
+    }
     $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
-        [VertexAppContainerFixture]::Sid(), $read, $inheritance, $none, $allow))
+        $workerSid, $read, $inheritance, $none, $allow))
     foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
             [Security.Principal.SecurityIdentifier]::new($sid), $full, $inheritance, $none, $allow))

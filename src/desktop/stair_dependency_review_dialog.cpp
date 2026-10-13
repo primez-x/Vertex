@@ -46,11 +46,17 @@ QString current_attachment(const DocumentSnapshot& source,
     return object_name(source, dependency.stair_id, QStringLiteral("Stair")) +
         QStringLiteral(" / ") + attachment;
 }
-QString target_name(const PhaseStairReplacementDependencyTarget& target) {
+// Readable target label: never shows a stable child ID. Without a display name the
+// target is numbered by its position among the dependency's targets of the same role.
+QString target_name(const PhaseStairReplacementDependency& dependency, std::size_t target_index) {
+    const auto& target = dependency.valid_targets[target_index];
     if (!target.display_name.empty()) return text(target.display_name);
     if (target.role == "top") return QStringLiteral("Stair top");
+    std::size_t ordinal = 1;
+    for (std::size_t index = 0; index < target_index; ++index)
+        if (dependency.valid_targets[index].role == target.role) ++ordinal;
     return (target.role == "landing" ? QStringLiteral("Landing") : QStringLiteral("Flight")) +
-        QStringLiteral(" ") + text(target.child_id);
+        QStringLiteral(" %1").arg(static_cast<qulonglong>(ordinal));
 }
 }
 
@@ -107,8 +113,9 @@ public:
             choice->setObjectName(QStringLiteral("stairDependencyChoice_%1").arg(row));
             choice->setAccessibleName(QStringLiteral("Action for %1").arg(name));
             choice->addItem(QStringLiteral("Choose an action"));
-            for (const auto& target : dependency.valid_targets) {
-                choice->addItem(QStringLiteral("Move to %1").arg(target_name(target)),
+            for (std::size_t target_index = 0; target_index < dependency.valid_targets.size(); ++target_index) {
+                const auto& target = dependency.valid_targets[target_index];
+                choice->addItem(QStringLiteral("Move to %1").arg(target_name(dependency, target_index)),
                     static_cast<int>(PhaseStairReplacementDependencyAction::rehost));
                 choice->setItemData(choice->count() - 1, text(target.target_key), Qt::UserRole + 1);
             }
@@ -138,6 +145,8 @@ public:
         auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, dialog);
         apply = buttons->button(QDialogButtonBox::Apply);
         apply->setText(QStringLiteral("Continue stair edit"));
+        apply->setObjectName(QStringLiteral("stairDependencyApply"));
+        apply->setDefault(true);
         QObject::connect(apply, &QPushButton::clicked, dialog, &StairDependencyReviewDialog::accept);
         QObject::connect(buttons, &QDialogButtonBox::rejected, dialog, &StairDependencyReviewDialog::reject);
         layout->addWidget(buttons);

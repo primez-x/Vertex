@@ -2,6 +2,7 @@
 #include "sketch/document_digest.hpp"
 #include "sketch/visualization/native_geometry_preparation.hpp"
 #include "framebuffer_image.hpp"
+#include "../desktop/measurement_format.hpp"
 
 #include "sketch/architectural_workflow_contract.hpp"
 #include "sketch/document.hpp"
@@ -219,37 +220,8 @@ occ::handle<AIS_Shape> prepared_presentation(const PreparedNativeSolid& solid) {
 QString component_dimension_text(double metres, bool metric) {
     if (!std::isfinite(metres) || metres <= 0.0)
         throw std::invalid_argument("native component dimension has no physical span");
-    if (metric) {
-        const auto rounded = std::round(metres * 1000.0) / 1000.0;
-        if (!std::isfinite(rounded) || rounded == 0.0)
-            return QStringLiteral("%1 m").arg(metres, 0, 'g', 12);
-        auto number = QString::number(rounded, 'f', 3);
-        while (number.endsWith(QLatin1Char('0'))) number.chop(1);
-        if (number.endsWith(QLatin1Char('.'))) number.chop(1);
-        return (std::abs(metres - rounded) > 1e-10 ? QStringLiteral("≈ ") : QString{}) +
-               number + QStringLiteral(" m");
-    }
-    const auto inches = metres / 0.0254;
-    const auto sixteenths = std::round(inches * 16.0);
-    if (!std::isfinite(sixteenths) || sixteenths > 9e15) {
-        const auto feet = metres / 0.3048;
-        return std::isfinite(feet) ? QStringLiteral("≈ %1 ft").arg(feet, 0, 'g', 12)
-                                  : QStringLiteral("%1 m").arg(metres, 0, 'g', 12);
-    }
-    if (sixteenths == 0.0) return QStringLiteral("%1 in").arg(inches, 0, 'g', 12);
-    const auto ticks = static_cast<qint64>(sixteenths);
-    const auto feet = ticks / 192;
-    const auto whole = (ticks % 192) / 16;
-    const auto numerator = ticks % 16;
-    QString inch_text = whole || !numerator ? QString::number(whole) : QString{};
-    if (numerator) {
-        const auto divisor = std::gcd(numerator, qint64{16});
-        if (!inch_text.isEmpty()) inch_text += QLatin1Char(' ');
-        inch_text += QStringLiteral("%1/%2").arg(numerator / divisor).arg(16 / divisor);
-    }
-    const auto prefix = std::abs(inches * 16.0 - sixteenths) > 1e-7 ? QStringLiteral("≈ ") : QString{};
-    return prefix + (feet > 0 ? QStringLiteral("%1 ft %2 in").arg(feet).arg(inch_text)
-                             : inch_text + QStringLiteral(" in"));
+    // The one Vertex measurement formatter (design-system units, "≈" rule).
+    return sketch::desktop::units::length_text(metres, metric);
 }
 
 struct ComponentDimensionPresentation {

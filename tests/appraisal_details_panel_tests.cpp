@@ -25,6 +25,7 @@
 #include <QTreeWidget>
 #include <QTextDocument>
 #include <QPlainTextEdit>
+#include <QRegularExpression>
 #include <QToolButton>
 #include <cmath>
 #include <exception>
@@ -295,7 +296,7 @@ void categories_floors_deductions_and_phase() {
     auto document=sketch::Document::create(entities);panel.setDocument(document.snapshot(),"p",true);panel.setSelectedBoundary("a");
     require(panel.report()->qualified && label(panel,"appraisalDetailsGla")=="10.00 m²","union deductions and other categories never inflate GLA");
     const auto totals=label(panel,"appraisalDetailsTotals");
-    require(totals.contains("Garage") && totals.contains("4.00 m²") && totals.contains("Below grade finished") && totals.contains("9.00 m²"),"separate garage and below grade totals");
+    require(totals.contains("Garage") && totals.contains("4.00 m²") && totals.contains("Basement · finished") && totals.contains("9.00 m²"),"separate garage and basement (below-grade) totals in appraisal terms");
     const auto trace=label(panel,"appraisalDetailsTrace");
     require(trace.contains("Requested: 4.00 m²") && trace.contains("Applied: 2.00 m²") && trace.contains("Physical net"),"overlap deduction trace exposes requested and marginal applied values");
     std::set<std::string,std::less<>> visible;for(const auto& entry:entities)if(entry.id!="basement")visible.insert(entry.id);
@@ -617,6 +618,57 @@ void native_stale_context_withholds_actions_and_totals() {
         window.selectedEntityId()=="a", "rejected semantic corruption leaves current Details totals and action intact");
 }
 
+// FB-011: the GLA state is visible without Setup, withheld issues name their
+// areas and open the action that fixes them, and the printed report leads
+// with the subject and GLA in appraisal terms with provenance in an appendix.
+void withheld_gla_names_issues_and_report_uses_appraisal_terms() {
+    {
+        AppraisalDetailsPanel panel;auto entities=fixture();entities.back().properties["appraisal_facts"].erase("finish");
+        auto document=sketch::Document::create(entities);panel.setDocument(document.snapshot(),"p",false);
+        const auto issues=label(panel,"appraisalDetailsIssues");
+        require(!panel.report()->qualified && label(panel,"appraisalDetailsGla")=="Totals unavailable" &&
+            label(panel,"appraisalDetailsStatus").startsWith("GLA withheld"),"missing facts withhold GLA and say why");
+        require(issues.contains("Living") && issues.contains("Finish is not declared") && !issues.contains("a: ") &&
+            !issues.contains("Declare finish."),"withheld issue names its area for people instead of its ID");
+        const auto link=QRegularExpression(QStringLiteral("issue:\\d+:facts")).match(issues);
+        require(link.hasMatch() && issues.contains(">Edit facts<"),"issue links to the existing Edit facts action");
+        QString edited;panel.setFactsRequested([&](const QString& id,sketch::Revision){edited=id;});
+        emit panel.findChild<QLabel*>("appraisalDetailsIssues")->linkActivated(link.captured(0));
+        require(edited=="a" && panel.selectedBoundaryId()=="a","issue link selects the area and opens its facts editor");
+        require(label(panel,"appraisalDetailsRounding").contains("Display precision 2"),"displayed GLA names its rounding basis");
+        entities.back().properties.erase("name");document=sketch::Document::create(entities);panel.setDocument(document.snapshot(),"p",false);
+        require(label(panel,"appraisalDetailsIssues").contains("Area · Ground floor"),"unnamed area is named by type and floor, never by ID");
+    }
+    {
+        auto entities=fixture();auto document=sketch::Document::create(entities);const auto source=document.snapshot();
+        const auto report=sketch::build_appraisal_document_report(source,"p");
+        const auto html=sketch::desktop::appraisal_report_html(source,report,false);
+        const auto appendix=html.indexOf("Appendix: source provenance");
+        require(appendix>0 && html.indexOf(QString::fromStdString(source.document_id()))>appendix &&
+            html.indexOf(QString::fromStdString(report.source_entities_sha256))>appendix && html.indexOf("Project revision")>appendix,
+            "page one leads with the subject; IDs, digest and revision are kept in the final appendix");
+        require(html.indexOf("Gross living area (GLA)")>0 && html.indexOf("Gross living area (GLA)")<html.indexOf("Area calculations") &&
+            html.contains("GLA · Living") && !html.contains("Above grade finished"),"GLA summary and area rows use appraisal terms");
+        require(html.contains("1/1 (no adjustment)"),"the exact factor is explained");
+        auto malformed=entities;malformed.back().properties["appraisal_facts"]["finish"]=42;
+        auto broken=sketch::Document::create(malformed);const auto broken_source=broken.snapshot();
+        const auto broken_html=sketch::desktop::appraisal_report_html(broken_source,sketch::build_appraisal_document_report(broken_source,"p"),false);
+        require(!broken_html.contains("finish must be a string") && broken_html.contains("Finish has an unreadable recorded value") &&
+            broken_html.contains("GLA withheld"),"validator text reaches the page as a plain fact and fix");
+    }
+    {
+        QTemporaryDir directory;require(directory.isValid(),"unconfigured GLA fixture has an isolated directory");
+        auto entities=fixture();entities.front().properties.erase("calculation_workflow");
+        auto document=std::make_shared<sketch::Document>(sketch::Document::create(entities));
+        MainWindow window(document,nullptr,directory.filePath("text-library.json"));
+        window.setAttribute(Qt::WA_DontShowOnScreen);window.resize(1280,900);window.show();QApplication::processEvents();
+        auto& shortcut=child<QToolButton>(window,"appraisalGlaShortcut");
+        auto& panel=child<AppraisalDetailsPanel>(window,"appraisalDetailsPanel");
+        require(!shortcut.isHidden() && shortcut.text()=="GLA · setup required" && shortcut.toolTip().contains("Setup") &&
+            label(panel,"appraisalDetailsStatus").startsWith("GLA withheld"),"a drawn area shows the withheld GLA state before Setup");
+    }
+}
+
 }
 int main(int argc,char** argv) {
     sketch::testing::noninteractive_errors();QStandardPaths::setTestModeEnabled(true);QApplication app(argc,argv);
@@ -627,6 +679,7 @@ int main(int argc,char** argv) {
         app.setFont(QFont(QStringLiteral("Inter"),10));
         narrow_details_keeps_dimensions_and_full_sources_readable();ansi_ceiling_height_uses_declared_acquisition_precision();ansi_canonical_units_declarations_and_curve_dimensions();qualified_units_refresh_and_callbacks();undeclared_and_invalid_measurements();
         categories_floors_deductions_and_phase();stale_wall_sources();native_main_window_details();live_gla_shortcut_matches_authoritative_details();area_arithmetic_is_shared_with_printed_report();signed_curve_arithmetic_is_shared_with_printed_report();ansi_fractional_components_preserve_unrounded_gross();editable_reporting_contract_matches_details();native_stale_context_withholds_actions_and_totals();
+        withheld_gla_names_issues_and_report_uses_appraisal_terms();
         std::cout<<"appraisal_details_panel_tests passed\n";return 0;
     } catch(const std::exception& failure) {std::cerr<<"appraisal_details_panel_tests: "<<failure.what()<<'\n';return 1;}
 }

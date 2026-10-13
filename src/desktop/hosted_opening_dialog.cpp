@@ -108,31 +108,43 @@ HostedOpeningDialog::HostedOpeningDialog(const Wall& host, Unit unit, bool windo
     const std::array<const char*,4> names{"openingOffset","openingWidth","openingSill","openingHeight"};
     const bool metric=unit==Unit::metre || unit==Unit::centimetre || unit==Unit::millimetre;
     const std::array<QString,4> defaults{metric?"0.75 m":"2 ft",metric?"0.9 m":"3 ft",
-        window?(metric?"0.9 m":"3 ft"):"0 m",window?(metric?"1.2 m":"4 ft"):(metric?"2.1 m":"7 ft")};
+        window?(metric?"0.9 m":"3 ft"):(metric?"0 m":"0 ft"),window?(metric?"1.2 m":"4 ft"):(metric?"2.1 m":"7 ft")};
+    const std::array<QString,4> placeholders{metric?"e.g. 0.75 m":"e.g. 2 ft",metric?"e.g. 0.9 m":"e.g. 3 ft",
+        metric?"e.g. 0.9 m":"e.g. 3 ft",metric?"e.g. 2.1 m":"e.g. 7 ft"};
+    const std::array<const char*,4> help{"Distance from the start of the wall to the near edge of the opening.",
+        "Clear width of the opening.","Height of the bottom of the opening above the wall base.",
+        "Clear height of the opening."};
     for(std::size_t i=0;i<fields_.size();++i) {
         fields_[i]=new QLineEdit(defaults[i],this);
         fields_[i]->setObjectName(names[i]);
+        fields_[i]->setPlaceholderText(placeholders[i]);
+        fields_[i]->setToolTip(QString::fromUtf8(help[i]));
+        fields_[i]->setAccessibleName(QString::fromUtf8(labels[i]));
         form->addRow(labels[i],fields_[i]);
     }
-    layout->addLayout(form);
     if(!window) {
         swing_=new QCheckBox("Show door swing",this);
         swing_->setObjectName("showDoorSwing");
-        auto* row=new QHBoxLayout;
-        row->addWidget(swing_);
+        form->addRow(QString(),swing_);
         hinge_=new QComboBox(this);
         hinge_->setObjectName("doorHinge");
+        hinge_->setAccessibleName("Hinge side");
         hinge_->addItems({"Start jamb","End jamb"});
-        hinge_->setToolTip("Jamb order follows the host wall's drawing direction.");
+        hinge_->setToolTip("Start and end follow the direction the wall was drawn.");
         side_=new QComboBox(this);
         side_->setObjectName("doorSwingSide");
-        side_->addItems({"Swing left","Swing right"});
-        side_->setToolTip("Side relative to the host wall's drawing direction.");
-        row->addWidget(hinge_); row->addWidget(side_);
+        side_->setAccessibleName("Opens toward");
+        side_->addItems({"Left side","Right side"});
+        side_->setToolTip("Left and right follow the direction the wall was drawn.");
+        form->addRow("Hinge side",hinge_);
+        form->addRow("Opens toward",side_);
         hinge_->setEnabled(false); side_->setEnabled(false);
-        connect(swing_,&QCheckBox::toggled,this,[this](bool on){hinge_->setEnabled(on);side_->setEnabled(on);});
-        layout->addLayout(row);
+        connect(swing_,&QCheckBox::toggled,this,[this](bool on){
+            hinge_->setEnabled(on);side_->setEnabled(on);validate();});
+        connect(hinge_,qOverload<int>(&QComboBox::currentIndexChanged),this,[this](int){validate();});
+        connect(side_,qOverload<int>(&QComboBox::currentIndexChanged),this,[this](int){validate();});
     }
+    layout->addLayout(form);
     if(host.baseline.sweep_radians!=0) layout->addWidget(new QLabel("Unrolled wall elevation",this));
     preview_=new OpeningPreview(host_,this);
     layout->addWidget(preview_,1);

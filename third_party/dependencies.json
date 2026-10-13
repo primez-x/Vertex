@@ -12,6 +12,66 @@
       "source": "https://github.com/google/fonts/tree/0b58fb370093f9a9f4ff785d94405710b79de67c/ofl/inter"
     },
     {
+      "name": "IBM Plex Sans Regular",
+      "version": "1.1.0",
+      "license": "OFL-1.1",
+      "path": "assets/fonts/IBMPlexSans-Regular.ttf",
+      "sha256": "975dcda37d80f038dcd143c22e33ca2d97a0cc5a929aace1c749153b0fe1afa5",
+      "license_path": "assets/fonts/IBM-Plex-OFL.txt",
+      "source": "https://github.com/IBM/plex/releases/tag/%40ibm/plex-sans%401.1.0",
+      "archive_url": "https://github.com/IBM/plex/releases/download/%40ibm/plex-sans%401.1.0/ibm-plex-sans.zip",
+      "archive_sha256": "fb365d910566e6d199cc2c15579a7dd9a267128e18431a394ed81f1970c69200",
+      "archive_member": "ibm-plex-sans/fonts/complete/ttf/IBMPlexSans-Regular.ttf"
+    },
+    {
+      "name": "IBM Plex Sans Medium",
+      "version": "1.1.0",
+      "license": "OFL-1.1",
+      "path": "assets/fonts/IBMPlexSans-Medium.ttf",
+      "sha256": "331c8639d7598b2cde62a911a71db195e30cb655cd6bdf2e324a7e984955f907",
+      "license_path": "assets/fonts/IBM-Plex-OFL.txt",
+      "source": "https://github.com/IBM/plex/releases/tag/%40ibm/plex-sans%401.1.0",
+      "archive_url": "https://github.com/IBM/plex/releases/download/%40ibm/plex-sans%401.1.0/ibm-plex-sans.zip",
+      "archive_sha256": "fb365d910566e6d199cc2c15579a7dd9a267128e18431a394ed81f1970c69200",
+      "archive_member": "ibm-plex-sans/fonts/complete/ttf/IBMPlexSans-Medium.ttf"
+    },
+    {
+      "name": "IBM Plex Sans SemiBold",
+      "version": "1.1.0",
+      "license": "OFL-1.1",
+      "path": "assets/fonts/IBMPlexSans-SemiBold.ttf",
+      "sha256": "a20caf8286023a6a7a85e40b1d2a4ae9fc3e3b1f9eda8f4c542dd4986af67bb1",
+      "license_path": "assets/fonts/IBM-Plex-OFL.txt",
+      "source": "https://github.com/IBM/plex/releases/tag/%40ibm/plex-sans%401.1.0",
+      "archive_url": "https://github.com/IBM/plex/releases/download/%40ibm/plex-sans%401.1.0/ibm-plex-sans.zip",
+      "archive_sha256": "fb365d910566e6d199cc2c15579a7dd9a267128e18431a394ed81f1970c69200",
+      "archive_member": "ibm-plex-sans/fonts/complete/ttf/IBMPlexSans-SemiBold.ttf"
+    },
+    {
+      "name": "IBM Plex Mono Regular",
+      "version": "2.5.0",
+      "license": "OFL-1.1",
+      "path": "assets/fonts/IBMPlexMono-Regular.ttf",
+      "sha256": "7c6fbddca4b700be918f5f6183d9bd4464fa427fe435f0b480d77fe2bb8c5a43",
+      "license_path": "assets/fonts/IBM-Plex-OFL.txt",
+      "source": "https://github.com/IBM/plex/releases/tag/%40ibm/plex-mono%402.5.0",
+      "archive_url": "https://github.com/IBM/plex/releases/download/%40ibm/plex-mono%402.5.0/ibm-plex-mono.zip",
+      "archive_sha256": "6d23f01257663d8cc49a0d64c22ced630b79e0e2a0ac08a0da86e9a38bbc481c",
+      "archive_member": "ibm-plex-mono/fonts/complete/ttf/IBMPlexMono-Regular.ttf"
+    },
+    {
+      "name": "IBM Plex Mono Medium",
+      "version": "2.5.0",
+      "license": "OFL-1.1",
+      "path": "assets/fonts/IBMPlexMono-Medium.ttf",
+      "sha256": "98fbd727aae340b236955879dabed4d991aac9e8e90b3b2a67ce4a59221cc97c",
+      "license_path": "assets/fonts/IBM-Plex-OFL.txt",
+      "source": "https://github.com/IBM/plex/releases/tag/%40ibm/plex-mono%402.5.0",
+      "archive_url": "https://github.com/IBM/plex/releases/download/%40ibm/plex-mono%402.5.0/ibm-plex-mono.zip",
+      "archive_sha256": "6d23f01257663d8cc49a0d64c22ced630b79e0e2a0ac08a0da86e9a38bbc481c",
+      "archive_member": "ibm-plex-mono/fonts/complete/ttf/IBMPlexMono-Medium.ttf"
+    },
+    {
       "name": "Tesseract English fast model",
       "version": "4.1.0",
       "commit": "65727574dfcd264acbb0c3e07860e4e9e9b22185",

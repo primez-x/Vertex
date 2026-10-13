@@ -2521,9 +2521,13 @@ void appraisal_area_properties_entry_points_are_visible() {
                 if (auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget())) menu->close();
             }
         });
+        // Right-click the area body away from its centered generated callout:
+        // since Oct 7 a click on that painted label selects the label and opens
+        // its own placement menu (canvas interaction contract) instead of the
+        // area's object menu.
         const QPointF point = QRectF(canvas->rect()).center() + QPointF(
-            (1.524 - canvas->viewCenter().x) * canvas->viewScale(),
-            -(1.524 - canvas->viewCenter().y) * canvas->viewScale());
+            (0.45 - canvas->viewCenter().x) * canvas->viewScale(),
+            -(0.45 - canvas->viewCenter().y) * canvas->viewScale());
         QMouseEvent press(QEvent::MouseButtonPress, point, canvas->mapToGlobal(point.toPoint()),
                           Qt::RightButton, Qt::RightButton, Qt::NoModifier);
         QApplication::sendEvent(canvas, &press);

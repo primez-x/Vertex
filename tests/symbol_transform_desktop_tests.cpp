@@ -4,6 +4,7 @@
 #include "sketch/boundary_entity.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "../src/desktop/plan_canvas.hpp"
+#include "../src/desktop/measurement_format.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <QApplication>
@@ -264,7 +265,7 @@ void requireRenderedDegrees(sketch::desktop::PlanCanvas& canvas, double degrees)
     font.setPixelSize(11);
     font.setWeight(QFont::Medium);
     const QFontMetricsF metrics(font, &screenshot);
-    const auto token = QStringLiteral("·  %1°").arg(degrees, 0, 'f', 1);
+    const auto token = QStringLiteral("·  %1").arg(sketch::desktop::units::angle_text(degrees));
     const auto width = static_cast<int>(std::ceil(metrics.horizontalAdvance(token)))+6;
     const auto height = static_cast<int>(std::ceil(metrics.height()))+6;
     // The callout may place its baseline at a fractional pixel. Exercise

@@ -1,7 +1,10 @@
 # Native desktop workflow checkpoint
 
-Canvas drawing and selected-size readouts use millimetres or fractional inches
-instead of long decimal expansions. `≈` identifies display rounding; exact
+Canvas drawing and selected-size readouts follow the design-system units
+(`src/desktop/measurement_format.hpp`): feet-inches to 1/16" (`39' 4 7/16"`) or
+metres to the millimetre (`2.25 m`), areas as `1,842.5 sf` / `171.2 m²`, angles as
+`45°`. `≈` appears only when a value is shown less precisely than the display
+precision (a nonzero value that reads as zero, or an out-of-range fallback); exact
 geometry and entered measurements are retained. The overview includes unfinished
 boundary, measured-line and wall drafts without making them document entities.
 
@@ -38,9 +41,12 @@ selected SDK prefix. PDF output uses QtGui's `QPdfWriter` and QtPrintSupport's
 target does not add a cloud design dependency or a new account requirement. It
 also links the existing document/storage and precision
 libraries, plus the repository's nlohmann-json include target. The executable
-loads the bundled `:/fonts/Inter.ttf` resource and sets it as the application
-font before constructing the window; visual smoke exits nonzero if that
-resource is unavailable. Native Windows runs also link and include the
+registers the bundled IBM Plex Sans and IBM Plex Mono faces (`:/fonts`
+resource compiled into `sketch_desktop`) and sets IBM Plex Sans, falling back
+to Segoe UI, as the application font before constructing the window; visual
+smoke exits nonzero if those resources are unavailable. The bundled
+`:/fonts/Inter.ttf` resource stays registered for documents and annotation
+styles that name Inter. Native Windows runs also link and include the
 `sketch::visualization::NativeModelView` source, which needs OCCT's
 `TKService`, `TKV3d`, and `TKOpenGl` visualization toolkits in addition to the
 existing modeling toolkit set. The viewer header API is

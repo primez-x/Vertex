@@ -211,16 +211,16 @@ void test_overview_navigation_preserves_native_authoring_drafts() {
 
 void test_clicked_wall_geometry_and_visible_lengths_at_zoom() {
     struct Example { bool metric; double scale; double step; const char* text; };
-    for (const auto example : {Example{false,20,0.3048,"13 ft 0 in"},
-                               Example{false,80,0.0762,"3 ft 3 in"},
-                               Example{false,400,0.0254,"1 ft 1 in"},
-                               Example{false,1600,0.00635,"3 1/4 in"},
-                               Example{false,4000,0.0015875,"13/16 in"},
+    for (const auto example : {Example{false,20,0.3048,"13' 0\""},
+                               Example{false,80,0.0762,"3' 3\""},
+                               Example{false,400,0.0254,"1' 1\""},
+                               Example{false,1600,0.00635,"3 1/4\""},
+                               Example{false,4000,0.0015875,"13/16\""},
                                Example{true,20,0.5,"6.5 m"},
                                Example{true,80,0.1,"1.3 m"},
-                               Example{true,400,0.02,"260 mm"},
-                               Example{true,1600,0.005,"65 mm"},
-                               Example{true,4000,0.002,"26 mm"}}) {
+                               Example{true,400,0.02,"0.26 m"},
+                               Example{true,1600,0.005,"0.065 m"},
+                               Example{true,4000,0.002,"0.026 m"}}) {
         MainWindow window;
         auto& canvas=prepare(window);
         window.setMetricUnits(example.metric);
@@ -253,27 +253,37 @@ void test_clicked_wall_geometry_and_visible_lengths_at_zoom() {
                 window.document().snapshot().entities()==after.entities(),
                 "stationary right click ends only the pending wall chain without a menu or history edit");
     }
-    require(PlanCanvas::drawingLengthText(31.5*0.3048,false)==QStringLiteral("31 ft 6 in") &&
-            PlanCanvas::drawingLengthText((31*12+6.25)*0.0254,false)==QStringLiteral("31 ft 6 1/4 in"),
+    require(PlanCanvas::drawingLengthText(31.5*0.3048,false)==QStringLiteral("31' 6\"") &&
+            PlanCanvas::drawingLengthText((31*12+6.25)*0.0254,false)==QStringLiteral("31' 6 1/4\""),
             "drawing fractional labels retain whole feet, inches, and reduced fractions");
 }
 
-void test_arbitrary_drawing_lengths_are_readable_without_claiming_exactness() {
+void test_arbitrary_drawing_lengths_round_to_display_precision() {
     struct Example { double metres; bool metric; const char* text; };
-    for (const auto example : {Example{std::sqrt(5.0),true,"≈ 2.236 m"},
-                               Example{0.1234567,true,"≈ 123 mm"},
-                               Example{-0.1234567,true,"≈ -123 mm"},
+    for (const auto example : {Example{std::sqrt(5.0),true,"2.236 m"},
+                               Example{0.1234567,true,"0.123 m"},
+                               Example{-0.1234567,true,"-0.123 m"},
                                Example{1.234,true,"1.234 m"},
-                               Example{0.026,true,"26 mm"},
-                               Example{0.1234567,false,"≈ 4 7/8 in"},
-                               Example{-0.1234567,false,"≈ -4 7/8 in"},
-                               Example{11.99*0.0254,false,"≈ 1 ft 0 in"},
-                               Example{0.0015875,false,"1/16 in"},
-                               Example{0.0,true,"0 mm"},
-                               Example{0.0,false,"0 in"}}) {
+                               Example{0.026,true,"0.026 m"},
+                               Example{2.5,true,"2.5 m"},
+                               Example{3.0,true,"3 m"},
+                               Example{0.0001,true,"≈ 0 m"},
+                               Example{-0.0001,true,"≈ 0 m"},
+                               Example{0.1234567,false,"4 7/8\""},
+                               Example{-0.1234567,false,"-4 7/8\""},
+                               Example{11.99*0.0254,false,"1' 0\""},
+                               Example{-(31.5*0.3048),false,"-31' 6\""},
+                               Example{(6*12+0.5)*0.0254,false,"6' 1/2\""},
+                               Example{(39*12+4+7.0/16.0)*0.0254,false,"39' 4 7/16\""},
+                               Example{0.0015875,false,"1/16\""},
+                               Example{0.0001,false,"≈ 0\""},
+                               Example{-0.0001,false,"≈ 0\""},
+                               Example{0.0,true,"0 m"},
+                               Example{0.0,false,"0\""}}) {
         require(PlanCanvas::drawingLengthText(example.metres,example.metric)==
                     QString::fromUtf8(example.text),
-                "drawing lengths use millimetres or sixteenths with an honest approximation marker");
+                "drawing lengths use metres to the millimetre or feet-inches to the sixteenth, "
+                "marking only nonzero values that display as zero");
     }
     for (const auto metric : {false,true}) {
         MainWindow window;
@@ -286,9 +296,13 @@ void test_arbitrary_drawing_lengths_are_readable_without_claiming_exactness() {
         click(canvas,{0,0});
         mouse(canvas,QEvent::MouseMove,screen(canvas,{1,2}));
         require(canvas.wallPreview() && close(canvas.wallPreview()->end,{1,2}) &&
-                    canvas.wallPreview()->dimension_text.startsWith(QStringLiteral("≈ ")) &&
+                    !canvas.wallPreview()->dimension_text.contains(QStringLiteral("≈")) &&
+                    canvas.wallPreview()->dimension_text==PlanCanvas::drawingLengthText(
+                        std::hypot(canvas.wallPreview()->end.x-canvas.wallPreview()->start.x,
+                                   canvas.wallPreview()->end.y-canvas.wallPreview()->start.y),metric) &&
                     canvas.wallPreview()->dimension_text.size()<24,
-                "arbitrary pending wall readout is compact while the endpoint retains exact geometry");
+                "arbitrary pending wall readout is compact and unmarked within display precision "
+                "while the endpoint retains exact geometry");
         capture(canvas,QStringLiteral("compact-arbitrary-%1.png").arg(metric ? "metric" : "imperial"));
         const auto before=window.document().snapshot();
         click(canvas,{1,2});
@@ -370,7 +384,7 @@ void test_measurement_draft_length_closure_and_right_cancel() {
                 "measurement click accepts exactly its live rubber-band endpoint");
         require(!canvas.boundaryDraftPreview()->labels.empty() &&
                 canvas.boundaryDraftPreview()->labels.front().text==
-                    (metric ? QStringLiteral("1.3 m") : QStringLiteral("3 ft 3 in")),
+                    (metric ? QStringLiteral("1.3 m") : QStringLiteral("3' 3\"")),
                 "native draft dimension exposes the same exact useful length as its geometry");
         right_drag(canvas);
         require(canvas.boundaryDraftPreview() && window.document().revision()==original.revision(),
@@ -882,7 +896,7 @@ int main(int argc,char** argv) {
             return 0;
         }
         test_clicked_wall_geometry_and_visible_lengths_at_zoom();
-        test_arbitrary_drawing_lengths_are_readable_without_claiming_exactness();
+        test_arbitrary_drawing_lengths_round_to_display_precision();
         test_overview_navigation_preserves_native_authoring_drafts();
         test_typed_exact_and_endpoint_priority();
         test_measurement_draft_length_closure_and_right_cancel();

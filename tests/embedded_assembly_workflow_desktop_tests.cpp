@@ -101,8 +101,11 @@ void modal(const char* name,const std::function<void()>& open,const std::functio
 // A mixed-clipboard Paste (October 11) arms an interactive placement session
 // on the active plan canvas rather than publishing synchronously: a worker
 // prepares the group, one click chooses its anchor, and a click after the
-// admitted preview completes publishes everything as one revision. Early
-// clicks are refused with "wait" diagnostics without cancelling the session.
+// admitted preview completes publishes everything as one revision. Clicks
+// before the group is ready are refused with "wait" diagnostics, but a press
+// while the final confirmation preview is still pending retires that preview
+// (PlanCanvas::resetGesture) and the session is then cancelled ("preview was
+// retired. Paste again."). Like a user, never click while it is pending.
 void place_mixed_paste(MainWindow& window,Revision before) {
     PlanCanvas* canvas=dynamic_cast<PlanCanvas*>(QApplication::focusWidget());
     if(!canvas)for(const auto* name:{"measurementPlanCanvas","architecturalPlanCanvas"})
@@ -112,6 +115,7 @@ void place_mixed_paste(MainWindow& window,Revision before) {
     QElapsedTimer deadline;deadline.start();
     while(window.document().revision()==before && deadline.elapsed()<20000) {
         QApplication::processEvents(QEventLoop::AllEvents,50);
+        if(canvas->componentPlacementPreviewPending())continue;
         mouse(*canvas,QEvent::MouseButtonPress,anchor);mouse(*canvas,QEvent::MouseButtonRelease,anchor);
     }
     QApplication::processEvents();

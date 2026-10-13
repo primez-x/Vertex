@@ -1181,7 +1181,8 @@ if(SKETCH_BUILD_DESKTOP)
     src/desktop/assembly_properties_panel.cpp
     src/desktop/assembly_directional_resize_authoring.cpp
     src/desktop/assembly_profile_topology_authoring.cpp
-    src/desktop/drawing_input_panel.cpp src/desktop/area_class_palette.cpp)
+    src/desktop/drawing_input_panel.cpp src/desktop/area_class_palette.cpp
+    src/desktop/left_panel.cpp)
   target_link_libraries(sketch_desktop PUBLIC sketch_text_library)
   target_link_libraries(sketch_desktop PUBLIC sketch_floor_reference)
   target_link_libraries(sketch_desktop PUBLIC sketch_hosted_opening_plan)
@@ -1206,6 +1207,13 @@ if(SKETCH_BUILD_DESKTOP)
   target_link_libraries(sketch_desktop PUBLIC sketch_mixed_clipboard_placement)
   add_dependencies(sketch_desktop vertex-import-worker)
   target_link_libraries(sketch_desktop PUBLIC sketch_survey_contract sketch_storage sketch_project_ownership sketch_recovery_discovery sketch_project_organization sketch_project_visibility sketch_appraisal_document sketch_precision sketch_geometry_operations sketch_assistance_engine sketch_constraint_authoring sketch_room_relationship_geometry_commit sketch_calculations sketch_schedule_model sketch_document_schedule_adapter sketch_architectural_schedule sketch_visualization sketch_building_plan_projection sketch_plan_canvas sketch_boundary_input sketch_boundary_commit sketch_project_workspace_archive_restore sketch_project_workspace_preview_adapters sketch_workspace_save_coordinator sketch_workspace_save_queue sketch_workspace_regeneration_queue sketch_performance_telemetry sketch_workspace_autosave_scheduler sketch_offline_policy sketch_field_adapter_contract sketch_workspace_accessibility sketch_architectural_document_adapter sketch_sheet_output_scene sketch_output_fingerprint sketch_dxf_project_exchange sketch_ifc_project_exchange sketch_georeferencing_runtime sketch_project_resource_catalog Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::Svg)
+  # IBM Plex is the design-system UI and output face. It is compiled into the
+  # desktop library so the application, its sheet/PDF/report output and every
+  # desktop test that links sketch_desktop resolve the same bundled bytes.
+  qt_add_resources(sketch_desktop desktop_ui_fonts PREFIX "/fonts" BASE assets/fonts
+    FILES assets/fonts/IBMPlexSans-Regular.ttf assets/fonts/IBMPlexSans-Medium.ttf
+          assets/fonts/IBMPlexSans-SemiBold.ttf assets/fonts/IBMPlexMono-Regular.ttf
+          assets/fonts/IBMPlexMono-Medium.ttf assets/fonts/IBM-Plex-OFL.txt)
   qt_add_executable(vertex WIN32 src/desktop/main.cpp resources/windows/vertex.rc)
   qt_add_resources(vertex application_fonts PREFIX "/fonts" BASE assets/fonts
     FILES assets/fonts/Inter.ttf assets/fonts/OFL.txt)
@@ -1872,6 +1880,10 @@ if(BUILD_TESTING)
     add_test(NAME "packaging_${packaging_test}" COMMAND "${Python3_EXECUTABLE}" -m unittest discover
       -s "${CMAKE_SOURCE_DIR}/tests" -p "test_${packaging_test}.py")
   endforeach()
+  # With an unpackaged PowerShell 7, the offline-bundle suite runs about two
+  # dozen real install/repair/uninstall and ACL lifecycle cases (~2-9 s each),
+  # which legitimately exceeds a 60 s default per-test budget.
+  set_tests_properties(packaging_stage_offline_bundle PROPERTIES TIMEOUT 300)
   # A delivered source kit intentionally contains no Git metadata. Its build
   # must not query an unrelated parent checkout's index.
   if(EXISTS "${CMAKE_SOURCE_DIR}/.git")
@@ -2613,6 +2625,12 @@ if(BUILD_TESTING)
     # wall/source repair dialogs, copy and output. Observed Release execution
     # takes about 174 seconds; the ordinary focused-test guard truncates it.
     set_tests_properties(wall_measurement_desktop PROPERTIES TIMEOUT 300)
+    # The assembly lifecycle drives every editor plus transform, clipboard,
+    # output, Save/Reopen and roof scenarios. Each history validation replays
+    # the native assembly transform commands (about 0.5 s each), so one Save
+    # alone takes about 15 s. Observed standalone Release execution is about
+    # 77 seconds and exceeds the focused-test guard under parallel CTest load.
+    set_tests_properties(assembly_workflow_desktop PROPERTIES TIMEOUT 240)
     if(WIN32 AND TEST site_plan_workflow_desktop)
       # These fixtures launch the actual reference decoder from a captured,
       # immutable runtime. Preserve the independent runner's bounded deadline.

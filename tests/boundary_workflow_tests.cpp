@@ -1391,7 +1391,7 @@ void test_off_grid_snap_cursor_rubberband_and_point_receipt_in_both_canvases() {
             "snap-enabled Draw First rubber band must use the effective snapped cursor");
     const auto snapped_status = window.statusBar()->currentMessage();
     require(snapped_status.contains(QStringLiteral("Cursor")) &&
-                snapped_status.contains(QStringLiteral("500.0 mm")),
+                snapped_status.contains(QStringLiteral("X 0.5 m")),
             "snap-enabled cursor status must report the snapped measurement coordinate");
 
     measurement->setSnapEnabled(false);
@@ -3076,8 +3076,8 @@ void test_semantic_angle_and_area_dimension_creation() {
                 std::abs(resolved_area.area_square_metres - 4.0) < 1e-12,
             "created semantic dimensions must resolve current geometry");
     const auto labels = label_texts(*target);
-    require(labels.at(angle_id.toStdString()) == "90.0°" &&
-                labels.at(area_id.toStdString()) == "4.00 m²",
+    require(labels.at(angle_id.toStdString()) == "90°" &&
+                labels.at(area_id.toStdString()) == "4.0 m²",
             "semantic dimension labels must use the active unit system");
     const auto angle_line_count = static_cast<std::size_t>(std::count_if(
         target->entities().begin(), target->entities().end(), [](const auto& entity) {

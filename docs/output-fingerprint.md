@@ -86,8 +86,9 @@ resources or an explicit `not_applicable` reason, and a renderer resource is
 mandatory. A `fonts` `no_resource` sentinel is allowed when the caller has
 declared that the output contains no text.
 
-The desktop workflow binds the shipped `Inter.ttf` bytes into the `fonts`
-group, so text output cannot silently depend on an installed system font. It
+The desktop workflow binds the shipped IBM Plex Sans Regular, Medium and
+SemiBold bytes (`IBMPlexSans-*.ttf`, the sheet/PDF/report output faces) into
+the `fonts` group, so text output cannot silently depend on an installed system font. It
 also binds the effective view state used for the page, including hidden floor
 and layer IDs and the project unit system, into `views`. The sheet-output
 adapter may append its persisted scene resource alongside these caller-owned

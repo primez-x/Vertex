@@ -30,6 +30,30 @@
       "path": "assets/assistance/ocr/README.upstream.md"
     },
     {
+      "category": "licenses",
+      "path": "assets/fonts/IBM-Plex-OFL.txt"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/fonts/IBMPlexMono-Medium.ttf"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/fonts/IBMPlexMono-Regular.ttf"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/fonts/IBMPlexSans-Medium.ttf"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/fonts/IBMPlexSans-Regular.ttf"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/fonts/IBMPlexSans-SemiBold.ttf"
+    },
+    {
       "category": "fixtures",
       "path": "assets/fonts/Inter.ttf"
     },
@@ -1732,6 +1756,58 @@
     {
       "category": "docs",
       "path": "docs/design/vertex-component-directional-resize.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/design/vertex-design-system/components/AreaTable.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/design/vertex-design-system/components/bundle.css"
+    },
+    {
+      "category": "docs",
+      "path": "docs/design/vertex-design-system/components/Button.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/design/vertex-design-system/components/DimensionLabel.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/design/vertex-design-system/components/Icon.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/design/vertex-design-system/components/InspectorSection.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/design/vertex-design-system/components/NumberField.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/design/vertex-design-system/components/StatusBar.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/design/vertex-design-system/components/Tabs.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/design/vertex-design-system/components/Toolbar.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/design/vertex-design-system/components/ToolButton.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/design/vertex-design-system/README.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/design/vertex-design-system/tokens.json"
     },
     {
       "category": "docs",
@@ -5867,6 +5943,10 @@
     },
     {
       "category": "source",
+      "path": "src/desktop/advanced_section.hpp"
+    },
+    {
+      "category": "source",
       "path": "src/desktop/appraisal_details_panel.cpp"
     },
     {
@@ -5935,6 +6015,10 @@
     },
     {
       "category": "source",
+      "path": "src/desktop/bundled_fonts.hpp"
+    },
+    {
+      "category": "source",
       "path": "src/desktop/cad_library_adapter.py"
     },
     {
@@ -5983,11 +6067,23 @@
     },
     {
       "category": "source",
+      "path": "src/desktop/left_panel.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/left_panel.hpp"
+    },
+    {
+      "category": "source",
       "path": "src/desktop/main.cpp"
     },
     {
       "category": "source",
       "path": "src/desktop/main_window.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/measurement_format.hpp"
     },
     {
       "category": "source",
@@ -6096,6 +6192,10 @@
     {
       "category": "source",
       "path": "src/desktop/toolbar_svg_icon.hpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/vertex_design_tokens.hpp"
     },
     {
       "category": "source",

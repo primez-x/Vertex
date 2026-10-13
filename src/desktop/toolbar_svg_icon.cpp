@@ -33,13 +33,19 @@ public:
     }
 
     void paint(QPainter* painter, const QRect& rect, QIcon::Mode mode,
-               QIcon::State) override {
+               QIcon::State state) override {
         if (!painter || rect.isEmpty() || glyphs_.isEmpty()) return;
+        // Read the owner's palette on every paint so a runtime theme switch
+        // recolors the glyph without rebuilding the icon. Checked buttons are
+        // accent-filled, so their glyph uses the theme's on-accent color
+        // (BrightText); everything else uses the theme ink (ButtonText).
         const auto palette = palette_owner_ ? palette_owner_->palette() : QApplication::palette();
         const auto group = mode == QIcon::Disabled ? QPalette::Disabled
                                                   : palette.currentColorGroup();
-        const auto role = mode == QIcon::Selected ? QPalette::HighlightedText
-                                                  : QPalette::ButtonText;
+        const auto role = mode == QIcon::Disabled ? QPalette::ButtonText
+            : state == QIcon::On ? QPalette::BrightText
+            : mode == QIcon::Selected ? QPalette::HighlightedText
+                                      : QPalette::ButtonText;
         const auto color = palette.color(group, role);
         const QByteArray svg = QByteArrayLiteral(
             "<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'>"
