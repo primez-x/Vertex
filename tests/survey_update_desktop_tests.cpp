@@ -509,7 +509,7 @@ void test_invalid_stale_and_closure() {
         const auto revision = window.document().revision();
         dialog->findChild<QPushButton*>("surveyUpdateBoundary")->click();
         require(window.document().revision() == revision && entity(window, id) == before &&
-                dialog->findChild<QLabel*>("surveyResult")->text().contains("context changed", Qt::CaseInsensitive),
+                dialog->findChild<QLabel*>("surveyResult")->text().contains("changed while Survey traverse was open", Qt::CaseInsensitive),
                 "stale modal revision rejects update without mutation");
     });
 }

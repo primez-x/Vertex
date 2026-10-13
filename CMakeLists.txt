@@ -1177,7 +1177,7 @@ if(SKETCH_BUILD_DESKTOP)
     src/desktop/text_library_panel.cpp
     src/desktop/appraisal_report_dialog.cpp src/desktop/appraisal_details_panel.cpp
     src/desktop/assembly_authoring_dialog.cpp src/desktop/site_placement_dialog.cpp
-    src/desktop/selection_properties_dialog.cpp
+    src/desktop/selection_properties_dialog.cpp src/desktop/preferences_dialog.cpp
     src/desktop/assembly_properties_panel.cpp
     src/desktop/assembly_directional_resize_authoring.cpp
     src/desktop/assembly_profile_topology_authoring.cpp
@@ -1330,6 +1330,16 @@ if(SKETCH_BUILD_DESKTOP)
     qt_add_resources(sheet_layout_dialog_tests sheet_layout_test_fonts PREFIX "/fonts" BASE assets/fonts
       FILES assets/fonts/Inter.ttf)
     add_test(NAME sheet_layout_dialog COMMAND sheet_layout_dialog_tests)
+    add_executable(preferences_dialog_tests tests/preferences_dialog_tests.cpp)
+    target_link_libraries(preferences_dialog_tests PRIVATE sketch_desktop)
+    target_include_directories(preferences_dialog_tests PRIVATE tests)
+    if(MSVC)
+      target_compile_options(preferences_dialog_tests PRIVATE /W4 /permissive- /utf-8)
+    endif()
+    add_test(NAME preferences_dialog COMMAND preferences_dialog_tests)
+    set_tests_properties(preferences_dialog PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     add_executable(multipage_user_workflow_tests tests/multipage_user_workflow_tests.cpp)
     target_link_libraries(multipage_user_workflow_tests PRIVATE sketch_desktop)
     qt_add_resources(multipage_user_workflow_tests multipage_workflow_fonts
@@ -1594,6 +1604,18 @@ if(SKETCH_BUILD_DESKTOP)
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     if(MSVC)
       target_compile_options(physical_wall_room_review_dialog_tests PRIVATE /W4 /permissive- /utf-8)
+    endif()
+    add_executable(inline_dimension_edit_desktop_tests tests/inline_dimension_edit_desktop_tests.cpp)
+    target_link_libraries(inline_dimension_edit_desktop_tests PRIVATE sketch_desktop)
+    qt_add_resources(inline_dimension_edit_desktop_tests inline_dimension_edit_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_test(NAME inline_dimension_edit_desktop COMMAND inline_dimension_edit_desktop_tests)
+    set_tests_properties(inline_dimension_edit_desktop PROPERTIES
+      TIMEOUT 120
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+    if(MSVC)
+      target_compile_options(inline_dimension_edit_desktop_tests PRIVATE /W4 /permissive- /utf-8)
     endif()
     add_executable(navigator_add_branch_desktop_tests tests/navigator_add_branch_desktop_tests.cpp)
     target_link_libraries(navigator_add_branch_desktop_tests PRIVATE sketch_desktop)

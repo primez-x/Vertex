@@ -259,6 +259,24 @@ void ghost_and_content_recording_use_alignment() {
             "tight output bounds retain the actual aligned ink on either side of its anchor");
 }
 }
+// On-screen label text never drops below 9 px however far the view zooms
+// out; output devices keep their exact (smaller) model-scaled size.
+void screen_labels_keep_minimum_text_size() {
+    PlanCanvas canvas;
+    configure(canvas);
+    auto text = label({}, "Bedroom", {}, QColor(20, 20, 20));
+    const auto tiny_scale = 10.0; // 0.45 m text -> 4.5 px before the floor (output keeps 8 px)
+    QImage output_device(1, 1, QImage::Format_ARGB32_Premultiplied);
+    const auto screen = canvasLabelLayoutBounds(text, canvas.font(), &canvas, tiny_scale, canvas.logicalDpiY());
+    const auto output = canvasLabelLayoutBounds(text, canvas.font(), &output_device, tiny_scale,
+                                                output_device.logicalDpiY());
+    QFont nine = canvas.font();
+    nine.setPixelSize(9);
+    const auto nine_height = QFontMetricsF(nine, &canvas).boundingRect(text.text).height() + 6.0;
+    require(screen.height() >= nine_height - 0.5 && output.height() < screen.height(),
+            "on-screen labels hold a 9 px minimum while output keeps its model-scaled size");
+}
+
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
@@ -270,6 +288,7 @@ int main(int argc, char** argv) {
         authored_role_ink_excludes_selection_feedback();
         distinct_roles_survive_exact_preview();
         ghost_and_content_recording_use_alignment();
+        screen_labels_keep_minimum_text_size();
         std::cout << "Canvas label presentation tests passed\n";
         return 0;
     } catch (const std::exception& error) {

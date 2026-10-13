@@ -108,11 +108,11 @@ void current_schedule(MainWindow& window, const QString& id) {
     assert_near(value.value, 10.24);
 }
 void current_details(MainWindow& window) {
-    require(child<QLabel>(window, "calculationNetArea")->text() == QStringLiteral("10.24 m²") &&
-            child<QLabel>(window, "calculationBaseArea")->text() == QStringLiteral("10.64 m²"),
+    require(child<QLabel>(window, "calculationNetArea")->text() == QStringLiteral("10.2 m²") &&
+            child<QLabel>(window, "calculationBaseArea")->text() == QStringLiteral("10.6 m²"),
             "actual Details distinguish net clear area from clear outer boundary area");
     const auto* holes = child<QListWidget>(window, "calculationDeductions");
-    require(holes->count() == 1 && holes->item(0)->text().contains("0.40 m²"),
+    require(holes->count() == 1 && holes->item(0)->text().contains("0.4 m²"),
             "actual Details list the inline physical wall island deduction");
     require(child<QLabel>(window, "calculationStatus")->text().contains("inside wall faces"),
             "actual Details explain clear room measurement basis");
@@ -251,7 +251,7 @@ void workflow() {
     auto& drawing = canvas(window);
     const auto* scene_room = geometry(drawing, id);
     require(scene_room && scene_room->holes.size() == 1, "actual plan scene preserves room hole geometry");
-    require(label(drawing, id).contains("10.24 m²") && !label(drawing, id).contains("12.00"),
+    require(label(drawing, id).contains("10.2 m²") && !label(drawing, id).contains("12.0 m"),
             "actual room area label reports current net clear area rather than centerline area");
     require(geometry(drawing, furniture), "actual bundled furniture symbol is visible within room scene");
     current_details(window);
@@ -271,7 +271,7 @@ void workflow() {
     const auto length_value=*decode_boundary_dimension_entity(dimension_source.entities().at(length_dimension.toStdString())).dimension;
     assert_near(area_value.resolve(dimension_source).area(),10.24);
     assert_near(length_value.resolve(dimension_source.entities()).segment_length(),3.8);
-    require(label(drawing,area_dimension).contains("10.24") && label(drawing,length_dimension).contains("3.8") &&
+    require(label(drawing,area_dimension).contains("10.2 m²") && label(drawing,length_dimension).contains("3.8") &&
         geometry(drawing,length_dimension),"user-authored physical-room dimensions show current net area and inside-face length in the canvas");
     require(window.selectEntity(id),"return to room selection after authoring its dimensions");
 
@@ -307,7 +307,7 @@ void workflow() {
     require(window.saveProjectAs(path) && window.openProject(path) && window.selectEntity(id),
             "physical room saves and reopens through native project workflow");
     require(window.document().snapshot().entities() == saved.entities(), "save/reopen preserve room sources and inline hole");
-    require(label(drawing,area_dimension).contains("10.24") && label(drawing,length_dimension).contains("3.8") &&
+    require(label(drawing,area_dimension).contains("10.2 m²") && label(drawing,length_dimension).contains("3.8") &&
         geometry(drawing,length_dimension),"native save/reopen preserves authored dimensions and requalifies their live values");
     assert_near(physical_wall_room_checks(window.document().snapshot()).at(id.toStdString()).area_square_metres, 10.24);
     current_schedule(window, id);
@@ -352,7 +352,7 @@ void workflow() {
             "wall-material hole cannot become a reviewed destination");
         pick_review(dialog,{2,2}); ready_review(dialog);
         auto* preview=dynamic_cast<PlanCanvas*>(review_control<QWidget>(dialog,"physicalRoomReviewCanvas"));
-        require(label(*preview,area_dimension).contains("9.86"),"detached review previews the kept area from current walls and inline hole");
+        require(label(*preview,area_dimension).contains("9.9 m²"),"detached review previews the kept area from current walls and inline hole");
         require(document_snapshot_digest(window.document().snapshot())==document_snapshot_digest(stale_source),
             "complete review preview leaves full retained document state untouched");
         auto* buttons=dialog.findChild<QDialogButtonBox*>(); require(buttons,"repair has cancellation controls");
@@ -386,7 +386,7 @@ void workflow() {
     // Since accbd946 the modal context binds the complete authoring source, so
     // the controller's context fence refuses before its final digest check.
     require(window.lastError().startsWith("Review rooms:") &&
-        (window.lastError().contains("review source changed") ||
+        (window.lastError().contains("changed during the room repair review") ||
          window.lastError().contains("project, workspace or selection changed")),
         "stale accepted room review explains its full-source refusal");
     window.document()=Document::fork(stale_source);
@@ -430,7 +430,7 @@ void workflow() {
     const auto repaired_check=physical_wall_room_checks(repaired).at(id.toStdString());
     require(repaired_check.current && repaired_check.holes.size()==1,"repair derives current physical room and hole"); assert_near(repaired_check.area_square_metres,9.86);
     require(repaired.entities().at(area_dimension.toStdString())==stale_source.entities().at(area_dimension.toStdString()) &&
-        !repaired.entities().contains(length_dimension.toStdString()) && label(drawing,area_dimension).contains("9.86") &&
+        !repaired.entities().contains(length_dimension.toStdString()) && label(drawing,area_dimension).contains("9.9 m²") &&
         !geometry(drawing,length_dimension) && label(drawing,length_dimension).isEmpty(),
         "one reviewed command keeps the area reference with its new live value and explicitly removes the chosen edge dimension");
     if (repaired.entities().at(exterior.toStdString())!=exterior_before || child<QLabel>(window,"appraisalDetailsGla")->text()!=property_gla_before)
@@ -444,13 +444,13 @@ void workflow() {
         "native repaired room saves and reopens");
     require(window.document().snapshot().entities()==repaired.entities() && physical_wall_room_checks(window.document().snapshot()).at(id.toStdString()).current,
         "reopened repair replays source authority and retains identity");
-    require(label(drawing,area_dimension).contains("9.86") && !window.document().snapshot().entities().contains(length_dimension.toStdString()),
+    require(label(drawing,area_dimension).contains("9.9 m²") && !window.document().snapshot().entities().contains(length_dimension.toStdString()),
         "reopened reviewed command retains the kept dimension and explicit reference removal");
     require(window.undoCommand() && window.document().snapshot().entities()==stale_source.entities(),"reopened repair Undo restores prior source evidence");
     require(window.undoCommand() && physical_wall_room_checks(window.document().snapshot()).at(id.toStdString()).current &&
-            geometry(drawing, id) && label(drawing, id).contains("10.24 m²"),
+            geometry(drawing, id) && label(drawing, id).contains("10.2 m²"),
             "Undo source edit repairs room projection and derived area");
-    require(label(drawing,area_dimension).contains("10.24") && label(drawing,length_dimension).contains("3.8") && geometry(drawing,length_dimension),
+    require(label(drawing,area_dimension).contains("10.2 m²") && label(drawing,length_dimension).contains("3.8") && geometry(drawing,length_dimension),
         "Undo reviewed removal and source edit restores both dimension identities and their original current values");
     current_details(window);
 }

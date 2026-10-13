@@ -50,6 +50,9 @@ DrawingInputPanel::DrawingInputPanel(QWidget* parent) : QWidget(parent) {
     const std::array<QString, 4> names{
         QStringLiteral("Right"), QStringLiteral("Up"),
         QStringLiteral("Left"), QStringLiteral("Down")};
+    const std::array<QString, 4> glyphs{
+        QStringLiteral("→"), QStringLiteral("↑"),
+        QStringLiteral("←"), QStringLiteral("↓")};
     for (std::size_t index = 0; index < m_directions.size(); ++index) {
         auto* button = new QToolButton(this);
         m_directions[index] = button;
@@ -57,8 +60,11 @@ DrawingInputPanel::DrawingInputPanel(QWidget* parent) : QWidget(parent) {
         button->setArrowType(arrows[index]);
         button->setCheckable(true);
         button->setFocusPolicy(Qt::NoFocus);
-        button->setToolTip(names[index]);
-        button->setAccessibleName(names[index]);
+        // Name the action, not the glyph: "Draw right (→)".
+        const auto action = QStringLiteral("Draw %1 (%2)").arg(names[index].toLower(), glyphs[index]);
+        button->setToolTip(action + QStringLiteral(" — type a length first, or press the arrow key"));
+        button->setAccessibleName(QStringLiteral("Draw %1").arg(names[index].toLower()));
+        button->setAccessibleDescription(action);
         button->setFixedSize(27, 28);
         group->addButton(button);
         row->addWidget(button);
@@ -70,7 +76,8 @@ DrawingInputPanel::DrawingInputPanel(QWidget* parent) : QWidget(parent) {
 
     auto* toggle = new QToolButton(this);
     toggle->setObjectName(QStringLiteral("drawingKeypadToggle"));
-    toggle->setText(QStringLiteral("123"));
+    toggle->setText(QStringLiteral("Keypad"));
+    toggle->setToolButtonStyle(Qt::ToolButtonTextOnly);
     toggle->setToolTip(QStringLiteral("Show keypad"));
     toggle->setAccessibleName(QStringLiteral("Show keypad"));
     toggle->setCheckable(true);
@@ -284,7 +291,10 @@ void DrawingInputPanel::updatePlacement() {
     }
     adjustSize();
     if (host) {
-        move(margin, std::max(margin, host->height() - height() - margin));
+        // Sit above the canvas scale bar painted at the bottom-left corner
+        // (12px inset, its label line plus a 21px backing) with a 6px gap.
+        const int scale_bar_clearance = host->fontMetrics().height() + 21 + 6;
+        move(margin, std::max(margin, host->height() - height() - margin - scale_bar_clearance));
     }
     m_updatingPlacement = false;
 }

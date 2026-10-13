@@ -7,6 +7,7 @@
 #include "sketch/document.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/wall_measurement.hpp"
+#include "../src/desktop/measurement_format.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 
@@ -495,7 +496,7 @@ void test_automatic_appraisal_wall_chain_closure(bool survey_only=false) {
             require(qualified_details && qualified_details->report() && qualified_details->report()->qualified &&
                     qualified_details->report()->calculation && qualified_gla &&
                     std::abs(qualified_details->report()->calculation->property.gla().total.square_metres-area)<1e-8 &&
-                    qualified_gla->text()==QString::fromStdString(expected.text)+" sq ft",
+                    qualified_gla->text()==sketch::desktop::units::group_thousands(QString::fromStdString(expected.text))+" sf",
                 "qualified Details GLA must equal exact exterior area converted to square feet after explicit declarations");
             auto* qualified_tabs = reopened.findChild<QTabWidget*>("sidebarTabs");
             require(qualified_tabs,"qualified automatic area retains the Details tab");
@@ -869,10 +870,12 @@ void test_sloped_wall_endpoint_snapping_respects_snap_toggle() {
 
         bool rise_prompt_seen = false;
         QTimer::singleShot(0, &window, [&] {
-            auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
-            if (!dialog) return;
+            auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (!dialog || dialog->objectName() != QStringLiteral("slopedWallRiseForm")) return;
+            auto* rise = dialog->findChild<QLineEdit*>(QStringLiteral("slopedWallRise"));
+            if (!rise) return;
             rise_prompt_seen = true;
-            dialog->setTextValue(QStringLiteral("0.3 m"));
+            rise->setText(QStringLiteral("0.3 m"));
             dialog->accept();
         });
         click(raw_end);

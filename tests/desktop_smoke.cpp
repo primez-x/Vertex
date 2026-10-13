@@ -56,6 +56,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
+#include <QMenuBar>
 #include <QMessageBox>
 #include <QPainter>
 #include <QPageSize>
@@ -175,17 +176,26 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
                         symbol_library->dragEnabled() &&
                         symbol_library->item(0)->flags().testFlag(Qt::ItemIsDragEnabled),
                     "component library items must initiate an external drag onto the plan");
-            auto* more_tools = window.findChild<QToolButton*>(QStringLiteral("moreTools"));
+            auto* menu_bar = window.findChild<QMenuBar*>(QStringLiteral("mainMenuBar"));
+            auto* export_button = window.findChild<QToolButton*>(QStringLiteral("exportMenuButton"));
             auto* theme_menu = window.findChild<QToolButton*>(QStringLiteral("themeMenu"));
+            QStringList menu_titles;
+            if (menu_bar)
+                for (auto* action : menu_bar->actions()) menu_titles << action->text();
             auto* page_size = window.findChild<QComboBox*>(QStringLiteral("outputPageSize"));
             // Design system toolbar token: one fixed 40px row.
             require(toolbar != nullptr && toolbar->minimumHeight() == 40 && toolbar->maximumHeight() == 40 &&
                     toolbar->height() == 40 &&
                     toolbar->toolButtonStyle() == Qt::ToolButtonTextBesideIcon &&
-                    toolbar->iconSize() == QSize(18, 18) && more_tools && theme_menu &&
-                    more_tools->toolButtonStyle() == Qt::ToolButtonTextBesideIcon &&
+                    toolbar->iconSize() == QSize(18, 18) && export_button && theme_menu &&
+                    window.findChild<QToolButton*>(QStringLiteral("moreTools")) == nullptr &&
+                    menu_bar && window.menuBar() == menu_bar &&
+                    menu_titles == QStringList{QStringLiteral("&File"), QStringLiteral("&Edit"), QStringLiteral("&Draw"),
+                                               QStringLiteral("&Annotate"), QStringLiteral("&View"), QStringLiteral("&Output"),
+                                               QStringLiteral("&Project"), QStringLiteral("&Help")} &&
+                    export_button->toolButtonStyle() == Qt::ToolButtonTextBesideIcon && export_button->menu() &&
                     theme_menu->toolButtonStyle() == Qt::ToolButtonIconOnly &&
-                    !more_tools->accessibleName().isEmpty() && !theme_menu->accessibleName().isEmpty() &&
+                    !export_button->accessibleName().isEmpty() && !theme_menu->accessibleName().isEmpty() &&
                     window.findChild<QToolButton*>(QStringLiteral("quickAccess")) == nullptr &&
                     page_size && !page_size->isVisible() &&
                     toolbar->widgetForAction(toolbar->actions().back()) == theme_menu &&
@@ -241,6 +251,23 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
                     assistance && assistance->text() == QStringLiteral("Assistance…") &&
                     export_image && curved_wall_action && disto_action,
                 "shortcut editor, draft image export, DISTO input, curved-wall authoring, and local user guide must be discoverable");
+        {
+            auto* preferences = window.findChild<QAction*>(QStringLiteral("preferences"));
+            auto* edit_menu = window.findChild<QMenu*>(QStringLiteral("editMenu"));
+            auto* help_menu = window.findChild<QMenu*>(QStringLiteral("helpMenu"));
+            require(preferences && edit_menu && edit_menu->actions().contains(preferences) &&
+                        preferences->shortcut() == QKeySequence(QStringLiteral("Ctrl+,")) &&
+                        help_menu && help_menu->actions().contains(settings) && help_menu->actions().contains(about),
+                    "Preferences lives in Edit and shortcuts/About live in Help");
+            bool preferences_opened = false;
+            QTimer::singleShot(0, &window, [&] {
+                auto* dialog = window.findChild<QDialog*>(QStringLiteral("preferencesDialog"));
+                preferences_opened = dialog != nullptr;
+                if (dialog) dialog->reject();
+            });
+            preferences->trigger();
+            require(preferences_opened, "Edit > Preferences opens the Preferences dialog");
+        }
         const auto* copy = window.findChild<QAction*>(QStringLiteral("copySelection"));
         const auto* cut = window.findChild<QAction*>(QStringLiteral("cutSelection"));
         const auto* paste = window.findChild<QAction*>(QStringLiteral("pasteSelection"));
@@ -862,6 +889,12 @@ void test_workspace_profiles() {
         sketch::desktop::MainWindow window;
         require(window.findChild<QAction*>(QStringLiteral("workspaceProfiles")) != nullptr,
                 "workspace profiles must be available from the secondary command surface");
+        // "Untitled project — Vertex": the app name appears once (Qt does not
+        // append the display name to a title ending in it) and a pristine new
+        // project carries no modified marker.
+        require(window.windowTitle() == QStringLiteral("Untitled project[*] — Vertex") &&
+                    !window.isWindowModified(),
+                "a pristine new project must read 'Untitled project — Vertex' without a modified marker");
         window.setWorkspace(sketch::desktop::Workspace::architectural);
         window.setMetricUnits(true);
         auto* grid = window.findChild<QToolButton*>(QStringLiteral("gridTool"));
@@ -879,14 +912,66 @@ void test_workspace_profiles() {
                 "profile fixture needs compact status-bar canvas controls and splitter state");
         window.resize(1400, 900);
         window.show();
+        window.activateWindow();
         QApplication::processEvents();
+        {
+            // After a toolbar menu or popup closes, keyboard focus returns to
+            // the active plan canvas so its shortcuts work without a click;
+            // text entry keeps its focus.
+            auto* active_canvas = window.findChild<QWidget*>(QStringLiteral("architecturalPlanCanvas"));
+            QComboBox* toolbar_combo = nullptr;
+            for (auto* toolbar : window.findChildren<QToolBar*>())
+                for (auto* combo : toolbar->findChildren<QComboBox*>())
+                    if (!toolbar_combo && combo->isVisible() && !combo->isEditable()) toolbar_combo = combo;
+            require(active_canvas && toolbar_combo, "focus-return fixture needs the canvas and a toolbar control");
+            auto* plan = dynamic_cast<sketch::desktop::PlanCanvas*>(active_canvas);
+            require(plan && plan->emptyDrawingHint() == QStringLiteral("Click to place the first wall corner") &&
+                        plan->emptyDrawingHintVisible(),
+                    "an empty drawing must prompt for the first wall corner");
+            const auto close_popup = [&] {
+                QMenu menu(&window);
+                menu.addAction(QStringLiteral("Probe"));
+                menu.popup(window.mapToGlobal(QPoint(40, 40)));
+                QApplication::processEvents();
+                menu.hide();
+                QApplication::processEvents();
+                QApplication::processEvents();
+            };
+            toolbar_combo->setFocus(Qt::MouseFocusReason);
+            QApplication::processEvents();
+            require(toolbar_combo->hasFocus(), "focus-return fixture must focus the toolbar control");
+            close_popup();
+            require(active_canvas->hasFocus(),
+                    "closing a toolbar popup must return keyboard focus to the active plan canvas");
+            QLineEdit editor(&window);
+            editor.setGeometry(4, 4, 80, 20);
+            editor.show();
+            editor.setFocus(Qt::MouseFocusReason);
+            QApplication::processEvents();
+            require(editor.hasFocus(), "focus-return fixture must focus the text field");
+            close_popup();
+            require(editor.hasFocus(), "returning focus to the canvas must never take it from a text field");
+        }
         workspace_splitter->setSizes({260, 104, 690, 320});
         architectural_splitter->setSizes({520, 300});
         QApplication::processEvents();
         const auto saved_workspace_sizes = workspace_splitter->sizes();
         const auto saved_architectural_sizes = architectural_splitter->sizes();
+        // Status never by color alone: state is named in the tooltip and
+        // accessible description, and the glyph changes when a toggle is off.
+        require(grid->toolTip().startsWith(QStringLiteral("Grid: on")) &&
+                    snap->toolTip().startsWith(QStringLiteral("Snap: on")) &&
+                    snap->accessibleDescription() == QStringLiteral("Snap: on"),
+                "grid and snap toggles must name their on state");
+        const auto snap_on_icon = snap->icon().cacheKey();
+        const auto grid_on_icon = grid->icon().cacheKey();
         grid->setChecked(false);
         snap->setChecked(false);
+        require(grid->toolTip().startsWith(QStringLiteral("Grid: off")) &&
+                    snap->toolTip().startsWith(QStringLiteral("Snap: off")) &&
+                    grid->accessibleDescription() == QStringLiteral("Grid: off") &&
+                    snap->icon().cacheKey() != snap_on_icon && grid->icon().cacheKey() != grid_on_icon,
+                "grid and snap toggles must show their off state in text and glyph, not color alone");
         overview->setChecked(false);
         require(window.setContainerVisible(QStringLiteral("floor-1"), false),
                 "profile fixture should hide a floor");
@@ -1005,7 +1090,7 @@ void test_room_boundary_from_existing_geometry() {
     assert_room(snapshot, room, walls, "Living room");
     auto* canvas = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
     require(canvas && std::any_of(canvas->labels().begin(), canvas->labels().end(), [&](const auto& label) {
-                return label.id == room && label.text.contains("Living room") && label.text.contains("10.64");
+                return label.id == room && label.text.contains("Living room") && label.text.contains(QString::fromUtf8("10.6 m²"));
             }), "actual clear-room canvas label must retain the entered room name and current area");
     require(window.undoCommand() && window.document().snapshot().entities() == before.entities() &&
                 window.redoCommand() && window.document().snapshot().entities() == snapshot.entities(),
@@ -3314,9 +3399,9 @@ void test_boundary_identity_upgrade_workflow() {
     require(before.entities().at(legacy.id) == legacy,
             "selection must preserve anonymous geometry and metadata");
     auto* action = window.findChild<QAction*>(QStringLiteral("upgradeBoundaryIdentities"));
-    auto* more = window.findChild<QToolButton*>(QStringLiteral("moreTools"));
-    require(action && more && more->menu() && more->menu()->actions().contains(action),
-            "explicit identity upgrade must be available from More");
+    auto* edit_advanced = window.findChild<QMenu*>(QStringLiteral("editAdvancedMenu"));
+    require(action && edit_advanced && edit_advanced->actions().contains(action),
+            "explicit identity upgrade must be available from Edit > Advanced");
     action->trigger();
     const auto upgraded = window.document().snapshot();
     require(window.lastError().isEmpty() && upgraded.revision() == before.revision()+1 &&
@@ -5665,8 +5750,10 @@ void test_organization_context() {
                 snapshot.entities().at(wall.toStdString()).properties.at("layer_id") == layer.toStdString(),
             "new walls must use the active drawing context");
     auto* item = navigator_item(window, wall);
-    require(item && item->parent() && item->parent()->data(0, Qt::UserRole).toString() == layer,
-            "navigator shows the wall under its actual layer");
+    require(item && item->parent() && item->parent()->text(0) == QStringLiteral("Walls") &&
+                item->parent()->text(1) == QStringLiteral("1") && item->text(0) == QStringLiteral("Wall 1") &&
+                item->parent()->parent() && item->parent()->parent()->data(0, Qt::UserRole).toString() == layer,
+            "navigator lists the wall in its layer's Walls group with a count and a readable name");
     require(window.renameOrganizationEntity(second_floor, "Studio"), "rename the actual floor");
     require(navigator_item(window, second_floor)->text(0) == "Studio", "navigator reflects semantic names");
     require(window.document().snapshot().entities().at(wall.toStdString()) == snapshot.entities().at(wall.toStdString()),
@@ -6654,7 +6741,7 @@ void test_survey_calculator(const QString& capture_directory) {
                 "project survey boundary must retain its measured geometry and report provenance");
         require(window.selectEntity({}), "change selection while survey calculator remains open");
         add->click();
-        require(window.document().revision() == revision + 1 && result->text().contains("context changed"),
+        require(window.document().revision() == revision + 1 && result->text().contains("changed while Survey traverse was open"),
                 "survey insertion must reject a stale drawing context without duplicate geometry");
         const auto restored_input = input->toPlainText();
         tampered["input_provenance"]["version"] = 99;
@@ -7734,7 +7821,7 @@ void test_vertical_levels_workflow() {
                 "a level-relative room editor must explain local and resolved elevation");
         elevation_field->setText(QStringLiteral("0.2 m"));
         require(buttons->button(QDialogButtonBox::Apply)->isEnabled() &&
-                    status->text().contains(QStringLiteral("3.600 m project base")),
+                    status->text().contains(QStringLiteral(" 3.6 m project base")),
                 "a local elevation preview must include level elevation and placement offset");
         buttons->button(QDialogButtonBox::Apply)->click();
     });
@@ -8919,8 +9006,10 @@ void test_inspector_untouched_dimension_precision() {
     require(height && thickness && height->isEnabled() && thickness->isEnabled() &&
                 !height->isHidden() && !thickness->isHidden(),
             "selected wall must expose both editable dimension fields");
-    require(height->text() == QStringLiteral("8' 10.3\"") &&
-                thickness->text() == QStringLiteral("2.4\"") &&
+    // Design-system imperial: feet-inches to the nearest 1/16" (2.7004 m =
+    // 8' 10.315", 0.06 m = 2.362").
+    require(height->text() == QStringLiteral("8' 10 5/16\"") &&
+                thickness->text() == QStringLiteral("2 3/8\"") &&
                 !height->isModified() && !thickness->isModified(),
             "inspector must present rounded imperial dimensions as untouched text");
     const auto exact = window.document().snapshot();
@@ -9165,7 +9254,8 @@ void test_section_overlay_workflow() {
     require(std::any_of(canvas->labels().begin(), canvas->labels().end(),
         [](const auto& label) {
             return label.text.contains(QStringLiteral(" ft ")) ||
-                   label.text.endsWith(QStringLiteral(" in"));
+                   label.text.endsWith(QStringLiteral(" in")) ||
+                   label.text.endsWith(QLatin1Char('"'));
         }),
         "section dimensions follow the active Imperial display units");
     require(window.undoCommand() && count_lines() == 0 && window.redoCommand() && count_lines() == 1,
@@ -9238,6 +9328,12 @@ int main(int argc, char** argv) {
         test_selection_clipboard_workflow();
         test_material_clipboard_transfer();
         test_delete_selection_workflow();
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--left-panel-only") {
+        test_shortcuts_and_measurement_keypad({});
+        test_organization_context();
+        std::cout << "Left panel shell and hierarchy tests passed\n";
         return 0;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--named-revisions-only") {
@@ -9543,7 +9639,9 @@ int main(int argc, char** argv) {
             "new labels and symbols must belong to the active drawing layer");
     const auto* symbol_item = navigator_item(window, symbol_id);
     require(symbol_item && symbol_item->parent() && symbol_item->parent()->parent() &&
-                symbol_item->parent()->text(0) == QStringLiteral("Symbols & labels") &&
+                symbol_item->parent()->text(0) == QStringLiteral("Symbols and labels") &&
+                symbol_item->text(0).startsWith(QStringLiteral("Chair")) &&
+                !symbol_item->text(0).contains(QStringLiteral("chair-w1-d1")) &&
                 symbol_item->parent()->parent()->data(0, Qt::UserRole).toString() ==
                     QString::fromStdString(annotation_layer),
             "the navigator must nest symbols and labels beneath their owning layer");
@@ -9551,7 +9649,7 @@ int main(int argc, char** argv) {
         window.findChild<QLabel*>(QStringLiteral("componentLibraryHeading"));
     require(component_heading &&
                 component_heading->text().contains(QStringLiteral("Default layer")) &&
-                component_heading->text().contains(QStringLiteral("Symbols & labels")),
+                component_heading->text().contains(QStringLiteral("Symbols and labels")),
             "the component library must identify the active layer it will place into");
     const auto alias_symbol = [&](const QString& id, const char* family) {
         const auto found = std::find_if(annotation_state.symbols.begin(), annotation_state.symbols.end(),

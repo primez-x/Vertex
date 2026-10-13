@@ -3,10 +3,14 @@
 #include "plan_canvas.hpp"
 #include "measurement_format.hpp"
 #include "bundled_fonts.hpp"
+#include "vertex_design_tokens.hpp"
 
 #include <QFont>
 #include <QHeaderView>
 #include <QHBoxLayout>
+#include <QIcon>
+#include <QPainter>
+#include <QPixmap>
 #include <QLabel>
 #include <QPushButton>
 #include <QPlainTextEdit>
@@ -21,6 +25,7 @@
 #include <QTextOption>
 #include <algorithm>
 #include <map>
+#include <set>
 #include <utility>
 
 namespace sketch::desktop {
@@ -97,6 +102,34 @@ QString category(const AppraisalBoundaryStatus& status) {
     if(!status.qualification.qualified) return QStringLiteral("Unqualified");
     if(status.exclusion) return QStringLiteral("Deduction only");
     return status.qualification.derived_category ? appraisal_category_label(*status.qualification.derived_category) : QStringLiteral("Unavailable");
+}
+// AreaTable legend chip: the area's design-system fill (area-gla,
+// area-basement, area-garage, area-porch or area-other) on a light or dark
+// surface, outlined so a translucent fill still reads as a swatch.
+QIcon area_chip(const AppraisalBoundaryStatus& status,bool light_surface) {
+    const auto& tokens=design::for_surface(light_surface);
+    QColor fill=tokens.area_other;
+    if(status.qualification.qualified && !status.exclusion && status.qualification.derived_category) {
+        switch(*status.qualification.derived_category) {
+        case AppraisalAreaCategory::above_grade_finished: fill=tokens.area_gla;break;
+        case AppraisalAreaCategory::below_grade_finished: case AppraisalAreaCategory::below_grade_unfinished:
+        case AppraisalAreaCategory::below_grade_nonstandard_finished:
+        case AppraisalAreaCategory::adu_below_grade_finished: case AppraisalAreaCategory::adu_below_grade_unfinished:
+        case AppraisalAreaCategory::adu_below_grade_nonstandard_finished:
+        case AppraisalAreaCategory::detached_other_below_grade_finished: case AppraisalAreaCategory::detached_other_below_grade_unfinished:
+        case AppraisalAreaCategory::detached_other_below_grade_nonstandard_finished: fill=tokens.area_basement;break;
+        case AppraisalAreaCategory::garage: case AppraisalAreaCategory::carport: fill=tokens.area_garage;break;
+        case AppraisalAreaCategory::porch: case AppraisalAreaCategory::patio: case AppraisalAreaCategory::deck: fill=tokens.area_porch;break;
+        default: break;
+        }
+    }
+    QPixmap chip(12,12);chip.fill(Qt::transparent);
+    QPainter painter(&chip);painter.setRenderHint(QPainter::Antialiasing);
+    QColor outline=fill;outline.setAlpha(255);
+    painter.setPen(QPen(outline,1.0));painter.setBrush(fill);
+    painter.drawRoundedRect(QRectF(1.5,1.5,9,9),design::radius_sm/2.0,design::radius_sm/2.0);
+    painter.end();
+    return QIcon(chip);
 }
 }
 
@@ -389,7 +422,20 @@ struct AppraisalDetailsPanel::Impl {
             }
             issues->setText(html+QStringLiteral("</ul>"));
         }
-        std::map<std::string,QTreeWidgetItem*> buildings;
+        // Design-system AreaTable: one row per area (name, type with its
+        // area-* legend chip, area), grouped by floor, then computed GLA and
+        // non-GLA totals. The chip is never the only cue: the type is in words.
+        const bool light_surface=areas->palette().color(QPalette::Base).lightness()>=128;
+        QFont mono=areas->font();mono.setFamilies({QStringLiteral("IBM Plex Mono"),QStringLiteral("Cascadia Mono"),QStringLiteral("Consolas")});
+        mono.setStyleHint(QFont::Monospace);
+        const auto figure=[&](QTreeWidgetItem* item,const QString& value) {
+            item->setText(2,value);item->setFont(2,mono);item->setTextAlignment(2,Qt::AlignRight|Qt::AlignVCenter);
+        };
+        const bool several_buildings=[&] {
+            std::set<std::string> ids;
+            for(const auto& boundary:report->boundaries)if(boundary.measurement)ids.insert(boundary.measurement->building_id);
+            return ids.size()>1;
+        }();
         std::map<std::pair<std::string,std::string>,QTreeWidgetItem*> floors;
         QTreeWidgetItem* selected_item=nullptr;
         for(const auto& boundary:report->boundaries) {
@@ -398,21 +444,49 @@ struct AppraisalDetailsPanel::Impl {
             const auto* floor_entity=entity(floor_id);
             const auto building_id=boundary.measurement?boundary.measurement->building_id:
                 floor_entity?field(*floor_entity,"building_id"):area_entity?field(*area_entity,"building_id"):std::string{};
-            auto& building=buildings[building_id];
-            if(!building) {building=new QTreeWidgetItem(areas);building->setText(0,building_id.empty()?QStringLiteral("Unassigned building"):name(*source,building_id));
-                auto font=areas->font();font.setBold(true);building->setFont(0,font);}
             auto& floor=floors[{building_id,floor_id}];
-            if(!floor) {floor=new QTreeWidgetItem(building);floor->setText(0,floor_id.empty()?QStringLiteral("Unassigned floor"):name(*source,floor_id));
+            if(!floor) {
+                floor=new QTreeWidgetItem(areas);
+                auto floor_name=floor_id.empty()?QStringLiteral("Unassigned floor"):name(*source,floor_id);
+                if(several_buildings)floor_name=(building_id.empty()?QStringLiteral("Unassigned building"):name(*source,building_id))+
+                    QStringLiteral(" › ")+floor_name;
+                floor->setText(0,floor_name);
+                auto font=areas->font();font.setBold(true);floor->setFont(0,font);
+                floor->setFlags(Qt::ItemIsEnabled);
                 if(report->calculation) {
                     const auto found=report->calculation->by_floor.find({building_id,floor_id});
-                    if(found!=report->calculation->by_floor.end())floor->setText(1,QStringLiteral("GLA %1").arg(area(found->second.gla().total.square_metres)));
-                }}
+                    if(found!=report->calculation->by_floor.end()) {
+                        floor->setText(1,QStringLiteral("GLA"));figure(floor,area(found->second.gla().total.square_metres));
+                        floor->setToolTip(2,QStringLiteral("Floor GLA"));
+                    }
+                }
+            }
             auto* item=new QTreeWidgetItem(floor);item->setData(0,Qt::UserRole,text(boundary.boundary_id));
-            // Rows read type, then name ("GLA · Living room"); the ID stays in the tooltip.
-            item->setText(0,category(boundary)+QStringLiteral(" · ")+name(*source,boundary.boundary_id));item->setToolTip(0,text(boundary.boundary_id));
-            if(boundary.measurement)item->setText(1,QStringLiteral("Net %1\nGross %2\nLess %3").arg(area(boundary.measurement->net_square_metres),area(boundary.measurement->base_square_metres),area(boundary.measurement->deducted_square_metres)));
-            else item->setText(1,QStringLiteral("Unavailable"));
+            item->setText(0,name(*source,boundary.boundary_id));
+            const auto type=category(boundary);
+            item->setText(1,type);item->setIcon(1,area_chip(boundary,light_surface));
+            item->setToolTip(1,type);
+            if(boundary.measurement) {
+                const auto& value=*boundary.measurement;
+                figure(item,area(boundary.exclusion?value.net_square_metres:value.factored_square_metres));
+                item->setToolTip(2,QStringLiteral("Net %1 · Gross %2 · Less %3")
+                    .arg(area(value.net_square_metres),area(value.base_square_metres),area(value.deducted_square_metres)));
+            } else figure(item,QStringLiteral("Unavailable"));
             if(text(boundary.boundary_id)==previous)selected_item=item;
+        }
+        // Totals are computed, never typed: Total GLA counts GLA areas only;
+        // every other measured category rolls into Non-GLA.
+        if(!report->boundaries.empty()) {
+            const bool totaled=report->qualified && report->calculation;
+            double all=0;
+            if(totaled)for(const auto& [kind,bucket]:report->calculation->property.by_category)all+=bucket.total.square_metres;
+            const double gla_total=totaled?report->calculation->property.gla().total.square_metres:0;
+            for(const auto& [title,value]:{std::pair{QStringLiteral("Total GLA"),gla_total},std::pair{QStringLiteral("Non-GLA"),all-gla_total}}) {
+                auto* total=new QTreeWidgetItem(areas);total->setText(0,title);total->setFlags(Qt::ItemIsEnabled);
+                auto font=areas->font();font.setBold(true);total->setFont(0,font);
+                figure(total,totaled?area(value):QStringLiteral("Withheld"));
+                if(!totaled)total->setToolTip(2,QStringLiteral("Totals are withheld until the issues above are resolved."));
+            }
         }
         areas->expandAll();areas->setCurrentItem(selected_item);show_trace();
     }
@@ -448,16 +522,34 @@ AppraisalDetailsPanel::AppraisalDetailsPanel(QWidget* parent):QWidget(parent),im
     p.issues->setTextFormat(Qt::RichText);p.issues->setOpenExternalLinks(false);
     p.issues->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::LinksAccessibleByMouse | Qt::LinksAccessibleByKeyboard);
     connect(p.issues,&QLabel::linkActivated,this,[this](const QString& link){impl_->issue_activated(link);});
-    heading(layout,QStringLiteral("Property totals"));p.totals=label(content,"appraisalDetailsTotals");layout->addWidget(p.totals);
-    heading(layout,QStringLiteral("Buildings, floors and areas"));p.areas=new QTreeWidget(content);p.areas->setObjectName(QStringLiteral("appraisalDetailsAreas"));
-    p.areas->setHeaderLabels({QStringLiteral("Area / qualification"),QStringLiteral("Measurement")});
-    p.areas->setMinimumWidth(0);p.areas->setMinimumHeight(180);p.areas->setMaximumHeight(300);
-    p.areas->setColumnCount(2);p.areas->setIndentation(10);p.areas->setWordWrap(true);
+    heading(layout,QStringLiteral("Areas"));p.areas=new QTreeWidget(content);p.areas->setObjectName(QStringLiteral("appraisalDetailsAreas"));
+    p.areas->setAccessibleName(QStringLiteral("Areas by floor with GLA and non-GLA totals"));
+    p.areas->setColumnCount(3);p.areas->setHeaderLabels({QStringLiteral("Name"),QStringLiteral("Type"),QStringLiteral("Area")});
+    p.areas->headerItem()->setTextAlignment(2,Qt::AlignRight|Qt::AlignVCenter);
+    p.areas->setMinimumWidth(0);p.areas->setMinimumHeight(180);p.areas->setMaximumHeight(320);
+    p.areas->setIndentation(10);p.areas->setWordWrap(true);p.areas->setRootIsDecorated(false);
     p.areas->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);p.areas->setSelectionMode(QAbstractItemView::SingleSelection);
-    p.areas->header()->setMinimumSectionSize(45);p.areas->header()->setSectionResizeMode(QHeaderView::Stretch);layout->addWidget(p.areas);
-    heading(layout,QStringLiteral("Measurement basis and standard"));p.policy=label(content,"appraisalDetailsPolicy");layout->addWidget(p.policy);
-    p.standards=label(content,"appraisalDetailsStandards");layout->addWidget(p.standards);
-    p.standards->setTextFormat(Qt::PlainText);
+    p.areas->header()->setMinimumSectionSize(45);p.areas->header()->setStretchLastSection(false);
+    p.areas->header()->setSectionResizeMode(0,QHeaderView::Stretch);
+    p.areas->header()->setSectionResizeMode(1,QHeaderView::Stretch);
+    p.areas->header()->setSectionResizeMode(2,QHeaderView::ResizeToContents);layout->addWidget(p.areas);
+    // Category totals and the form projection follow the area table.
+    heading(layout,QStringLiteral("Property totals"));p.totals=label(content,"appraisalDetailsTotals");layout->addWidget(p.totals);
+    // The calculation basis (policy, profile and standard) is reference
+    // material: collapsed by default below the areas.
+    auto* basis_toggle=new QToolButton(content);basis_toggle->setObjectName(QStringLiteral("appraisalDetailsBasisToggle"));
+    basis_toggle->setText(QStringLiteral("Calculation basis"));basis_toggle->setCheckable(true);basis_toggle->setAutoRaise(true);
+    basis_toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);basis_toggle->setArrowType(Qt::RightArrow);
+    basis_toggle->setToolTip(QStringLiteral("Measurement basis, declared policy, calculation profile and standard"));
+    layout->addWidget(basis_toggle);
+    auto* basis=new QWidget(content);basis->setObjectName(QStringLiteral("appraisalDetailsBasis"));basis->setMinimumWidth(0);
+    auto* basis_layout=new QVBoxLayout(basis);basis_layout->setContentsMargins(0,0,0,0);basis_layout->setSpacing(8);
+    p.policy=label(basis,"appraisalDetailsPolicy");basis_layout->addWidget(p.policy);
+    p.standards=label(basis,"appraisalDetailsStandards");basis_layout->addWidget(p.standards);
+    p.standards->setTextFormat(Qt::PlainText);basis->setVisible(false);layout->addWidget(basis);
+    connect(basis_toggle,&QToolButton::toggled,this,[basis,basis_toggle](bool expanded){
+        basis->setVisible(expanded);basis_toggle->setArrowType(expanded?Qt::DownArrow:Qt::RightArrow);
+    });
     auto* source_actions=new QVBoxLayout;source_actions->setSpacing(6);
     p.locate=new QPushButton(QStringLiteral("Show on canvas"),content);p.locate->setObjectName(QStringLiteral("appraisalDetailsLocate"));source_actions->addWidget(p.locate);
     p.facts=new QPushButton(QStringLiteral("Edit facts"),content);p.facts->setObjectName(QStringLiteral("appraisalDetailsEditFacts"));source_actions->addWidget(p.facts);layout->addLayout(source_actions);

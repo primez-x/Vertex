@@ -46,7 +46,7 @@ QString native_text(double metres) {
     std::array<char, 768> buffer{};
     const auto result = std::to_chars(buffer.data(), buffer.data() + buffer.size(), metres,
                                       std::chars_format::general);
-    require(result.ec == std::errc{}, "The native thickness cannot be displayed");
+    require(result.ec == std::errc{}, "This thickness is too large to show. Reopen these layers.");
     return q(std::string(buffer.data(), result.ptr) + " m");
 }
 QString initial_text(const Entity& entity, const std::vector<std::string>& pointers, double metres, Unit unit) {
@@ -193,8 +193,8 @@ public:
         QObject::connect(buttons, &QDialogButtonBox::accepted, owner, [this] { (void)owner->submit(); });
         QObject::connect(buttons, &QDialogButtonBox::rejected, owner, &QDialog::reject);
         try {
-            require(source.is_editable(), "The captured project is read only");
-            require(static_cast<bool>(current_source), "The current project source is unavailable");
+            require(source.is_editable(), "This project is read-only, so it cannot be changed here.");
+            require(static_cast<bool>(current_source), "The project is no longer available. Close this window and try again.");
             fence();
             const auto found = source.entities().find(wall_id);
             require(found != source.entities().end() && found->second.id == wall_id, "The wall is unavailable");
@@ -259,7 +259,7 @@ public:
         QObject::connect(timer, &QTimer::timeout, owner, [this] {
             if (stale || !source_error.isEmpty()) return;
             try { fence(); } catch (const std::exception& reason) { fail(QString::fromUtf8(reason.what())); }
-            catch (...) { fail("The current project source is unavailable. Reopen these layers."); }
+            catch (...) { fail("The project is no longer available. Close this window and try again."); }
         });
         QObject::connect(owner, &QDialog::finished, timer, [this, timer](int result) {
             timer->stop();
@@ -318,14 +318,14 @@ public:
     void fence() {
         require(!stale, "The project or drawing context changed. Reopen these layers.");
         try {
-            require(static_cast<bool>(current_source), "The current project source is unavailable");
+            require(static_cast<bool>(current_source), "The project is no longer available. Close this window and try again.");
             const auto current = current_source();
             require(current.document_id() == source.document_id() && current.revision() == source.revision() &&
                 current.saved_revision_optional() == source.saved_revision_optional() && current.dirty() == source.dirty() &&
                 current.is_editable() == source.is_editable() && current.read_only_reason() == source.read_only_reason(),
                 "The project changed. Reopen these layers.");
             require(source.shares_full_snapshot_with(current) || document_snapshot_digest(current) == digest,
-                    "The project source changed. Reopen these layers.");
+                    "The project changed. Reopen these layers.");
         } catch (...) { stale = true; throw; }
     }
     void fail(const QString& message) {

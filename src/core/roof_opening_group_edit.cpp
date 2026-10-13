@@ -199,7 +199,7 @@ std::optional<double> property_metres(const std::optional<RoofOpeningQuantityInp
         parsed.exact_metres != input->quantity.exact_metres ||
         parsed.entered_unit != input->quantity.entered_unit ||
         !std::isfinite(parsed.metres) || (positive ? parsed.metres <= 0.0 : parsed.metres < 0.0))
-        invalid("Skylight property quantity must be exact and within its admitted range");
+        invalid("Skylight values must be exact and within the allowed range");
     return parsed.metres;
 }
 Vec2 rebased_size(const RoofOpening& source, Vec2 before, Vec2 after, Vec2 scale) {

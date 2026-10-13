@@ -58,7 +58,7 @@ Wall read_wall(const Entity& entity) {
     validate_wall_semantics(wall);
     const auto bounds=segment_bounds(wall.baseline);
     if(std::max({std::abs(bounds.minimum.x),std::abs(bounds.minimum.y),std::abs(bounds.maximum.x),std::abs(bounds.maximum.y)})>1e6)
-        reject("Wall merge source exceeds the +/-1e6 metre geometry envelope: "+entity.id);
+        reject("The walls to merge are too far from the origin (limit +/-1e6 m): "+entity.id);
     validate_wall_curve_input(entity); validate_wall_length_input(entity); validate_wall_split_archive(entity);
     return wall;
 }

@@ -39,6 +39,8 @@ class QTouchEvent;
 class QPointingDevice;
 class QMimeData;
 class QContextMenuEvent;
+class QLineEdit;
+class QLabel;
 
 namespace sketch::desktop {
 
@@ -503,6 +505,11 @@ public:
     void setSelectionCaption(QString caption);
     void setSelectionTransformEnabled(bool resize_enabled, bool rotate_enabled);
     void setSelectionAxisResizeEnabled(bool enabled);
+    // Prompt painted on an empty drawing when no tool or draft is active.
+    void setEmptyDrawingHint(QString hint);
+    [[nodiscard]] QString emptyDrawingHint() const { return m_empty_drawing_hint; }
+    // True when the hint is currently painted (empty drawing, idle canvas).
+    [[nodiscard]] bool emptyDrawingHintVisible() const;
     // Explicit independent-root side resize. The host supplies analytical axes;
     // ordinary multi-selection and corner transforms retain their own opt-ins.
     void setSelectionAxisResizeCohort(QStringList ids, std::optional<CanvasSelectionFrame> frame);
@@ -616,6 +623,9 @@ public:
                                           double pixels_per_metre) const;
     // Actual painted control, including rotation and annotation avoidance.
     [[nodiscard]] std::optional<QPointF> selectionRotationHandlePosition() const;
+    // Painted side (single-axis resize) handle centres in widget coordinates;
+    // empty when the selection offers corner handles only.
+    [[nodiscard]] std::vector<QPointF> selectionAxisHandlePositions() const;
     void setSelectionControlsVisible(bool visible) {
         if (!visible && (m_generated_label_move_identity || !m_roof_opening_group_capture.empty() ||
             !m_mixed_selection_capture.empty())) resetGesture();
@@ -651,6 +661,31 @@ public:
         return labelPresentationAt(toScreen(point,QRectF(rect())));
     }
     [[nodiscard]] std::optional<CanvasLabel> labelPresentation(const CanvasLabelPresentationIdentity& identity) const;
+    // Widget-coordinate bounding box of one painted label (rotation included).
+    [[nodiscard]] std::optional<QRectF> labelScreenBounds(const CanvasLabelPresentationIdentity& identity) const;
+
+    // Inline length editing (DimensionLabel "editing" state). Double-clicking
+    // a length label, or Enter while one is selected, replaces its text with
+    // a canvas field. The host owns applicability and the document command:
+    // `resolve` returns the prefilled input text for an editable length label
+    // (nullopt: not a length; the ordinary double-click contract applies);
+    // `commit` applies the typed text and returns an empty string on success
+    // or a short fact+fix message, which keeps the field open in its error
+    // state. Esc and focus loss cancel without any document change.
+    void setInlineLengthEditRequested(
+        std::function<std::optional<QString>(CanvasLabelPresentationIdentity)> resolve,
+        std::function<QString(CanvasLabelPresentationIdentity, QString)> commit);
+    bool beginInlineLengthEdit(const CanvasLabelPresentationIdentity& identity);
+    // Opens the editor on the single selected length label, if any.
+    bool beginInlineLengthEditForSelection();
+    bool acceptInlineLengthEdit();
+    void cancelInlineLengthEdit();
+    [[nodiscard]] bool inlineLengthEditActive() const noexcept { return m_inline_length_target.has_value(); }
+    [[nodiscard]] std::optional<CanvasLabelPresentationIdentity> inlineLengthEditTarget() const {
+        return m_inline_length_target;
+    }
+    [[nodiscard]] QLineEdit* inlineLengthEditor() const noexcept { return m_inline_length_editor; }
+    [[nodiscard]] QString inlineLengthEditError() const;
     void setEntitySelectionClicked(std::function<void(QString, bool)> callback);
     // Alt-click supplies distinct overlapping targets, with the ordinary pick
     // first. Starting captures source authority; completion resolves the pick.
@@ -1389,6 +1424,7 @@ private:
     bool m_symbol_drag_active{};
     std::uint64_t m_symbol_drag_preview_serial{};
     CanvasTool m_tool{CanvasTool::select};
+    QString m_empty_drawing_hint;
     bool m_grid_enabled{true};
     bool m_snap_enabled{true};
     bool m_wall_snap_enabled{false};
@@ -1695,6 +1731,18 @@ private:
     std::function<bool(const QString&)> m_drawing_text_requested;
     std::function<void()> m_draft_undo_requested;
     std::function<void()> m_draft_redo_requested;
+
+    // Inline length editor (see setInlineLengthEditRequested).
+    void updateInlineLengthEditorGeometry();
+    void setInlineLengthEditorInvalid(const QString& message);
+    void closeInlineLengthEditor();
+    std::function<std::optional<QString>(CanvasLabelPresentationIdentity)> m_inline_length_resolve;
+    std::function<QString(CanvasLabelPresentationIdentity, QString)> m_inline_length_commit;
+    std::optional<CanvasLabelPresentationIdentity> m_inline_length_target;
+    QString m_inline_length_initial_text;
+    QLineEdit* m_inline_length_editor{};
+    QLabel* m_inline_length_message{};
+    bool m_inline_length_busy{};
 };
 
 }  // namespace sketch::desktop

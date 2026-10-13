@@ -82,7 +82,7 @@ public:
           current_source(std::move(current)), source_digest(document_snapshot_digest(source)) {
         if (!source.is_editable() || !current_source || !plan.ready() || plan.dependencies.empty() ||
             plan.dependencies.size() > 4096)
-            throw std::invalid_argument("Stair attachment review requires an editable source and a bounded ready dependency plan.");
+            throw std::invalid_argument("The railings on this stair cannot be reviewed right now. Close this stair edit and try again.");
         dialog->setObjectName(QStringLiteral("stairDependencyReviewDialog"));
         dialog->setWindowTitle(QStringLiteral("Update stair railings"));
         dialog->resize(720, std::clamp(170 + static_cast<int>(plan.dependencies.size()) * 54, 300, 620));
@@ -146,6 +146,7 @@ public:
         apply = buttons->button(QDialogButtonBox::Apply);
         apply->setText(QStringLiteral("Continue stair edit"));
         apply->setObjectName(QStringLiteral("stairDependencyApply"));
+        apply->setAccessibleName(QStringLiteral("Continue stair edit"));
         apply->setDefault(true);
         QObject::connect(apply, &QPushButton::clicked, dialog, &StairDependencyReviewDialog::accept);
         QObject::connect(buttons, &QDialogButtonBox::rejected, dialog, &StairDependencyReviewDialog::reject);
@@ -170,9 +171,10 @@ public:
         }
         apply->setEnabled(complete);
         consequences->setVisible(removed > 0);
-        consequences->setText(QStringLiteral(
-            "%1 railing(s) and their attached components will be removed with this stair edit. Undo restores the whole edit.")
-            .arg(static_cast<qulonglong>(removed))+
+        consequences->setText((removed == 1 ? QStringLiteral(
+            "1 railing and its attached components will be removed with this stair edit. Undo restores the whole edit.") :
+            QStringLiteral("%1 railings and their attached components will be removed with this stair edit. Undo restores the whole edit.")
+            .arg(static_cast<qulonglong>(removed)))+
             (requirements.isEmpty() ? QString{} : QStringLiteral("\n")+requirements.join(QStringLiteral("\n"))));
     }
 

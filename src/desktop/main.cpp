@@ -17,8 +17,16 @@
 #include <QTimer>
 #include <QUuid>
 #include <array>
+#include <cstdio>
 #include <cstring>
 #include <utility>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -302,10 +310,26 @@ bool seed_smoke_reference(sketch::desktop::MainWindow& window) {
 
 }  // namespace
 
+// vertex.exe is a GUI-subsystem program: by default Qt sends its messages to
+// the debugger, and no console is attached, so smoke failures were silent.
+// Smoke runs attach to the launching console (when stderr is not already
+// redirected) and force Qt logging to stderr so every exit code has a reason.
+static void route_smoke_diagnostics_to_console() {
+#ifdef _WIN32
+    const auto handle = GetStdHandle(STD_ERROR_HANDLE);
+    if ((handle == nullptr || handle == INVALID_HANDLE_VALUE) && AttachConsole(ATTACH_PARENT_PROCESS)) {
+        FILE* stream = nullptr;
+        (void)freopen_s(&stream, "CONOUT$", "w", stderr);
+    }
+#endif
+    qputenv("QT_FORCE_STDERR_LOGGING", "1");
+}
+
 int main(int argc, char** argv) {
     for (int index = 1; index < argc; ++index) {
         if (std::strcmp(argv[index], "--smoke") == 0) {
             sketch::runtime::configure_noninteractive_errors();
+            route_smoke_diagnostics_to_console();
             break;
         }
     }
@@ -356,6 +380,7 @@ int main(int argc, char** argv) {
         const auto project_input = smoke_project_input_path(application.arguments());
         if (project_input.isEmpty()) {
             if (!seed_smoke_document(window, architectural, market)) {
+                qCritical() << "Vertex: smoke fixture could not be created:" << window.lastError();
                 return 2;
             }
         } else if (!window.openProject(project_input)) {
@@ -413,6 +438,14 @@ int main(int argc, char** argv) {
                 if (architectural && !window.exportNativeViewImage(native_output)) {
                     qCritical() << "Vertex: native 3D smoke export failed:"
                                 << window.lastError();
+                    const auto platform = QGuiApplication::platformName();
+                    if (platform == QStringLiteral("offscreen") || platform == QStringLiteral("minimal")) {
+                        qCritical().noquote()
+                            << "Vertex: the architectural smoke needs the native OCCT 3D view, which"
+                            << "the" << platform << "Qt platform cannot create. Run it on a desktop"
+                            << "session without QT_QPA_PLATFORM=" + platform + ", or use"
+                            << "--smoke-workspace measurement for headless checks.";
+                    }
                     application.exit(4);
                     return;
                 }

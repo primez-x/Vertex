@@ -14,6 +14,7 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QGroupBox>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QLabel>
@@ -38,6 +39,7 @@
 #include <functional>
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
 #include <cmath>
 #include <algorithm>
 #include <vector>
@@ -99,14 +101,12 @@ void boundary_review_precision(bool metric, bool ansi) {
     require(!length.isEmpty() && !area_dimension.isEmpty(), "review uses authored dependent dimensions");
     require(window.selectEntity(area), "select measured boundary for the actual geometry editor");
     const auto before = window.document().snapshot();
-    const auto before_length = ansi ? (metric ? QStringLiteral("10.0 ft (3.048 m)") : QStringLiteral("10.0 ft"))
-                                   : QStringLiteral("3.048 m");
-    const auto after_length = ansi ? (metric ? QStringLiteral("11.0 ft (3.353 m)") : QStringLiteral("11.0 ft"))
-                                  : QStringLiteral("≈ 3.353 m");
-    const auto before_area = ansi ? (metric ? QStringLiteral("100 sq ft (9.29 m²)") : QStringLiteral("100 sq ft"))
-                                 : QStringLiteral("9.29 m²");
-    const auto after_area = ansi ? (metric ? QStringLiteral("105 sq ft (9.75 m²)") : QStringLiteral("105 sq ft"))
-                                : QStringLiteral("9.75 m²");
+    // ANSI readouts stay in their imperial basis in either workspace unit
+    // mode, with no metric parenthetical (one system per readout).
+    const auto before_length = ansi ? QStringLiteral("10.0 ft") : QStringLiteral("3.048 m");
+    const auto after_length = ansi ? QStringLiteral("11.0 ft") : QStringLiteral("3.353 m");
+    const auto before_area = ansi ? QStringLiteral("100 sf") : QStringLiteral("9.3 m²");
+    const auto after_area = ansi ? QStringLiteral("105 sf") : QStringLiteral("9.8 m²");
     dialog(window, "boundaryGeometryDialog",
         [&] { child<QPushButton>(window, "editBoundaryGeometry").click(); }, [&](QDialog& value) {
             value.setAttribute(Qt::WA_DontShowOnScreen);
@@ -156,10 +156,8 @@ void boundary_review_precision(bool metric, bool ansi) {
             };
             check_labels(length, before_length, after_length);
             check_labels(area_dimension, before_area, after_area);
-            const auto before_perimeter = ansi ? (metric ? QStringLiteral("40.0 ft (12.192 m)") : QStringLiteral("40.0 ft"))
-                                              : QStringLiteral("12.192 m");
-            const auto after_perimeter = ansi ? (metric ? QStringLiteral("41.0 ft (12.512 m)") : QStringLiteral("41.0 ft"))
-                                             : QStringLiteral("≈ 12.512 m");
+            const auto before_perimeter = ansi ? QStringLiteral("40.0 ft") : QStringLiteral("12.192 m");
+            const auto after_perimeter = ansi ? QStringLiteral("41.0 ft") : QStringLiteral("12.512 m");
             require(child<QLabel>(value, "boundaryGeometrySummary").text() ==
                 QStringLiteral("Edge: %1 → %2\nAnalytical boundary area: %3 → %4    Perimeter: %5 → %6")
                     .arg(before_length, after_length, before_area, after_area, before_perimeter, after_perimeter),
@@ -223,7 +221,7 @@ void check_saved_appraisal_sheet(MainWindow& window, const QString& area, const 
             for (int i = 0; i < table.rowCount(); ++i) {
                 if (table.item(i, label_column)->text() != "Above-grade finished (GLA)") continue;
                 const auto displayed = table.item(i, area_column)->text();
-                require(displayed.startsWith("100 ft²") &&
+                require(displayed.startsWith("100 sf") &&
                     displayed.contains("supplemental: 9.29 m²") == metric,
                     "actual schedule table matches canonical GLA and supplementary metric output");
                 found = true;
@@ -237,14 +235,13 @@ void check_saved_appraisal_sheet(MainWindow& window, const QString& area, const 
         require(pdf.load(path) == QPdfDocument::Error::None && pdf.pageCount() == 1,
             "actual appraisal sheet PDF loads");
         const auto text = pdf.getAllText(0).text().simplified();
-        require(text.contains("Above-grade finished (GLA) 100 ft²") ||
-                text.contains("Above-grade finished (GLA) 100 sq ft"),
+        require(text.contains("Above-grade finished (GLA) 100 sf"),
             "actual ANSI schedule GLA row reports whole square feet in either workspace");
         require(!text.contains("100.00"),
             "canonical ANSI sheet totals do not fall back to workspace rounding");
         require(text.contains("ANSI") && text.contains("validation pending"),
             "saved sheet identifies its policy and pending standards validation");
-        require(text.contains(metric ? "10.0 ft (3.048 m)" : "10.0 ft"),
+        require(text.contains("10.0 ft") && !text.contains("10.0 ft (3.048 m)"),
             "plan dimensions and schedule retain the canonical measurement presentation");
         const auto capture = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
         if (!capture.isEmpty()) {
@@ -299,7 +296,8 @@ void reporting_and_declaration_lifecycle() {
         auto& units = child<QTableWidget>(value, "appraisalReportingUnits");
         require(units.rowCount() == 0, "legacy reporting starts without inferred living units");
         child<QPushButton>(value, "appraisalReportingAddUnit").click();
-        require(units.rowCount() == 1, "Add unit creates an editable registry row");
+        require(units.rowCount() == 1 && units.item(0, 0)->text() == QStringLiteral("Unit 1"),
+            "Add unit creates an editable registry row with a readable default name");
         units.item(0, 0)->setText("Main dwelling");
         primary_unit_id = units.item(0, 0)->data(Qt::UserRole).toString();
         require(!primary_unit_id.isEmpty(), "unit identifier has a separate stable technical identity");
@@ -360,6 +358,20 @@ void reporting_and_declaration_lifecycle() {
     require(report.qualified && report.reporting && report.reporting->room_counts_available &&
         report.reporting->primary_counts.bedrooms == 1 && report.reporting->primary_counts.bathrooms_full == 1,
         "actual reporting editor produces current explicit primary counts");
+    {
+        // The printed body numbers rooms; generated room IDs appear only in
+        // the provenance appendix that keys them to "Room N".
+        const auto html = sketch::desktop::appraisal_report_html(reported, report, false, true);
+        const auto appendix = html.indexOf("Appendix: source provenance");
+        require(!report.reporting->rooms.empty() && appendix > 0, "printed report has declared rooms and an appendix");
+        const auto body = html.left(appendix);
+        require(body.contains("Room 1"), "printed report body labels declared rooms as Room 1, Room 2, ...");
+        for (const auto& room : report.reporting->rooms) {
+            const auto id = QString::fromStdString(room.room_id).toHtmlEscaped();
+            require(!body.contains(id) && html.indexOf(id) > appendix,
+                "generated room IDs are printed only in the provenance appendix");
+        }
+    }
     require(report.reporting->individual_units_available && report.reporting->living_units.size() == 1,
         "confirmed assignment produces one independently available named unit");
     const auto& primary_unit = report.reporting->living_units.front();
@@ -622,6 +634,11 @@ void setup_and_facts() {
         choose(value, "ansiCeilingKind", "flat"); child<QLineEdit>(value, "ansiMinimumHeight").setText("6.96 ft");
         require(child<QLabel>(value,"ansiRoundedMinimumHeight").text().contains("7.0 ft (nearest tenth foot)"),
             "facts previews the rounded classification height without replacing the entered observation");
+        auto* facts_scroll = value.findChild<QScrollArea*>();
+        require(facts_scroll && facts_scroll->horizontalScrollBarPolicy() == Qt::ScrollBarAlwaysOff &&
+            !value.findChild<QComboBox*>(QStringLiteral("policy_kind")) &&
+            child<QLabel>(value, "appraisalFactsMeasurementIncrement").text() == QStringLiteral("Nearest tenth foot"),
+            "Facts wraps instead of scrolling sideways and shows the Setup increment read-only");
         const auto capture=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
         if(!capture.isEmpty()) {
             auto* viewport=value.findChild<QScrollArea*>();require(viewport,"Facts has a scrollable evidence viewport");
@@ -638,14 +655,25 @@ void setup_and_facts() {
         .at("appraisal_facts").at("ansi").at("ceiling").at("minimum_height_m").get<double>() - 6.96*.3048) < 1e-12,
         "height retains explicit observed imperial quantity before acquisition rounding");
     auto& height_details=child<sketch::desktop::AppraisalDetailsPanel>(window,"appraisalDetailsPanel");
-    require(child<QLabel>(height_details,"appraisalDetailsGla").text()=="100 sq ft",
+    require(child<QLabel>(height_details,"appraisalDetailsGla").text()=="100 sf",
         "actual Facts authoring counts the source-backed rounded ceiling observation");
     for(const auto& [height,increment,rounded,gla] : std::vector<std::tuple<const char*,const char*,const char*,const char*>>{
-        {"6.85 ft","tenth_foot","6.9 ft (nearest tenth foot)","0 sq ft"},
-        {"6.951 ft","tenth_foot","7.0 ft (nearest tenth foot)","100 sq ft"},
-        {"6.951 ft","inch","6 ft 11 in (nearest inch)","0 sq ft"}}) {
+        {"6.85 ft","tenth_foot","6.9 ft (nearest tenth foot)","0 sf"},
+        {"6.951 ft","tenth_foot","7.0 ft (nearest tenth foot)","100 sf"},
+        {"6.951 ft","inch","6' 11\" (nearest inch)","0 sf"}}) {
+        // The measurement increment is property-level evidence: it is set
+        // only in Setup, and Facts previews against the recorded increment.
+        if (std::string_view(increment) != "tenth_foot")
+            dialog(window,"appraisalSetupDialog",open,[&](QDialog& value) {
+                choose(value,"ansiAcquisitionIncrement",increment);
+                child<QDialogButtonBox>(value,"appraisalSetupButtons").button(QDialogButtonBox::Save)->click();
+                require(value.result()==QDialog::Accepted,"Setup records the measurement increment");
+            });
+        require(window.selectEntity(area),"reselect the measured room after Setup");
         dialog(window,"appraisalFactsDialog",edit,[&](QDialog& value) {
-            choose(value,"ansiAcquisitionIncrement",increment);
+            require(!value.findChild<QComboBox*>(QStringLiteral("ansiAcquisitionIncrement")) &&
+                !value.findChild<QGroupBox*>(QStringLiteral("ansiMeasurementEvidence")),
+                "Facts edits area evidence only; property measurement evidence lives in Setup");
             child<QLineEdit>(value,"ansiMinimumHeight").setText(QString::fromLatin1(height));
             require(child<QLabel>(value,"ansiRoundedMinimumHeight").text().contains(QString::fromLatin1(rounded)),
                 "live height preview follows entered observation");
@@ -654,8 +682,9 @@ void setup_and_facts() {
         });
         require(child<QLabel>(height_details,"appraisalDetailsGla").text()==QString::fromLatin1(gla),
             "GLA refreshes to the actual rounded flat-ceiling classification");
-        require(window.undoCommand() && window.document().snapshot().entities()==after.entities(),
-            "undo preserves the original observed height and classification");
+        require(window.undoCommand() && (std::string_view(increment) == "tenth_foot" || window.undoCommand()) &&
+            window.document().snapshot().entities()==after.entities(),
+            "undo preserves the original observed height, increment and classification");
     }
     require(window.undoCommand() && window.document().snapshot().entities() == before.entities() && window.redoCommand(), "facts atomic undo redo");
     dialog(window, "appraisalFactsDialog", edit, [&](QDialog& value) {
@@ -665,7 +694,7 @@ void setup_and_facts() {
     });
     QTemporaryDir directory; require(directory.isValid() && window.saveProjectAs(directory.filePath("ansi.bldproj")) &&
         window.openProject(directory.filePath("ansi.bldproj")) && window.document().snapshot().entities() == after.entities(), "ANSI evidence survives save reopen");
-    require(child<QLabel>(height_details,"appraisalDetailsGla").text()=="100 sq ft",
+    require(child<QLabel>(height_details,"appraisalDetailsGla").text()=="100 sf",
         "reopened observed height uses the same acquisition rounding");
     const auto height_report=sketch::build_appraisal_document_report(window.document().snapshot(),"property-1");
     const auto height_html=sketch::desktop::appraisal_report_html(window.document().snapshot(),height_report,true,true);
@@ -694,7 +723,7 @@ void setup_and_facts() {
     require(!dimension.isEmpty(), "ANSI dimension created"); window.setMetricUnits(true);
     auto& canvas = child<sketch::desktop::PlanCanvas>(window, "measurementPlanCanvas");
     const auto dimension_label = std::find_if(canvas.labels().begin(), canvas.labels().end(), [&](const auto& label) { return label.id == dimension; });
-    require(dimension_label != canvas.labels().end() && dimension_label->text == "10.0 ft (3.048 m)", "ANSI dimensions retain canonical tenth-foot value with supplementary metric");
+    require(dimension_label != canvas.labels().end() && dimension_label->text == "10.0 ft", "ANSI dimensions retain the canonical tenth-foot value in one system, even in a metric workspace");
     check_saved_appraisal_sheet(window, area, directory.path());
     sketch::Boundary low_shape{{{0.2,0.2},{1.2,0.2},0},{{1.2,0.2},{1.2,1.2},0},{{1.2,1.2},{0.2,1.2},0},{{0.2,1.2},{0.2,0.2},0}};
     const auto low_area = window.createBoundary(low_shape); require(!low_area.isEmpty(), "actual low-height geometry");
@@ -751,10 +780,10 @@ void setup_and_facts() {
     const auto nested=window.document().snapshot();
     const auto nested_report=sketch::build_appraisal_document_report(nested,property_id);
     require(nested_report.qualified && nested_report.calculation,"nested room measurements qualify under current Vertex rules");
-    const auto expected_gla=QString::fromStdString(nested_report.calculation->property.gla().total.display.text)+" sq ft";
+    const auto expected_gla=QString::fromStdString(nested_report.calculation->property.gla().total.display.text)+" sf";
     auto& details=child<sketch::desktop::AppraisalDetailsPanel>(window,"appraisalDetailsPanel");
     require(child<QLabel>(window,"appraisalGlaTotal").text()==
-        QString::fromStdString(nested_report.calculation->property.gla().total.display.text)+QStringLiteral(" ft²"),
+        QString::fromStdString(nested_report.calculation->property.gla().total.display.text)+QStringLiteral(" sf"),
         "Properties GLA agrees with authoritative nested appraisal total");
     require(child<QLabel>(details,"appraisalDetailsGla").text()==expected_gla,
         "Details agrees with authoritative nested appraisal total");

@@ -57,7 +57,7 @@ double scalar(const Entity& entity, const Dimension& dimension) {
     if (!selected || !selected->is_number()) invalid("Opening capture dimension is missing or invalid");
     const auto value = selected->get<double>();
     if (!std::isfinite(value) || (dimension.zero_allowed ? value < 0 : value <= 0))
-        invalid("Opening capture dimension is outside its admitted range");
+        invalid("The entered opening dimension is outside the allowed range");
     if (alias && (!alias->is_number() || alias->get<double>() != value))
         invalid("Opening capture scalar aliases disagree");
     return value;

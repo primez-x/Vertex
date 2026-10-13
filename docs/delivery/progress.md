@@ -14,6 +14,38 @@ changed source does not acquire runtime acceptance without later qualification.
 
 ## Current delivery state
 
+### October 12 design system, audit and simplification
+
+The user supplied the Vertex design system (artifact
+https://claude.ai/artifact/Bqdcu5n9fxLbtw1DLJWin8), now kept in
+`docs/design/vertex-design-system/` and mirrored for Qt in
+`src/desktop/vertex_design_tokens.hpp`. Applied: theme and stylesheet on
+tokens (dark primary; light; high contrast kept as an accessibility theme),
+canvas drawing colors, snap glyphs by shape, IBM Plex Sans/Mono bundled with
+OFL notices and SBOM entries, a unified measurement formatter
+(`src/desktop/measurement_format.hpp`: feet-inches, "1,842.5 sf", one unit
+system per readout), GLA visible before setup with a withheld state, issues
+named by area with actions, report/PDF leading with property and GLA and a
+provenance appendix.
+
+A UI/UX audit (https://claude.ai/artifact/Pspcr9bqACkGsfDa5MF2Me) and a
+settings inventory of ~95 dialogs drive the follow-up. Binding user direction:
+ship sensible defaults; advanced configuration is the exception. A shared
+collapsed `AdvancedSection` (`src/desktop/advanced_section.hpp`) holds expert
+controls. Simplified so far: architecture object/profile/layer/opening/stair
+dialogs (stair floor connections are now a picker by floor name), precise
+input and constraint dialogs, site placement, selection properties,
+assemblies, room reviews, text library. Save no longer replays history
+redundantly (assembly test project 15.2 s -> 0.56 s) and shows progress.
+The default sheet layout keeps the revision table area clear.
+
+In progress: left panel overhaul (single tab row, draw tools in the toolbar,
+Layers tree with user names, Library search/categories, Details area table),
+appraisal Setup/Facts deduplication, prompt chains to forms, plain-language
+errors and pending paste across navigation, inline dimension editing. Next:
+grouped menus and labeled header, one Preferences dialog. Developer-host
+results only; nothing installed; no user acceptance claimed.
+
 ### October 12 desktop-suite rounds (CTest 65% -> 96%)
 
 Commits 9f11c450, f8edca47 and 81c2d677 take Release CTest from 204/314 to

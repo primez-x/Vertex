@@ -89,6 +89,14 @@ QTreeWidgetItem* preceding_visible_item(QTreeWidget* tree, QTreeWidgetItem* targ
         if ((*iterator)->isHidden()) {
             continue;
         }
+        // Rows inside a collapsed group (for example a layer's kind groups,
+        // collapsed by default) are not on screen and take no keyboard step.
+        bool collapsed = false;
+        for (auto* parent = (*iterator)->parent(); parent && !collapsed; parent = parent->parent())
+            collapsed = !parent->isExpanded();
+        if (collapsed) {
+            continue;
+        }
         if (*iterator == target) {
             return previous;
         }

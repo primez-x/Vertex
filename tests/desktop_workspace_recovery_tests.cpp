@@ -834,7 +834,7 @@ void run() {
     require(lifecycle.openProject(qt_path(source)), "open lifecycle fixture");
     const auto lifecycle_path = directory / "lifecycle.bldproj";
     require(lifecycle.saveProjectAs(qt_path(lifecycle_path)), "save lifecycle fixture");
-    require(lifecycle.undoCommand() && lifecycle.windowTitle().endsWith(" *"),
+    require(lifecycle.undoCommand() && lifecycle.isWindowModified(),
         "lifecycle-only undo marks the project dirty");
     require(lifecycle.saveProject(), "save lifecycle-only undo");
     const auto retired = ProjectStore::load_archive(lifecycle_path, ArchiveRole::ordinary);

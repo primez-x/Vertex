@@ -102,10 +102,11 @@ void modal(const char* name,const std::function<void()>& open,const std::functio
 // on the active plan canvas rather than publishing synchronously: a worker
 // prepares the group, one click chooses its anchor, and a click after the
 // admitted preview completes publishes everything as one revision. Clicks
-// before the group is ready are refused with "wait" diagnostics, but a press
-// while the final confirmation preview is still pending retires that preview
-// (PlanCanvas::resetGesture) and the session is then cancelled ("preview was
-// retired. Paste again."). Like a user, never click while it is pending.
+// before the group is ready are refused with "still being prepared"
+// diagnostics. A press while the final confirmation preview is pending clears
+// that preview (PlanCanvas::resetGesture), but the paste stays armed and a
+// fresh preview is opened for the finished result. The helper still waits for
+// the preview so each click is a deliberate placement.
 void place_mixed_paste(MainWindow& window,Revision before) {
     PlanCanvas* canvas=dynamic_cast<PlanCanvas*>(QApplication::focusWidget());
     if(!canvas)for(const auto* name:{"measurementPlanCanvas","architecturalPlanCanvas"})

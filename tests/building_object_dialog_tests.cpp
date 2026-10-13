@@ -4,6 +4,7 @@
 #include "sketch/building_entity.hpp"
 #include "sketch/vertical_levels.hpp"
 #include "support/noninteractive_errors.hpp"
+#include "../src/desktop/advanced_section.hpp"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -17,6 +18,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QTableWidget>
+#include <QToolButton>
 
 #include <array>
 #include <cmath>
@@ -91,6 +93,12 @@ void select_form(BuildingObjectDialog& dialog, std::string_view form) {
                                                                 static_cast<qsizetype>(form.size())));
     require(form_index >= 0, "requested building form is not listed");
     forms.setCurrentIndex(form_index);
+}
+
+sketch::desktop::AdvancedSection* advanced_section(BuildingObjectDialog& dialog) {
+    // AdvancedSection has no Q_OBJECT of its own; find it by its object name.
+    return static_cast<sketch::desktop::AdvancedSection*>(
+        dialog.findChild<QWidget*>(QStringLiteral("advancedSection")));
 }
 
 void set_field(BuildingObjectDialog& dialog, const char* object_name,
@@ -860,6 +868,9 @@ void test_hosted_railing_candidates_are_atomic_and_cancel_is_immutable() {
                 document.snapshot().entities() == source.entities(), "Cancel must discard candidates and source mutation");
     BuildingObjectDialog invalid(source, std::nullopt, true);
     select_form(invalid, "stair_flight_railing");
+    require(advanced_section(invalid) && !advanced_section(invalid)->expanded() &&
+                advanced_section(invalid)->isAncestorOf(&field(invalid, "buildingObjectHostStart")),
+            "flight railings cover the whole flight unless Advanced trims them");
     require(!invalid.submit() && !invalid.candidate(), "host selection must be explicit");
     combo(invalid, "buildingObjectStairHost").setCurrentIndex(1);
     const auto selected_flight = combo(invalid, "buildingObjectStairHostFlight").currentData();
@@ -895,6 +906,106 @@ void test_hosted_railing_candidates_are_atomic_and_cancel_is_immutable() {
     require_quantity_receipt(changed_rail, "/height_m", "3 ft", "ft", 1143, 1250);
 }
 
+void test_expert_controls_start_collapsed_at_defaults() {
+    {
+        BuildingObjectDialog dialog(std::nullopt, true);
+        select_form(dialog, "straight_beam");
+        auto* advanced = advanced_section(dialog);
+        require(advanced != nullptr && !advanced->expanded(), "beam expert controls start collapsed");
+        require(advanced->isAncestorOf(&field(dialog, "buildingObjectUpX")) &&
+                    field(dialog, "buildingObjectUpZ").text() == "1",
+                "beam up direction lives in Advanced with an upright default");
+        require(dialog.submit() &&
+                    dialog.candidate()->properties.at("up_dir") == nlohmann::json::array({0.0, 0.0, 1.0}),
+                "a beam submits upright without opening Advanced");
+        set_field(dialog, "buildingObjectUpZ", "not a number");
+        require(!dialog.submit() && advanced->expanded() && dialog.lastError().contains("Up direction Z"),
+                "an invalid expert value opens Advanced and names its field");
+    }
+    {
+        BuildingObjectDialog dialog(std::nullopt, true);
+        select_form(dialog, "straight_beam");
+        set_field(dialog, "buildingObjectUpY", "1");
+        set_field(dialog, "buildingObjectUpZ", "0");
+        require(dialog.submit(), "tilted beam submits");
+        BuildingObjectDialog edit(*dialog.candidate(), true);
+        require(advanced_section(edit) && advanced_section(edit)->expanded(),
+                "a beam with a custom up direction opens Advanced so the value is visible");
+    }
+    {
+        BuildingObjectDialog dialog(std::nullopt, true);
+        select_form(dialog, "straight_stair_flight");
+        auto* advanced = advanced_section(dialog);
+        require(advanced && !advanced->expanded() &&
+                    advanced->isAncestorOf(&field(dialog, "buildingObjectLevelGraph")),
+                "raw level IDs are expert controls");
+        require(dialog.findChild<QComboBox*>("buildingObjectLevelLinkChoice") != nullptr,
+                "stairs offer a floor choice instead of raw IDs");
+        check(dialog, "buildingObjectLevelConnectionEnabled").setChecked(true);
+        require(!dialog.submit() && advanced->expanded() && dialog.lastError().contains("no linked floors"),
+                "with no linked floors the stair explains the fix and shows the level IDs");
+    }
+    {
+        BuildingObjectDialog dialog(std::nullopt, true);
+        select_form(dialog, "multi_flight_stair");
+        dialog.findChild<QPushButton*>("buildingObjectAddStairFlight")->click();
+        auto* landings = dialog.findChild<QTableWidget*>("buildingObjectStairLandings");
+        require(landings && landings->isColumnHidden(4) && advanced_section(dialog) &&
+                    !advanced_section(dialog)->expanded(),
+                "landing edge alignment is hidden with the other expert controls");
+        auto* toggle = dialog.findChild<QToolButton*>("advancedSectionToggle");
+        require(toggle != nullptr, "Advanced section toggle exists");
+        toggle->click();
+        require(!landings->isColumnHidden(4), "opening Advanced shows landing edge alignment");
+        toggle->click();
+        require(landings->isColumnHidden(4), "closing Advanced hides landing edge alignment");
+    }
+}
+
+void test_stair_floor_choice_names_levels_and_fills_ids() {
+    using namespace sketch;
+    auto document = Document::create();
+    const VerticalLevelGraph levels({{"ground", 0}, {"first", 2.5}, {"second", 5.5}},
+                                    {{"ground-first", "ground", "first"}, {"first-second", "first", "second"}});
+    const auto level_entity = Entity::create("vertical_levels", {{"model", nlohmann::json::parse(levels.serialize())}});
+    const auto floor = Entity::create("floor", {{"name", "Main floor"},
+        {"vertical_level_binding", VerticalLevelBinding{level_entity.id, "ground"}.to_json()}});
+    document.apply(ApplyEntityChanges{document.snapshot().revision(),
+        {EntityChange::upsert(level_entity), EntityChange::upsert(floor)}, {}, "levels"});
+    const auto source = document.snapshot();
+    BuildingObjectDialog dialog(source, std::nullopt, true);
+    select_form(dialog, "straight_stair_flight");
+    auto& floors = combo(dialog, "buildingObjectLevelLinkChoice");
+    require(floors.count() == 2 && !floors.isEnabled(), "each connected floor pair is offered once the stair is connected");
+    for (int i = 0; i < floors.count(); ++i)
+        require(!floors.itemText(i).contains("ground") && !floors.itemText(i).contains("first-second") &&
+                    !floors.itemText(i).contains(QString::fromStdString(level_entity.id)),
+                "floor choices never show raw IDs");
+    const auto main_floor = floors.findText(QStringLiteral("Main floor to "), Qt::MatchStartsWith);
+    require(main_floor >= 0, "levels are named by the floors that sit on them");
+    set_field(dialog, "buildingObjectTotalRise", "3 m");
+    check(dialog, "buildingObjectLevelConnectionEnabled").setChecked(true);
+    require(floors.isEnabled() && floors.currentIndex() >= 0 &&
+                field(dialog, "buildingObjectLevelLink").text() == "first-second",
+            "connecting infers the floor pair whose height matches the stair rise");
+    require(dialog.submit(), "inferred floor pair submits without opening Advanced");
+    require(dialog.candidate()->properties.at("level_connection").at("graph_id") == level_entity.id &&
+                dialog.candidate()->properties.at("level_connection").at("lower_level_id") == "first",
+            "floor choice writes the canonical level connection");
+    floors.setCurrentIndex(main_floor);
+    set_field(dialog, "buildingObjectTotalRise", "2.5 m");
+    require(field(dialog, "buildingObjectLevelLink").text() == "ground-first" && dialog.submit() &&
+                dialog.candidate()->properties.at("level_connection").at("upper_level_id") == "first",
+            "choosing floors replaces the connection IDs");
+    BuildingObjectDialog edit(source, *dialog.candidate(), true);
+    require(combo(edit, "buildingObjectLevelLinkChoice").currentIndex() == main_floor &&
+                advanced_section(edit) && !advanced_section(edit)->expanded(),
+            "an existing connection shows its floors and keeps Advanced closed");
+    require(edit.submit() && edit.candidate()->properties.at("level_connection") ==
+                dialog.candidate()->properties.at("level_connection"),
+            "reopening an unchanged connection keeps it exactly");
+}
+
 void test_landing_railing_choices_editing_and_refusals() {
     sketch::StairFlight stair{"landing-host", {2, 3, 0}, 0, 12, 3, 0.3, 1.2,
         sketch::StairLanding{1.2, 0.15}};
@@ -908,7 +1019,9 @@ void test_landing_railing_choices_editing_and_refusals() {
     for (const auto role : {sketch::StairLandingRole::connecting, sketch::StairLandingRole::top}) {
         BuildingObjectDialog dialog(source, std::nullopt, true);
         select_form(dialog, "stair_landing_railing");
-        auto& hosts = combo(dialog, "buildingObjectStairHost");
+        require(dialog.findChild<QComboBox*>("buildingObjectStairHost") == nullptr,
+                "landing railing stair choice must not share the flight railing's name");
+        auto& hosts = combo(dialog, "buildingObjectLandingStairHost");
         require(hosts.findData("legacy-host") < 0, "landing guards must not silently upgrade legacy hosts");
         require(!dialog.submit() && !dialog.candidate(), "landing guard requires explicit current host");
         hosts.setCurrentIndex(hosts.findData("landing-host"));
@@ -920,11 +1033,15 @@ void test_landing_railing_choices_editing_and_refusals() {
         require(!dialog.findChild<QLineEdit*>("buildingObjectBaseX") &&
                     !dialog.findChild<QLineEdit*>("buildingObjectLength"),
                 "landing guard placement must come entirely from its host");
+        require(dialog.findChild<QPushButton*>("buildingObjectLandingFullCoverage") == nullptr &&
+                    advanced_section(dialog) &&
+                    advanced_section(dialog)->isAncestorOf(&field(dialog, "buildingObjectHostStartPercent")),
+                "choosing a stretch covers all of it; trimming coverage is an Advanced edit");
         set_field(dialog, "buildingObjectPostSpacing", "800 mm");
         auto* preview = dialog.findChild<QPushButton*>("buildingObjectRailingPreview");
         require(preview, "landing guard must offer an actual native geometry preview"); preview->click();
         require(dialog.lastError().isEmpty() &&
-                    dialog.findChild<QLabel*>("buildingObjectRailingPreviewStatus")->text().contains("validated"),
+                    dialog.findChild<QLabel*>("buildingObjectRailingPreviewStatus")->text().contains("fits this landing"),
                 "valid selected interval must build a native preview against the captured host");
         require(dialog.submit(), "default exposed landing coverage must build successfully");
         auto original = *dialog.candidate();
@@ -966,7 +1083,7 @@ void test_landing_railing_choices_editing_and_refusals() {
         BuildingObjectDialog invalid_witness(source, missing, true);
         require(!invalid_witness.submit(), "missing topology witness must refuse reconstruction");
         BuildingObjectDialog cancel(source, std::nullopt, true); select_form(cancel, "stair_landing_railing");
-        combo(cancel, "buildingObjectStairHost").setCurrentIndex(1); cancel.reject();
+        combo(cancel, "buildingObjectLandingStairHost").setCurrentIndex(1); cancel.reject();
         require(!cancel.candidate() && cancel.relatedCandidates().empty(), "cancel must discard landing candidates");
         require(document.snapshot().entities() == source.entities() && document.snapshot().revision() == source.revision(),
                 "all preview, edit, invalid and cancel paths must leave source immutable");
@@ -1016,6 +1133,8 @@ int main(int argc, char** argv) {
         test_multiflight_widgets_preserve_identity_and_metadata();
         test_hosted_railing_candidates_are_atomic_and_cancel_is_immutable();
         test_landing_railing_choices_editing_and_refusals();
+        test_expert_controls_start_collapsed_at_defaults();
+        test_stair_floor_choice_names_levels_and_fills_ids();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

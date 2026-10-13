@@ -31,6 +31,8 @@
 #include <QPushButton>
 #include <QRectF>
 #include <QTabWidget>
+#include <QAction>
+#include <QToolBar>
 #include <QTemporaryDir>
 #include <QStandardPaths>
 #include <QUuid>
@@ -598,9 +600,19 @@ int main(int argc, char** argv) {
             require(widget.grab().save(QDir(capture_directory).filePath(file_name)),
                     "wall workflow capture saves");
         };
+        // Draw modes are primary-toolbar tool buttons; exactly one is active.
+        auto* toolbar = window.findChild<QToolBar*>(QStringLiteral("primaryToolbar"));
+        auto* wall_mode = window.findChild<QAction*>(QStringLiteral("drawModeWall"));
+        auto* area_mode = window.findChild<QAction*>(QStringLiteral("drawModeArea"));
+        auto* lines_mode = window.findChild<QAction*>(QStringLiteral("drawModeMeasuredLines"));
+        auto* wall_button = toolbar && wall_mode ? toolbar->widgetForAction(wall_mode) : nullptr;
+        require(wall_button && wall_button->isVisible() && area_mode && lines_mode &&
+                    wall_mode->isChecked() && !area_mode->isChecked() && !lines_mode->isChecked() &&
+                    wall_mode->toolTip() == QStringLiteral("Wall (W)"),
+                "common drawing mode is visible in the plan workspace toolbar");
         auto* drawing_mode = window.findChild<QComboBox*>(QStringLiteral("drawingMode"));
-        require(drawing_mode && drawing_mode->isVisible(), "common drawing mode is visible in the plan workspace");
-        require(drawing_mode->accessibleName() == QStringLiteral("Drawing mode") &&
+        require(drawing_mode && !drawing_mode->isVisible() &&
+                    drawing_mode->accessibleName() == QStringLiteral("Drawing mode") &&
                     drawing_mode->currentData().toString() == QStringLiteral("wall"),
                 "a fresh idle plan defaults to the physical Wall mode");
         field("wallDrawThickness")->setText(QStringLiteral("240 mm"));

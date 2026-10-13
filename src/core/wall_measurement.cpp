@@ -68,7 +68,7 @@ Vec2 point(const Json& value, std::string_view label) {
         reject(std::string(label) + " must contain two coordinates");
     const Vec2 result{number(value[0], label), number(value[1], label)};
     if (!bounded(result.x) || !bounded(result.y))
-        reject("Wall coordinates exceed the supported +/-1e6 metre envelope");
+        reject("Wall coordinates are too far from the origin (limit +/-1e6 m)");
     return result;
 }
 
@@ -93,7 +93,7 @@ Segment baseline(const Json& properties) {
     const auto bounds = segment_bounds(result);
     if (!bounded(bounds.minimum.x) || !bounded(bounds.minimum.y) ||
         !bounded(bounds.maximum.x) || !bounded(bounds.maximum.y))
-        reject("Source wall baseline exceeds the supported +/-1e6 metre envelope");
+        reject("The wall centerline is too far from the origin (limit +/-1e6 m)");
     return result;
 }
 
@@ -103,7 +103,7 @@ double thickness(const Json& properties) {
     if (found == properties.end()) reject("Source wall thickness is missing");
     const auto result = number(*found, "Wall thickness");
     if (!(result > default_geometry_tolerance_metres) || !bounded(result))
-        reject("Wall thickness is outside the supported positive geometry envelope");
+        reject("Wall thickness must be greater than zero and within the supported size");
     return result;
 }
 
@@ -223,7 +223,7 @@ ArcSupport arc_support(const Segment& segment) {
     const auto radius = distance(center, segment.start);
     if (!bounded(center.x) || !bounded(center.y) || !std::isfinite(radius) ||
         !(radius > default_geometry_tolerance_metres))
-        reject("Wall arc support exceeds the supported geometry envelope");
+        reject("The curved wall is too large to build");
     return {center, radius};
 }
 
@@ -311,7 +311,7 @@ WallNetwork split_wall_network(const std::vector<SourceWall>& walls) {
                 static_cast<long long>(std::floor(point.y / default_geometry_tolerance_metres))};
     };
     const auto node_for = [&](Vec2 point) {
-        if (!bounded(point.x) || !bounded(point.y)) reject("Wall intersection exceeds the geometry envelope");
+        if (!bounded(point.x) || !bounded(point.y)) reject("The wall intersection is too far from the origin to build");
         const auto cell = cell_for(point);
         std::optional<std::size_t> existing;
         for (long long dx = -1; dx <= 1; ++dx) {
@@ -740,7 +740,7 @@ Vec2 offset_join(const OffsetSupport& incoming, const OffsetSupport& outgoing, V
         return distance(left, vertex) < distance(right, vertex);
     });
     if (!bounded(selected.x) || !bounded(selected.y))
-        reject("Wall miter exceeds the supported +/-1e6 metre envelope");
+        reject("The wall corner is too sharp or too far from the origin to build (limit +/-1e6 m)");
     return selected;
 }
 
@@ -993,7 +993,7 @@ std::vector<std::string> exterior_wall_measurement_sources(
         auto field = properties.find("elevation_m");
         if (field == properties.end()) field = properties.find("elevation");
         const auto current = field == properties.end() ? 0.0 : number(*field, "Wall elevation");
-        if (!bounded(current)) reject("Wall elevation exceeds the supported geometry envelope");
+        if (!bounded(current)) reject("Wall elevation is outside the supported range");
         if (!elevation_range) elevation_range = {current, current};
         else {
             elevation_range->first = std::min(elevation_range->first, current);
@@ -1333,7 +1333,7 @@ static WallMeasurementResult derive_replacement_exterior_wall_measurement_impl(
         auto value = resolved.properties.find("elevation_m");
         if (value == resolved.properties.end()) value = resolved.properties.find("elevation");
         const auto elevation = value == resolved.properties.end() ? 0.0 : number(*value, "Wall elevation");
-        if (!bounded(elevation)) reject("Wall elevation exceeds the supported geometry envelope");
+        if (!bounded(elevation)) reject("Wall elevation is outside the supported range");
         return elevation;
     };
     std::optional<double> plane;

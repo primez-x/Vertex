@@ -54,7 +54,7 @@ double scalar(const Entity& entity, const Dimension& dimension) {
     if (!selected || !selected->is_number()) invalid("Wall capture dimension is missing or invalid");
     const auto value = selected->get<double>();
     if (!std::isfinite(value) || (!dimension.signed_value && value <= default_geometry_tolerance_metres))
-        invalid("Wall capture dimension is outside its admitted range");
+        invalid("The entered wall dimension is outside the allowed range");
     if (alias && (!alias->is_number() || alias->get<double>() != value))
         invalid("Wall capture scalar aliases disagree");
     return value;

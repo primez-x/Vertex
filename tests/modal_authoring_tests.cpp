@@ -45,6 +45,11 @@ void invoke_with_intervention(sketch::desktop::MainWindow& window, QString comma
         } else if (auto* building = dynamic_cast<sketch::desktop::BuildingObjectDialog*>(modal)) {
             if (!current->intervened) { current->intervened = true; intervention(); }
             require(building->submit(), "building form should submit after the barrier");
+        } else if (auto* form = qobject_cast<QDialog*>(modal);
+                   form && form->objectName() == QStringLiteral("horizontalAssemblyForm")) {
+            // The slab command asks kind, thickness and elevation in one form.
+            if (!current->intervened) { current->intervened = true; intervention(); }
+            form->accept();
         } else if (modal && !current->invoked) {
             auto* list = modal->findChild<QListWidget*>();
             auto* search = modal->findChild<QLineEdit*>();

@@ -117,6 +117,10 @@ QString category(const AppraisalBoundaryStatus& status) {
 QString row(const QString& label,const QString& value) {
     return QStringLiteral("<tr><td>%1</td><td align='right'>%2</td></tr>").arg(label.toHtmlEscaped(),value.toHtmlEscaped());
 }
+// Printed room label in report order; the same number keys the appendix.
+QString appraisal_report_room_label(std::size_t index) {
+    return QStringLiteral("Room %1").arg(index+1);
+}
 // Printed audit tables place two label/value pairs per row so each area needs
 // about half the page height; cell content and order are unchanged.
 QString paired_rows(const QString& rows) {
@@ -304,6 +308,20 @@ QString provenance_appendix(const DocumentSnapshot& source,const AppraisalDocume
         row(QStringLiteral("Property ID"),text(report.property_id))+
         row(QStringLiteral("Source entities SHA-256"),text(report.source_entities_sha256))+
         row(QStringLiteral("Property policy source"),text(report.property_id)+QStringLiteral(" / appraisal_policy"))+QStringLiteral("</table>");
+    if(report.reporting && !report.reporting->rooms.empty()) {
+        // Keys the report body's "Room N" labels to their generated sources.
+        html+=QStringLiteral("<h3>Room sources</h3>");
+        for(std::size_t index=0;index<report.reporting->rooms.size();++index) {
+            const auto& room=report.reporting->rooms[index];
+            html+=QStringLiteral("<p><b>%1</b><br>Room: %2<br>Area: %3<br>Floor: %4</p>").arg(
+                appraisal_report_room_label(index).toHtmlEscaped(),escaped(room.room_id),escaped(room.boundary_id),escaped(room.floor_id));
+        }
+        for(const auto& unit:report.reporting->living_units)for(const auto& level:unit.levels) {
+            QStringList boundaries;for(const auto& id:level.boundary_ids)boundaries.push_back(text(id));
+            html+=QStringLiteral("<p><b>%1 · measured level</b><br>Floor source: %2<br>Boundary sources: %3</p>").arg(
+                escaped(unit.living_unit.identifier),escaped(level.floor_id),boundaries.join(QStringLiteral(", ")).toHtmlEscaped());
+        }
+    }
     if(report.boundaries.empty())return html;
     // Full-width lines keep each identifier unbroken for copying and search.
     html+=QStringLiteral("<h3>Area sources</h3>");
@@ -1092,20 +1110,20 @@ QString appraisal_form_projection_html(const AppraisalDocumentReport& report, bo
             }
             if(unit.area_fields_available)html+=QStringLiteral("<p>Measured level finished: %1 · unfinished: %2</p>")
                 .arg(units::area_text(display_area(finished,ansi_appraisal_profile())),units::area_text(display_area(unfinished,ansi_appraisal_profile())));
-            if(!compact) {
-                QStringList boundaries;for(const auto& id:level.boundary_ids)boundaries.push_back(escaped(id));
-                html+=QStringLiteral("<p class='muted'>Floor source: %1 · Boundary sources: %2</p>").arg(escaped(level.floor_id),boundaries.join(QStringLiteral(", ")));
-            }
+            // Floor and boundary source IDs are listed in the provenance appendix.
         }
     }
     if(!value.living_units.empty())html+=QStringLiteral("<p>Unit categories retain separate standard and nonstandard areas; measured level detail combines their finished areas. This is a local reporting projection, not MISMO delivery or full URAR certification.</p>");
     html += QStringLiteral("<p>Room types reflect explicit original-design declarations. A full bathroom has a sink, toilet and tub or shower; a half bathroom has a sink and toilet. Confirmation does not independently verify room geometry or fixtures.</p>");
     for (const auto& issue : value.issues) html += QStringLiteral("<p><b>%1</b></p>").arg(escaped(issue));
     if (!compact) {
-        html += QStringLiteral("<h4>Level and declared room detail</h4><table width='100%' border='1' cellspacing='0'><tr><th>Room / source</th><th>Use / level / category</th></tr>");
-        for (const auto& room : value.rooms) {
-            html += row(text(room.room_id)+QStringLiteral(" / ")+text(room.boundary_id),
-                room_use_label(room.use)+(room.other_description.empty()?QString{}:QStringLiteral(": ")+text(room.other_description))+QStringLiteral(" / ")+text(room.floor_id)+QStringLiteral(" / ")+words(appraisal_category_name(room.category))+
+        // Rooms are numbered in report order ("Room 1"); their generated room,
+        // area and floor IDs appear only in the provenance appendix.
+        html += QStringLiteral("<h4>Level and declared room detail</h4><table width='100%' border='1' cellspacing='0'><tr><th>Room</th><th>Use / category</th></tr>");
+        for (std::size_t index = 0; index < value.rooms.size(); ++index) {
+            const auto& room = value.rooms[index];
+            html += row(appraisal_report_room_label(index),
+                room_use_label(room.use)+(room.other_description.empty()?QString{}:QStringLiteral(": ")+text(room.other_description))+QStringLiteral(" / ")+words(appraisal_category_name(room.category))+
                 (room.included_in_primary_counts ? QStringLiteral(" / primary counts") : QStringLiteral(" / separate summary")));
         }
         html += QStringLiteral("</table><h4>Public guidance editions reviewed</h4><ul>");
@@ -1245,9 +1263,25 @@ struct AppraisalReportingDialog::Impl {
         }
         update_fields();
     }
+    // Room identifiers are stable generated keys kept in a hidden column; the
+    // row header shows a readable "Room N" instead.
+    void relabel_rooms() {
+        for(int row=0;row<rooms->rowCount();++row)
+            rooms->setVerticalHeaderItem(row,new QTableWidgetItem(QStringLiteral("Room %1").arg(row+1)));
+    }
+    // New units get a readable, unique default name the appraiser can edit.
+    QString next_unit_name() const {
+        for(int number=units->rowCount()+1;;++number) {
+            const auto candidate=QStringLiteral("Unit %1").arg(number);
+            bool used=false;
+            for(int row=0;row<units->rowCount();++row) if(units->item(row,0) && units->item(row,0)->text()==candidate) used=true;
+            if(!used) return candidate;
+        }
+    }
     void add(const AppraisalRoomDeclaration& room) {
         const auto index=rooms->rowCount(); rooms->insertRow(index);
         rooms->setItem(index,0,new QTableWidgetItem(text(room.room_id)));
+        relabel_rooms();
         auto* use=choice(rooms,true); use->setCurrentIndex(use->findData(static_cast<int>(room.use))); rooms->setCellWidget(index,1,use);
         auto* total=choice(rooms); total->setCurrentIndex(total->findData(room.legacy_total_room ? (*room.legacy_total_room ? 1 : 0) : -1)); rooms->setCellWidget(index,2,total);
         auto* description=new QLineEdit(rooms);description->setMaxLength(1024);description->setText(text(room.other_description));rooms->setCellWidget(index,3,description);
@@ -1328,15 +1362,18 @@ AppraisalReportingDialog::AppraisalReportingDialog(const DocumentSnapshot& sourc
     setObjectName(QStringLiteral("appraisalReportingDialog")); setWindowTitle(QStringLiteral("Appraisal reporting and rooms")); resize(840,720);
     auto& p=*impl_;auto* outer=new QVBoxLayout(this);auto* fields=new QWidget(this);auto* layout=new QVBoxLayout(fields);
     auto* scroll=new QScrollArea(this);scroll->setObjectName(QStringLiteral("appraisalReportingFieldsScroll"));scroll->setWidgetResizable(true);scroll->setWidget(fields);outer->addWidget(scroll);
+    // Labels and rows wrap to the dialog width; the fields never scroll sideways.
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     auto* intro=new QLabel(QStringLiteral("Declare rooms by their original design. Full bathroom: sink, toilet and tub or shower. Half bathroom: sink and toilet. Room counts use these declarations; placed fixture symbols do not verify them."),this); intro->setWordWrap(true);layout->addWidget(intro);
-    auto* form=new QFormLayout;p.declaration_form=form;
+    auto* form=new QFormLayout;form->setRowWrapPolicy(QFormLayout::WrapLongRows);p.declaration_form=form;
     p.contract=new QComboBox(this);p.contract->setObjectName(QStringLiteral("appraisalReportingContract"));
     p.contract->addItem(QStringLiteral("Legacy UAD 2.6"),static_cast<int>(AppraisalReportingContract::legacy_uad_2_6));
     p.contract->addItem(QStringLiteral("UAD 3.6"),static_cast<int>(AppraisalReportingContract::uad_3_6));
     form->addRow(QStringLiteral("Reporting contract"),p.contract);
-    p.complete=new QCheckBox(QStringLiteral("I have declared the complete room inventory for these measurements"),this);p.complete->setObjectName(QStringLiteral("appraisalReportingComplete"));form->addRow(p.complete);
+    p.complete=new QCheckBox(QStringLiteral("Room inventory is complete"),this);p.complete->setObjectName(QStringLiteral("appraisalReportingComplete"));
+    p.complete->setToolTip(QStringLiteral("I have declared the complete room inventory for these measurements."));form->addRow(p.complete);
     p.units=new QTableWidget(0,2,this);p.units->setObjectName(QStringLiteral("appraisalReportingUnits"));
-    p.units->setHorizontalHeaderLabels({QStringLiteral("Appraiser unit identifier (unique)"),QStringLiteral("Dwelling role")});
+    p.units->setHorizontalHeaderLabels({QStringLiteral("Unit name (unique)"),QStringLiteral("Dwelling role")});
     p.units->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);p.units->setMaximumHeight(130);
     form->addRow(QStringLiteral("Living units"),p.units);
     auto* unit_actions=new QWidget(this);auto* unit_buttons=new QHBoxLayout(unit_actions);unit_buttons->setContentsMargins(0,0,0,0);
@@ -1354,10 +1391,12 @@ AppraisalReportingDialog::AppraisalReportingDialog(const DocumentSnapshot& sourc
     p.containment=p.choice(this);p.containment->setObjectName(QStringLiteral("appraisalReportingContained"));form->addRow(QStringLiteral("ADU contained within / part of primary dwelling"),p.containment);
     layout->addLayout(form);
     p.source_note=new QLabel(this);p.source_note->setWordWrap(true);layout->addWidget(p.source_note);
-    p.confirmed=new QCheckBox(QStringLiteral("Confirm this area's rooms, unit assignment and unit-level facts against current measurements and observations"),this);p.confirmed->setObjectName(QStringLiteral("appraisalReportingReconfirm"));layout->addWidget(p.confirmed);
+    p.confirmed=new QCheckBox(QStringLiteral("Confirm rooms and unit facts for this area"),this);p.confirmed->setObjectName(QStringLiteral("appraisalReportingReconfirm"));
+    p.confirmed->setToolTip(QStringLiteral("Confirm this area's rooms, unit assignment and unit-level facts against the current measurements and observations."));layout->addWidget(p.confirmed);
     p.rooms=new QTableWidget(0,4,this);p.rooms->setObjectName(QStringLiteral("appraisalReportingRooms"));
     p.rooms->setMinimumHeight(180);
-    p.rooms->setHorizontalHeaderLabels({QStringLiteral("Room identifier"),QStringLiteral("Original room type"),QStringLiteral("Legacy Total Rooms member"),QStringLiteral("Other room description")});p.rooms->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);layout->addWidget(p.rooms);
+    p.rooms->setHorizontalHeaderLabels({QStringLiteral("Room identifier"),QStringLiteral("Original room type"),QStringLiteral("Counts in Total Rooms (UAD 2.6)"),QStringLiteral("Other room description")});p.rooms->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    p.rooms->setColumnHidden(0,true);p.rooms->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);p.rooms->horizontalHeader()->setTextElideMode(Qt::ElideRight);layout->addWidget(p.rooms);
     auto* room_actions=new QHBoxLayout;auto* add=new QPushButton(QStringLiteral("Add room"),this);add->setObjectName(QStringLiteral("appraisalReportingAddRoom"));auto* remove=new QPushButton(QStringLiteral("Remove selected room"),this);room_actions->addWidget(add);room_actions->addWidget(remove);room_actions->addStretch();layout->addLayout(room_actions);
     p.error=new QLabel(this);p.error->setObjectName(QStringLiteral("appraisalReportingError"));p.error->setWordWrap(true);outer->addWidget(p.error);
     auto* buttons=new QDialogButtonBox(QDialogButtonBox::Save|QDialogButtonBox::Cancel,this);p.save=buttons->button(QDialogButtonBox::Save);p.save->setObjectName(QStringLiteral("appraisalReportingSave"));p.save->setEnabled(false);outer->addWidget(buttons);
@@ -1380,14 +1419,14 @@ AppraisalReportingDialog::AppraisalReportingDialog(const DocumentSnapshot& sourc
     connect(p.area,&QComboBox::currentIndexChanged,this,[this]{impl_->select();});
     connect(p.contract,&QComboBox::currentIndexChanged,this,[this]{impl_->update_fields();});
     connect(p.units,&QTableWidget::itemChanged,this,[this]{impl_->retain_units();impl_->refresh_units();});
-    connect(add_unit,&QPushButton::clicked,this,[this]{auto& p=*impl_;p.retain();p.add_unit({QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString(),{},p.units->rowCount()==0?DwellingIdentity::primary:DwellingIdentity::attached_adu});p.retain_units();p.refresh_units();});
+    connect(add_unit,&QPushButton::clicked,this,[this]{auto& p=*impl_;p.retain();p.add_unit({QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString(),p.next_unit_name().toStdString(),p.units->rowCount()==0?DwellingIdentity::primary:DwellingIdentity::attached_adu});p.retain_units();p.refresh_units();});
     connect(remove_unit,&QPushButton::clicked,this,[this]{auto& p=*impl_;p.retain();if(p.units->currentRow()>=0)p.units->removeRow(p.units->currentRow());p.retain_units();p.refresh_units();});
     connect(p.unit,&QComboBox::currentIndexChanged,this,[this]{auto& p=*impl_;const auto selected=p.unit->currentData().toString();
         {const QSignalBlocker blocker(p.unit);p.unit->setCurrentIndex(std::max(0,p.unit->findData(p.active_unit)));p.retain();p.unit->setCurrentIndex(std::max(0,p.unit->findData(selected)));}
         p.load_level();});
     for(auto* box:{p.level_grade,p.level_access,p.level_exterior})connect(box,&QComboBox::currentIndexChanged,this,[this]{impl_->update_fields();});
     connect(add,&QPushButton::clicked,this,[this]{impl_->add({QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString(),AppraisalRoomUse::other,{}});});
-    connect(remove,&QPushButton::clicked,this,[this]{if(impl_->rooms->currentRow()>=0)impl_->rooms->removeRow(impl_->rooms->currentRow());});
+    connect(remove,&QPushButton::clicked,this,[this]{if(impl_->rooms->currentRow()>=0)impl_->rooms->removeRow(impl_->rooms->currentRow());impl_->relabel_rooms();});
     connect(buttons,&QDialogButtonBox::rejected,this,&QDialog::reject);
     connect(buttons,&QDialogButtonBox::accepted,this,[this]{auto& p=*impl_;try{
         p.retain();p.retain_units();p.changes.settings.contract=static_cast<AppraisalReportingContract>(p.contract->currentData().toInt());p.changes.settings.room_inventory_complete=p.complete->isChecked();p.changes.areas.clear();

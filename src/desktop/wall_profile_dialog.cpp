@@ -56,7 +56,7 @@ QString native_text(double metres) {
     std::array<char, 768> buffer{};
     const auto result = std::to_chars(buffer.data(), buffer.data() + buffer.size(), metres,
                                       std::chars_format::general);
-    require(result.ec == std::errc{}, "The native dimension cannot be displayed");
+    require(result.ec == std::errc{}, "This dimension is too large to show. Reopen this profile.");
     return q(std::string(buffer.data(), result.ptr) + " m");
 }
 
@@ -108,7 +108,7 @@ Input input(QWidget* parent, const char* object_name, double metres,
 
 bool edited(const Input& value) { return value.field->text() != value.initial_text; }
 Quantity read(const Input& value, Unit unit) {
-    require(edited(value), "An untouched profile measurement must retain its actual source");
+    require(edited(value), "This measurement could not be read. Enter it again.");
     return parse_quantity(value.field->text().toStdString(), unit);
 }
 
@@ -246,8 +246,8 @@ public:
         table->setAlternatingRowColors(true);
         table->setSortingEnabled(false);
         try {
-            require(source.is_editable(), "The captured project is read only");
-            require(static_cast<bool>(current_source), "The current project source is unavailable");
+            require(source.is_editable(), "This project is read-only, so it cannot be changed here.");
+            require(static_cast<bool>(current_source), "The project is no longer available. Close this window and try again.");
             const auto found = source.entities().find(wall_id);
             require(found != source.entities().end() && found->second.id == wall_id,
                     "The wall is missing from the captured project");
@@ -285,7 +285,7 @@ public:
             auto* elevation_row = new QHBoxLayout;
             elevation_row->addWidget(elevation.field, 1);
             if (level_bound) {
-                effective_base = new QLabel("Effective base: " + native_text(resolved.elevation), owner);
+                effective_base = new QLabel("Effective base: " + units::length_text(resolved.elevation, unit == Unit::metre), owner);
                 effective_base->setObjectName("wallProfileEffectiveBase");
                 effective_base->setAccessibleName("Effective wall base elevation");
                 elevation_row->addWidget(effective_base);
@@ -363,7 +363,7 @@ public:
             if (stale || !source_error.isEmpty()) return;
             try { fence(); }
             catch (const std::exception& reason) { fail(QString::fromUtf8(reason.what())); }
-            catch (...) { fail("The current project source is unavailable. Reopen this profile."); }
+            catch (...) { fail("The project is no longer available. Close this window and try again."); }
         });
         QObject::connect(owner, &QDialog::finished, timer, [this, timer](int result) {
             timer->stop();
@@ -383,7 +383,7 @@ public:
                     current.read_only_reason() == source.read_only_reason(),
                     "The project changed. Reopen this profile.");
             require(source.shares_full_snapshot_with(current) || document_snapshot_digest(current) == digest,
-                    "The project source changed. Reopen this profile.");
+                    "The project changed. Reopen this profile.");
         } catch (...) { stale = true; throw; }
     }
 
@@ -465,7 +465,7 @@ public:
                 std::string diagnostic;
                 if (!read_document_wall(resolve_vertical_placement(source.entities(), candidate), {}, resolved, diagnostic))
                     throw std::invalid_argument(diagnostic);
-                effective_base->setText("Effective base: " + native_text(resolved.elevation));
+                effective_base->setText("Effective base: " + units::length_text(resolved.elevation, unit == Unit::metre));
             }
             auto captured = has_input ? capture_wall_profile_edit(original, candidate, intent) : std::nullopt;
             fence();

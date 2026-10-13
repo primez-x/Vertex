@@ -100,11 +100,11 @@ Entity stage_architectural_footprint_vertex_entity(
     const Boundary* ring = &footprint.boundary;
     if (edit.hole_index) {
         if (*edit.hole_index >= footprint.holes.size())
-            throw std::invalid_argument("Footprint hole index is outside the captured source");
+            throw std::invalid_argument("The footprint hole does not exist");
         ring = &footprint.holes.at(*edit.hole_index);
     }
     if (edit.vertex_index >= ring->size())
-        throw std::invalid_argument("Footprint vertex index is outside the captured ring");
+        throw std::invalid_argument("The footprint point does not exist in this outline");
     const auto vertex = ring->at(edit.vertex_index).start;
     auto source_target = edit.proposed_position;
     auto effective_vertex = vertex;

@@ -49,7 +49,7 @@ QString native_metres(double value) {
     std::array<char, 768> buffer{};
     const auto displayed = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value,
                                           std::chars_format::general);
-    require(displayed.ec == std::errc{}, "The native dimension cannot be displayed");
+    require(displayed.ec == std::errc{}, "This dimension is too large to show. Reopen this profile.");
     return q(std::string(buffer.data(), displayed.ptr) + " m");
 }
 
@@ -174,8 +174,8 @@ public:
         table->setAlternatingRowColors(true);
         table->setSortingEnabled(false);
         try {
-            require(source.is_editable(), "The captured project is read only");
-            require(static_cast<bool>(current_source), "The current project source is unavailable");
+            require(source.is_editable(), "This project is read-only, so it cannot be changed here.");
+            require(static_cast<bool>(current_source), "The project is no longer available. Close this window and try again.");
             const auto found = source.entities().find(slab_id);
             require(found != source.entities().end() && found->second.id == slab_id,
                     "The horizontal system is missing from the captured project");
@@ -252,7 +252,7 @@ public:
             if (stale || !source_error.isEmpty()) return;
             try { fence(); }
             catch (const std::exception& reason) { fail(QString::fromUtf8(reason.what())); }
-            catch (...) { fail("The current project source is unavailable. Reopen this profile."); }
+            catch (...) { fail("The project is no longer available. Close this window and try again."); }
         });
         QObject::connect(owner, &QDialog::finished, timer, [this, timer](int result) {
             timer->stop();
@@ -276,7 +276,7 @@ public:
                     current.read_only_reason() == source.read_only_reason(),
                     "The project changed. Reopen this profile.");
             require(source.shares_full_snapshot_with(current) || document_snapshot_digest(current) == digest,
-                    "The project source changed. Reopen this profile.");
+                    "The project changed. Reopen this profile.");
         } catch (...) {
             stale = true;
             throw;

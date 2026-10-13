@@ -27,6 +27,7 @@
 #include <QListWidget>
 #include <QPushButton>
 #include <QSettings>
+#include <QStatusBar>
 #include <QTableWidget>
 #include <QTabWidget>
 #include <QTemporaryDir>
@@ -439,6 +440,7 @@ void transforms_clipboard_output(MainWindow& window,const Authored& authored,con
     views.setCurrentIndex(0);const auto svg=QDir(directory).filePath("assembly-plan.svg");require(window.exportDraftSvg(svg),"actual assembly SVG exports");
     QFile output(svg);require(output.open(QIODevice::ReadOnly) && output.readAll().contains("<svg"),"SVG contains vector document");
     const auto path=QDir(directory).filePath("assembly-lifecycle.sketch");require(window.saveProjectAs(path),"assembly project saves");const auto saved=window.document().snapshot();
+    require(window.statusBar()->currentMessage()==QStringLiteral("Saved assembly-lifecycle.sketch") && QGuiApplication::overrideCursor()==nullptr,"Save confirms the file name and restores the cursor");
     MainWindow reopened({},nullptr,QDir(directory).filePath("reopened-library.json"));display(reopened);require(reopened.openProject(path),"actual assembly project reopens");
     require(reopened.document().snapshot().entities()==saved.entities() && reopened.document().snapshot().assets()==saved.assets(),"Save/Reopen retains exact semantic graph and assets");
     require(instance(reopened,authored.root)==instance(window,authored.root) && reopened.scheduleSnapshot().snapshot.rows==window.scheduleSnapshot().snapshot.rows,"reopened placements, overrides and schedules agree");

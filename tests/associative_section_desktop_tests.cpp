@@ -257,8 +257,9 @@ void test_associative_section() {
     check(4, 3, 0.75);
     const auto annotated_entities = window.document().snapshot().entities();
     window.setMetricUnits(false);
-    require(dimension_label(*canvas, width_id).text.contains(QStringLiteral(" ft ")) &&
-                dimension_label(*canvas, height_id).text.contains(QStringLiteral(" ft ")) &&
+    // Design-system imperial feet-inches to 1/16": 4 m = 13' 1.48", 3 m = 9' 10.11".
+    require(dimension_label(*canvas, width_id).text == QStringLiteral("13' 1 1/2\"") &&
+                dimension_label(*canvas, height_id).text == QStringLiteral("9' 10 1/8\"") &&
                 window.document().snapshot().entities() == annotated_entities,
             "display units update derived dimension labels without modifying source entities");
     window.setMetricUnits(true);

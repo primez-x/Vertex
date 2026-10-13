@@ -3595,6 +3595,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/desktop/preferences_dialog.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/desktop/selection_properties_dialog.hpp"
     },
     {
@@ -6123,6 +6127,10 @@
     },
     {
       "category": "source",
+      "path": "src/desktop/preferences_dialog.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/desktop/reference_import.cpp"
     },
     {
@@ -6739,6 +6747,10 @@
     },
     {
       "category": "source",
+      "path": "tests/inline_dimension_edit_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/integration_adapter_tests.cpp"
     },
     {
@@ -6992,6 +7004,10 @@
     {
       "category": "source",
       "path": "tests/plan_axis_resize_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/preferences_dialog_tests.cpp"
     },
     {
       "category": "source",

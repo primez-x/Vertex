@@ -222,7 +222,7 @@ void kept_dimensions_show_current_clear_values() {
     auto* apply=control<QPushButton>(dialog,"physicalRoomReviewApply");
     if (!apply->isEnabled()) throw std::runtime_error("kept physical-room dimension preview: "+dialog.lastError().toStdString());
     auto* preview=dynamic_cast<PlanCanvas*>(control<QWidget>(dialog,"physicalRoomReviewCanvas"));
-    require(std::any_of(preview->labels().begin(),preview->labels().end(),[](const auto& label){return label.id=="kept-area" && label.text==QStringLiteral("10.24 m²");}),
+    require(std::any_of(preview->labels().begin(),preview->labels().end(),[](const auto& label){return label.id=="kept-area" && label.text==QStringLiteral("10.2 m²");}), // 10.24 m² net; outer 10.64 m² reads 10.6 m²
         "actual preview displays net clear area with island hole instead of retained outer area");
     capture(dialog,"physical-room-review-kept-dimensions.png");apply->click();require(dialog.acceptedCommand().has_value(),"explicit kept dimensions accepted");
     const auto intent=decode_physical_wall_room_review_intent(dialog.acceptedCommand()->room_review_intent);

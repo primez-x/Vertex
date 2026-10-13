@@ -310,7 +310,7 @@ void flat_graph_clone_clipboard_and_dialog() {
         "Copy is read only");
     require(window.pasteSelection(), "actual sameproject clipboard paste admits complete nested graph");
     const auto pasted = window.document().snapshot(); check_full_copy(clipboard_before, pasted, true); expect_total(pasted, 192);
-    atomic_history(window, clipboard_before, pasted); persist_and_report(window, directory.path(), "flat-copy", "2067");
+    atomic_history(window, clipboard_before, pasted); persist_and_report(window, directory.path(), "flat-copy", "2,067 sf");
 }
 void sloped_graph_requires_native_reconfirmation() {
     QTemporaryDir directory; MainWindow window(sourced_fixture(true), nullptr, directory.filePath("text-library.json")); prepare(window);
@@ -334,7 +334,7 @@ void sloped_graph_requires_native_reconfirmation() {
             throw std::runtime_error("Copied room reconfirmation changed source entity: " + id);
     require(confirmed.entities().at(room_id).properties.at("deduction_ids") == std::vector<std::string>{void_id},
         "native sloped confirmation retains actual copied void link");
-    atomic_history(window, before_confirmation, confirmed); persist_and_report(window, directory.path(), "sloped-copy", "2067");
+    atomic_history(window, before_confirmation, confirmed); persist_and_report(window, directory.path(), "sloped-copy", "2,067 sf");
 }
 void sloped_root_retains_nested_general_exclusions() {
     std::vector<Entity> entities;
@@ -367,7 +367,7 @@ void sloped_root_retains_nested_general_exclusions() {
         root_copy.properties.at("appraisal_facts").at("ansi").at("ceiling").at("below_5ft_deduction_ids").empty(),
         "actual sloped Facts Save retains both general-exclusion links and empty low-height sources");
     atomic_history(window,pasted,confirmed);
-    persist_and_report(window,directory.path(),"sloped-nested-exclusions","1378");
+    persist_and_report(window,directory.path(),"sloped-nested-exclusions","1,378 sf");
 }
 
 void identity_only_sloped_leaf() {

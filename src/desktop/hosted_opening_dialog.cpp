@@ -125,6 +125,7 @@ HostedOpeningDialog::HostedOpeningDialog(const Wall& host, Unit unit, bool windo
     if(!window) {
         swing_=new QCheckBox("Show door swing",this);
         swing_->setObjectName("showDoorSwing");
+        swing_->setAccessibleName("Show door swing");
         form->addRow(QString(),swing_);
         hinge_=new QComboBox(this);
         hinge_->setObjectName("doorHinge");
@@ -153,7 +154,7 @@ HostedOpeningDialog::HostedOpeningDialog(const Wall& host, Unit unit, bool windo
     error_->setWordWrap(true);
     layout->addWidget(error_);
     auto* buttons=new QDialogButtonBox(QDialogButtonBox::Cancel,this);
-    create_=buttons->addButton("Create",QDialogButtonBox::AcceptRole);
+    create_=buttons->addButton(window ? "Create window" : "Create door",QDialogButtonBox::AcceptRole);
     create_->setObjectName("createOpening");
     create_->setDefault(true);
     layout->addWidget(buttons);

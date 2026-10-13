@@ -88,7 +88,7 @@ void ansi_canonical_units_declarations_and_curve_dimensions() {
     adu.properties["appraisal_facts"]["ansi"]["dwelling_identity"]="attached_adu";entities.push_back(adu);
     AppraisalDetailsPanel panel;auto document=sketch::Document::create(entities);
     panel.setDocument(document.snapshot(),"p",true);panel.setSelectedBoundary("a");
-    require(panel.report() && panel.report()->qualified && label(panel,"appraisalDetailsGla")=="100 sq ft",
+    require(panel.report() && panel.report()->qualified && label(panel,"appraisalDetailsGla")=="100 sf",
         "ANSI primary GLA remains canonical whole square feet in metric workspace and excludes ADU");
     require(label(panel,"appraisalDetailsStatus").contains("ANSI Z765-2021 profile") &&
         label(panel,"appraisalDetailsStatus").contains("validation pending"),
@@ -110,7 +110,7 @@ void ansi_canonical_units_declarations_and_curve_dimensions() {
             "save the actual workspace with the prominent ANSI profile and GLA total");
     }
     const auto totals=label(panel,"appraisalDetailsTotals");
-    require(totals.contains("ADU",Qt::CaseInsensitive) && totals.contains("100 sq ft") && totals.contains("Supplemental metric diagnostic"),
+    require(totals.contains("ADU",Qt::CaseInsensitive) && totals.contains("100 sf") && totals.contains("Supplemental metric diagnostic"),
         "ANSI keeps ADU category separate and clearly labels metric diagnostic totals");
     const auto policy_text=label(panel,"appraisalDetailsPolicy");
     require(policy_text.contains("Interior inspected") && policy_text.contains("Direct measurement") &&
@@ -140,7 +140,7 @@ void ansi_canonical_units_declarations_and_curve_dimensions() {
     entities[4].properties["boundary"]=square(0,0,3.048);
     entities[4].properties["appraisal_facts"]["access"]="through_unfinished";
     document=sketch::Document::create(entities);panel.setDocument(document.snapshot(),"p",true);
-    require(panel.report()->qualified && label(panel,"appraisalDetailsGla")=="0 sq ft" &&
+    require(panel.report()->qualified && label(panel,"appraisalDetailsGla")=="0 sf" &&
         label(panel,"appraisalDetailsTrace").contains("access passes through unfinished space"),
         "nonstandard finished area shows its real classification reason without inflating primary GLA");
     entities[4].properties["appraisal_facts"]["access"]="direct_interior";
@@ -171,19 +171,19 @@ void ansi_ceiling_height_uses_declared_acquisition_precision() {
         return label(panel,"appraisalDetailsTrace");
     };
     auto trace=show();
-    require(panel.report()->qualified && label(panel,"appraisalDetailsGla")=="100 sq ft",
+    require(panel.report()->qualified && label(panel,"appraisalDetailsGla")=="100 sf",
         "6.96-foot observation rounds to seven feet for flat-ceiling GLA classification");
     require(trace.contains("Recorded minimum ceiling height") && trace.contains("6.96 ft") &&
         trace.contains("Rounded minimum ceiling height") && trace.contains("7.0 ft (nearest tenth foot)"),
         "Details distinguishes retained observation from the actual rounded classification height");
     evidence["ceiling"]["minimum_height_m"]=6.85*.3048;trace=show();
-    require(panel.report()->qualified && label(panel,"appraisalDetailsGla")=="0 sq ft" &&
+    require(panel.report()->qualified && label(panel,"appraisalDetailsGla")=="0 sf" &&
         trace.contains("6.85 ft") && trace.contains("6.9 ft (nearest tenth foot)"),
         "6.85-foot observation reports 6.9 feet and stays nonstandard finished");
     evidence["ceiling"]["minimum_height_m"]=6.951*.3048;trace=show();
-    require(label(panel,"appraisalDetailsGla")=="100 sq ft","tenth-foot acquisition governs ceiling threshold");
+    require(label(panel,"appraisalDetailsGla")=="100 sf","tenth-foot acquisition governs ceiling threshold");
     policy["ansi"]["acquisition_increment"]="inch";trace=show();
-    require(label(panel,"appraisalDetailsGla")=="0 sq ft" && trace.contains("6 ft 11 in (nearest inch)"),
+    require(label(panel,"appraisalDetailsGla")=="0 sf" && trace.contains("6' 11&quot; (nearest inch)"),
         "inch acquisition uses its own rounded threshold and displays whole inches");
     policy["ansi"].erase("acquisition_increment");trace=show();
     require(!panel.report()->qualified && label(panel,"appraisalDetailsGla")=="Totals unavailable" &&
@@ -244,11 +244,11 @@ void qualified_units_refresh_and_callbacks() {
     auto entities=fixture();auto document=sketch::Document::create(entities);
     panel.setDocument(document.snapshot(),"p",false);
     require(panel.report() && panel.report()->qualified,"qualified report without canvas selection");
-    require(label(panel,"appraisalDetailsGla")=="100.00 sq ft","prominent authoritative GLA");
+    require(label(panel,"appraisalDetailsGla")=="100.00 sf","prominent authoritative GLA");
     require(label(panel,"appraisalDetailsStandards").contains("ANSI review not verified"),"truthful residential standards status");
     panel.setSelectedBoundary("a");
-    require(label(panel,"appraisalDetailsTrace").contains("40 ft 0 in") &&
-        label(panel,"appraisalDetailsTrace").contains("Edge 1: 10 ft 0 in"),"perimeter and edge dimensions visible");
+    require(label(panel,"appraisalDetailsTrace").contains("40' 0&quot;") &&
+        label(panel,"appraisalDetailsTrace").contains("Edge 1: 10' 0\""),"perimeter and edge dimensions visible");
     QString located,edited,setup,reported;sketch::Revision revision=999;
     panel.setLocateRequested([&](const QString& id,sketch::Revision value){located=id;revision=value;});
     panel.setFactsRequested([&](const QString& id,sketch::Revision){edited=id;});
@@ -264,7 +264,7 @@ void qualified_units_refresh_and_callbacks() {
     require(label(panel,"appraisalDetailsGla")=="9.29 m²" && label(panel,"appraisalDetailsTrace").contains("12.192 m"),"metric refresh retains physical values");
     entities.back().properties["boundary"]=square(0,0,6.096);document=sketch::Document::create(entities);
     panel.setDocument(document.snapshot(),"p",false);
-    require(label(panel,"appraisalDetailsGla")=="400.00 sq ft","new snapshot replaces stale header even same revision");
+    require(label(panel,"appraisalDetailsGla")=="400.00 sf","new snapshot replaces stale header even same revision");
     panel.setDocument(document.snapshot(),"missing",false);
     require(!panel.report() && panel.selectedBoundaryId().isEmpty() && !button(panel,"appraisalDetailsLocate")->isEnabled(),"missing property clears previous report and actions");
     require(!label(panel,"appraisalDetailsGla").contains("400"),"no stale total after context failure");
@@ -281,7 +281,7 @@ void undeclared_and_invalid_measurements() {
     entities.back().properties["boundary"][0]["sweep_radians"]="bad";
     document=sketch::Document::create(entities);panel.setDocument(document.snapshot(),"p",false);
     require(label(panel,"appraisalDetailsTrace").contains("Current measurement unavailable") &&
-        !label(panel,"appraisalDetailsTrace").contains("40 ft 0 in"),"invalid geometry removes stale dimensions");
+        !label(panel,"appraisalDetailsTrace").contains("40' 0&quot;"),"invalid geometry removes stale dimensions");
 }
 void categories_floors_deductions_and_phase() {
     AppraisalDetailsPanel panel;auto entities=fixture();entities.back().properties["boundary"]=square(0,0,4);
@@ -377,16 +377,20 @@ void native_main_window_details() {
         "Setup cancellation is mutation-free");
     details_dialog(window,"appraisalDetailsSetup","appraisalSetupDialog",[&](QDialog& dialog) {
         require(child<QCheckBox>(dialog,"appraisalSetupEnabled").isChecked(),"new document Setup offers enabled appraisal");
-        const auto unchanged=window.document().snapshot();save_setup(dialog);
-        require(dialog.isVisible() && window.document().snapshot().entities()==unchanged.entities() &&
-            window.document().revision()==unchanged.revision(),"undeclared enabled Setup Save is rejected without mutations");
         for (const auto& [name,token] : std::initializer_list<std::pair<const char*,const char*>>{
             {"appraisalSetupPolicy","residential_declared"},{"appraisalSetupPropertyKind","detached_single_family"},
             {"appraisalSetupMeasurementBasis","exterior"}}) {
             auto& combo=child<QComboBox>(dialog,name);
-            require(combo.currentData().toString().isEmpty(),"new property declarations are explicitly undeclared");
-            combo.setCurrentIndex(combo.findData(QString::fromLatin1(token)));
+            require(combo.currentData().toString()==QString::fromLatin1(token) && combo.isVisibleTo(&dialog) && combo.isEnabled(),
+                "new property shows visible, changeable residential defaults");
         }
+        // A value the user explicitly sets back to Undeclared still blocks enabling.
+        auto& basis=child<QComboBox>(dialog,"appraisalSetupMeasurementBasis");
+        basis.setCurrentIndex(0);require(basis.currentData().toString().isEmpty(),"Undeclared remains a choice");
+        const auto unchanged=window.document().snapshot();save_setup(dialog);
+        require(dialog.isVisible() && window.document().snapshot().entities()==unchanged.entities() &&
+            window.document().revision()==unchanged.revision(),"explicitly undeclared enabled Setup Save is rejected without mutations");
+        basis.setCurrentIndex(basis.findData(QStringLiteral("exterior")));
         save_setup(dialog);
     });
     const auto configured=window.document().snapshot();
@@ -406,7 +410,7 @@ void native_main_window_details() {
     require(window.selectEntity({}),"clear canvas selection");
     panel.setSelectedBoundary(area);
     window.setMetricUnits(false);
-    require(label(panel,"appraisalDetailsGla")=="1076.39 sq ft" && panel.selectedBoundaryId()==area && window.selectedEntityId().isEmpty(),
+    require(label(panel,"appraisalDetailsGla")=="1,076.39 sf" && panel.selectedBoundaryId()==area && window.selectedEntityId().isEmpty(),
         "unit refresh preserves an independently chosen Details row");
     window.setMetricUnits(true);
     const auto before_hide=label(panel,"appraisalDetailsGla");
@@ -470,10 +474,10 @@ void area_arithmetic_is_shared_with_printed_report() {
     AppraisalDetailsPanel panel;panel.setDocument(source,"p",false);panel.setSelectedBoundary("a");
     require(panel.report() && panel.report()->qualified,"Arithmetic fixture is qualified under its explicitly declared policy");
     const auto trace=label(panel,"appraisalDetailsTrace");
-    require(trace.contains("Rectangle components") && trace.contains("10 × 10 ft = 100.00 sq ft") && trace.contains("Geometric gross result"),
+    require(trace.contains("Rectangle components") && trace.contains("10 × 10 ft = 100.00 sf") && trace.contains("Geometric gross result"),
         "Details exposes the rectangle multiplication rather than only a final area");
     const auto html=sketch::desktop::appraisal_report_html(source,*panel.report(),false);
-    require(html.contains("10 × 10 ft = 100.00 sq ft") && html.contains("Arithmetic precision"),
+    require(html.contains("10 × 10 ft = 100.00 sf") && html.contains("Arithmetic precision"),
         "Printed appraisal report uses the same stored-geometry derivation and rounding explanation");
     auto mismatch=sketch::desktop::appraisal_area_arithmetic_rows(source.entities().at("a"),9,*panel.report(),false);
     require(mismatch.contains("Unavailable") && !mismatch.contains("Rectangle components"),
@@ -537,16 +541,16 @@ void ansi_fractional_components_preserve_unrounded_gross() {
     entities.back().properties["boundary"]=boundary;
     auto document=sketch::Document::create(entities);const auto source=document.snapshot();
     AppraisalDetailsPanel panel;panel.setDocument(source,"p",true);panel.setSelectedBoundary("a");
-    require(panel.report() && panel.report()->qualified && label(panel,"appraisalDetailsGla")=="1 sq ft",
+    require(panel.report() && panel.report()->qualified && label(panel,"appraisalDetailsGla")=="1 sf",
         "ANSI total rounds the unrounded fractional gross instead of summing rounded components");
     require(panel.report()->boundaries.size()==1 && panel.report()->boundaries.front().measurement &&
         std::abs(panel.report()->boundaries.front().measurement->base_square_metres-.8*.3048*.3048)<1e-12,
         "Authoritative gross retains the exact fractional component sum in square metres");
     const auto trace=label(panel,"appraisalDetailsTrace");
     const auto html=sketch::desktop::appraisal_report_html(source,*panel.report(),true);
-    for(const auto& content:{trace,html})require(content.contains("2 × 0.2 ft = 0.40 sq ft") &&
-        content.contains("1 × 0.4 ft = 0.40 sq ft") && content.contains("Geometric gross result") &&
-        content.contains("1 sq ft") && content.contains("Stored unrounded geometry; intermediate values keep extra precision; final totals follow the selected policy."),
+    for(const auto& content:{trace,html})require(content.contains("2 × 0.2 ft = 0.40 sf") &&
+        content.contains("1 × 0.4 ft = 0.40 sf") && content.contains("Geometric gross result") &&
+        content.contains("1 sf") && content.contains("Stored unrounded geometry; intermediate values keep extra precision; final totals follow the selected policy."),
         "Details and report preserve fractional components while the final gross follows ANSI rounding");
     const auto directory=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
     if(!directory.isEmpty()) {
@@ -584,7 +588,7 @@ void editable_reporting_contract_matches_details() {
     panel.setDocument(document.snapshot(),"p",true);
     const auto totals=label(panel,"appraisalDetailsTotals");
     require(totals.contains("UAD 3.6 reporting") && totals.contains("Primary all-grade room counts") &&
-        totals.contains("1 bedrooms; 0 full / 1 half bathrooms") && totals.contains("100 sq ft"),
+        totals.contains("1 bedrooms; 0 full / 1 half bathrooms") && totals.contains("100 sf"),
         "Actual Details shows the same explicit counts and whole-square-foot projection as the report");
     button(panel,"appraisalDetailsReporting")->click();
     require(requested,"Reporting action identifies the actual property and immutable source revision");

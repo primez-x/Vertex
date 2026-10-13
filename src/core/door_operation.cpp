@@ -26,11 +26,11 @@ void validate(const DoorOperation& value) {
         throw std::invalid_argument("Door overhead opening must be in [0,1] and zero for other mechanisms");
     if (value.kind == DoorOperationKind::overhead_tilt_up &&
         (value.angle_degrees != 90 || value.hinge_at_end))
-        throw std::invalid_argument("Overhead doors require a top hinge and canonical 90 degree travel");
+        throw std::invalid_argument("Overhead doors must hinge at the top and open 90 degrees");
     if (is_travel_mechanism(value.kind) && value.angle_degrees != 90)
-        throw std::invalid_argument("Barn, pocket and bifold doors require canonical 90 degree travel");
+        throw std::invalid_argument("Barn, pocket and bifold doors must open 90 degrees");
     if (value.kind == DoorOperationKind::double_bifold && value.hinge_at_end)
-        throw std::invalid_argument("Four-panel bifold doors require both jambs and a canonical start hinge");
+        throw std::invalid_argument("Four-panel bifold doors need both jambs and a hinge at the start");
 }
 Vec2 point(const Segment& line,double fraction) {
     if(line.sweep_radians==0) return {std::lerp(line.start.x,line.end.x,fraction),std::lerp(line.start.y,line.end.y,fraction)};

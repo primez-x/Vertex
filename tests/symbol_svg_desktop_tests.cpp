@@ -510,6 +510,33 @@ int main(int argc, char** argv) {
         const auto historical_bytes = recoloredArtwork(bytes);
         requireIndependentArtworkCache(entity, historical_bytes);
         require(bytes.contains("sofa-three-seat--title"), "placed payload belongs to another SVG asset");
+        {
+            // FB-008: side handles resize one dimension and corners scale
+            // proportionally. SVG artwork offers the same side handles as
+            // vector symbols.
+            auto* plan = dynamic_cast<sketch::desktop::PlanCanvas*>(
+                window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+            require(plan != nullptr, "measurement plan canvas is missing");
+            const auto vector_id = window.createAnnotationSymbol(QStringLiteral("double-bed"), {9.0, 2.0});
+            require(!vector_id.isEmpty(), "vector symbol fixture could not be placed");
+            const auto side_handles = [&](const QString& id) {
+                require(window.selectEntity(id), "symbol fixture cannot be selected");
+                QApplication::processEvents();
+                return plan->selectionAxisHandlePositions().size();
+            };
+            // Bring every fixture into view: off-screen selections paint no grips.
+            plan->fitView();
+            QApplication::processEvents();
+            const auto vector_handles = side_handles(vector_id);
+            const auto svg_handles = side_handles(instance_id);
+            const auto rotated_svg_handles = side_handles(dragged_id);
+            if (vector_handles != 4 || svg_handles != 4 || rotated_svg_handles != 4)
+                std::cerr << "side handles: vector " << vector_handles << ", SVG " << svg_handles
+                          << ", rotated SVG " << rotated_svg_handles << '\n';
+            require(vector_handles == 4 && svg_handles == 4 && rotated_svg_handles == 4,
+                    "SVG and vector symbols must both offer four side handles beside their corner handles");
+            require(window.deleteAnnotation(vector_id), "vector symbol fixture could not be removed");
+        }
         const auto before = renderSymbol(entity);
         requireTransparentSelection(selectionFixture(), true);
         const auto selected_canvas = requireTransparentSelection(entity);

@@ -6006,8 +6006,18 @@ struct DecodedProject {
     RecoveryLedgerDecodeResult recovery;
 };
 
+// An in-memory snapshot whose exact logical content was just written. When the
+// decoded logical digest equals it, the decoded history is that snapshot's
+// history (asset bytes are separately SHA-256 verified during decode), so its
+// admission certificate can stand in for a second full history replay.
+struct EqualSourceSnapshot {
+    const DocumentSnapshot& snapshot;
+    const std::string& logical_digest;
+};
+
 DecodedProject decode_project_under_lock(const std::filesystem::path& source, HANDLE locked_file,
-                                         std::optional<ArchiveRole> role = std::nullopt) {
+                                         std::optional<ArchiveRole> role = std::nullopt,
+                                         const EqualSourceSnapshot* equal_source = nullptr) {
     auto database = open_database(source, SQLITE_OPEN_READONLY);
     execute(database.get(), "PRAGMA trusted_schema=OFF");
     execute(database.get(), "PRAGMA query_only=ON");
@@ -6021,8 +6031,14 @@ DecodedProject decode_project_under_lock(const std::filesystem::path& source, HA
     RecoveryLedgerDecodeResult recovery;
     if (is_archive) {
         try {
+            // Admit the decoded history once, before the ledger. Ledger fences
+            // and lifecycle checks fork this admitted snapshot repeatedly; with
+            // its certificate each fork is O(1) instead of a full history
+            // replay (formerly four extra replays per archive decode).
+            snapshot = equal_source && verified_digest == equal_source->logical_digest
+                ? Document::fork(equal_source->snapshot).snapshot()
+                : Document::fork(snapshot).snapshot();
             recovery = decode_recovery_ledger(snapshot, ledger, *role);
-        snapshot = Document::fork(snapshot).snapshot();
         } catch (const DocumentError& error) {
             storage_error(StorageErrorCode::integrity_failure,
                           std::string("archive document validation failed: ") + error.what());
@@ -6187,8 +6203,9 @@ SaveReceipt save_project(const std::filesystem::path& destination,
                                   "validated staging project has an unexpected SQLite sidecar");
                 }
             }
+            const EqualSourceSnapshot requested_source{snapshot, requested_digest};
             auto validation = decode_project_under_lock(temporary, staging.validation_handle(),
-                archive ? std::optional<ArchiveRole>(archive->role()) : std::nullopt);
+                archive ? std::optional<ArchiveRole>(archive->role()) : std::nullopt, &requested_source);
             if (archive && !validation.recovery.supported())
                 storage_error(StorageErrorCode::integrity_failure, "staged recovery archive is not supported");
             // Both digests were already needed to write and verify the staging
@@ -6197,9 +6214,16 @@ SaveReceipt save_project(const std::filesystem::path& destination,
                 storage_error(StorageErrorCode::integrity_failure,
                               "validated project content differs from requested snapshot");
             }
+            // The staged bytes decode (structure, schema, content integrity and
+            // asset SHA-256 all verified above) to exactly the requested logical
+            // content. Admit that content through the requested snapshot: an
+            // admitted live snapshot reuses its certificate, and any other
+            // snapshot still receives a complete history replay. Replaying the
+            // byte-identical decoded copy again cost one full validation
+            // (seconds for assembly histories) on every save.
             Document validated_document = [&]() {
                 try {
-                    return ProjectStoreAccess::restore_document(std::move(validation.snapshot));
+                    return Document::fork(snapshot);
                 } catch (const DocumentError& error) {
                     storage_error(StorageErrorCode::invalid_snapshot,
                                   std::string("cannot save invalid document snapshot: ") + error.what());

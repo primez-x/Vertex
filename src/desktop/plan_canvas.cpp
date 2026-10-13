@@ -21,6 +21,10 @@
 #include <QMimeData>
 #include <QFontMetrics>
 #include <QFontMetricsF>
+#include <QFocusEvent>
+#include <QGraphicsDropShadowEffect>
+#include <QLabel>
+#include <QLineEdit>
 #include <QHash>
 #include <QKeyEvent>
 #include <QKeySequence>
@@ -401,12 +405,19 @@ int label_text_alignment(const CanvasLabel& label) {
     return Qt::AlignCenter;
 }
 
+// On-screen label text never renders below this pixel height. Printed and
+// exported output keeps its exact paper/model size.
+constexpr double minimum_screen_label_pixels = 9.0;
+
 LabelLayout label_layout(const CanvasLabel& label, QFont base_font,
                          const QPaintDevice* device, double scale, double dpi) {
     if (!label.font_family.isEmpty() &&
         label.font_family.compare(QStringLiteral("sans-serif"), Qt::CaseInsensitive) != 0)
         base_font.setFamily(label.font_family);
-    const auto paper_pixels = label.paper_height_mm * dpi / 25.4;
+    const bool screen = device && device->devType() == QInternal::Widget;
+    auto paper_pixels = label.paper_height_mm * dpi / 25.4;
+    if (screen && std::isfinite(paper_pixels) && paper_pixels > 0.0)
+        paper_pixels = std::max(paper_pixels, minimum_screen_label_pixels);
     const auto device_dpi = device ? device->logicalDpiY() : dpi;
     const auto paper_points = (paper_pixels / device_dpi) * 72.0;
     const bool paper = std::isfinite(paper_pixels) && paper_pixels > 0.0 &&
@@ -427,7 +438,8 @@ LabelLayout label_layout(const CanvasLabel& label, QFont base_font,
                                  label.text_height_metres > 0.0 ? label.text_height_metres : 0.15;
         const auto instance_scale = std::isfinite(label.scale) && label.scale > 0.0 ? label.scale : 1.0;
         base_font.setPixelSize(static_cast<int>(std::lround(
-            std::clamp(text_height * scale * instance_scale, 8.0, 96.0))));
+            std::clamp(text_height * scale * instance_scale,
+                       screen ? minimum_screen_label_pixels : 8.0, 96.0))));
         if (label.bold) base_font.setBold(true);
         if (label.italic) base_font.setItalic(true);
     }
@@ -1144,6 +1156,19 @@ void PlanCanvas::setSelectionTransformEnabled(bool resize_enabled, bool rotate_e
     update();
 }
 
+void PlanCanvas::setEmptyDrawingHint(QString hint) {
+    if (m_empty_drawing_hint == hint) return;
+    m_empty_drawing_hint = std::move(hint);
+    setAccessibleDescription(m_empty_drawing_hint);
+    update();
+}
+
+bool PlanCanvas::emptyDrawingHintVisible() const {
+    return !m_empty_drawing_hint.isEmpty() && m_tool == CanvasTool::select &&
+        !m_boundary_draft_preview.has_value() && m_left_gesture == LeftGesture::none &&
+        !contentBounds(true).has_value();
+}
+
 void PlanCanvas::setSelectionAxisResizeEnabled(bool enabled) {
     if (m_selection_axis_resize_enabled == enabled) return;
     m_selection_axis_resize_enabled = enabled;
@@ -1352,6 +1377,7 @@ void PlanCanvas::setLabels(std::vector<CanvasLabel> labels) {
     invalidateRetainedPresentation();
     ++m_sketch_content_revision;
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
+    updateInlineLengthEditorGeometry();
     update();
 }
 
@@ -1740,6 +1766,7 @@ void PlanCanvas::notifyNavigationChanged(Vec2 previous_center, double previous_s
         !m_roof_opening_group_capture.empty() || m_axis_resize_cohort_capture_frame) resetGesture();
     ++m_navigation_generation;
     m_pending_dimension_space_tap.reset();
+    updateInlineLengthEditorGeometry();
     const auto callback = m_navigation_changed;
     if (callback) callback(m_view_center, m_scale);
 }
@@ -2495,6 +2522,25 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
                                : QColor(190, 201, 219));
             painter.drawText(viewport.adjusted(12.0, 10.0, -12.0, -10.0),
                              Qt::AlignTop | Qt::AlignLeft, instruction);
+            painter.restore();
+        } else if (!content_only && emptyDrawingHintVisible()) {
+            // First-run prompt: centred on the empty drawing, on a backing
+            // plate so it stays legible over the grid in every theme.
+            painter.save();
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            painter.setRenderHint(QPainter::TextAntialiasing, true);
+            auto hint_font = painter.font();
+            hint_font.setPixelSize(13);
+            painter.setFont(hint_font);
+            const QFontMetricsF metrics(hint_font, painter.device());
+            auto plate = metrics.boundingRect(m_empty_drawing_hint).adjusted(-12.0, -7.0, 12.0, 7.0);
+            plate.moveCenter(viewport.center());
+            const bool light = background.lightnessF() > 0.5;
+            painter.setPen(QPen(light ? QColor(203, 213, 225) : QColor(71, 85, 105), 1.0));
+            painter.setBrush(light ? QColor(255, 255, 255, 235) : QColor(20, 25, 34, 235));
+            painter.drawRoundedRect(plate, 6.0, 6.0);
+            painter.setPen(light ? QColor(51, 65, 85) : QColor(226, 232, 240));
+            painter.drawText(plate, Qt::AlignCenter, m_empty_drawing_hint);
             painter.restore();
         }
     }
@@ -3350,6 +3396,36 @@ void PlanCanvas::setDraftRedoRequested(std::function<void()> callback) {
 }
 
 bool PlanCanvas::eventFilter(QObject* watched, QEvent* event) {
+    if (m_inline_length_editor && watched == m_inline_length_editor) {
+        const auto is_commit_key = [](const QKeyEvent* key) {
+            return key->key() == Qt::Key_Escape || key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter;
+        };
+        if (event->type() == QEvent::ShortcutOverride) {
+            // Window shortcuts (Esc cancel, Enter finish) must not steal the
+            // field's own accept/cancel keys.
+            if (is_commit_key(static_cast<QKeyEvent*>(event))) event->accept();
+        } else if (event->type() == QEvent::KeyPress) {
+            const auto* key = static_cast<QKeyEvent*>(event);
+            if (key->key() == Qt::Key_Escape) {
+                cancelInlineLengthEdit();
+                return true;
+            }
+            if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
+                if (!key->isAutoRepeat()) (void)acceptInlineLengthEdit();
+                return true;
+            }
+        } else if (event->type() == QEvent::FocusOut && m_inline_length_target && !m_inline_length_busy) {
+            // Focus loss cancels. Popups (the field's own context menu) do not.
+            if (static_cast<QFocusEvent*>(event)->reason() != Qt::PopupFocusReason) {
+                QTimer::singleShot(0, this, [this] {
+                    if (m_inline_length_target && !m_inline_length_busy && m_inline_length_editor &&
+                        QApplication::focusWidget() != m_inline_length_editor)
+                        cancelInlineLengthEdit();
+                });
+            }
+        }
+        return QWidget::eventFilter(watched, event);
+    }
     if (event->type() == QEvent::Show) {
         const auto* dialog = qobject_cast<QDialog*>(watched);
         if (dialog && dialog->isModal()) {
@@ -4945,8 +5021,20 @@ void PlanCanvas::mouseDoubleClickEvent(QMouseEvent* event) {
     // or replay Ctrl-selection.
     if (event->button() == Qt::LeftButton && !m_point_placement_requested && event->modifiers() == Qt::NoModifier &&
         selectionInteractionEnabled() &&
-        (m_label_double_clicked || m_roof_opening_double_clicked || m_entity_double_clicked) &&
+        (m_label_double_clicked || m_roof_opening_double_clicked || m_entity_double_clicked ||
+         m_inline_length_resolve) &&
         admitInteraction()) {
+        // A length label (wall, measured edge or placed dimension) edits in
+        // place. Anything else keeps the quick-properties contract below.
+        if (m_inline_length_resolve && m_inline_length_commit) {
+            if (const auto label = labelPresentationAt(event->position())) {
+                resetGesture();
+                if (beginInlineLengthEdit(*label)) {
+                    event->accept();
+                    return;
+                }
+            }
+        }
         if (m_label_double_clicked) {
             if (const auto label = labelPresentationAt(event->position())) {
                 // Retire captured pointer state before a contextual modal can
@@ -5033,6 +5121,247 @@ std::optional<CanvasLabel> PlanCanvas::labelPresentation(
     return result;
 }
 
+std::optional<QRectF> PlanCanvas::labelScreenBounds(const CanvasLabelPresentationIdentity& identity) const {
+    if (!(m_scale > 0.0) || !std::isfinite(m_scale)) return std::nullopt;
+    const auto& labels = positionedLabels(font(), this, m_scale, logicalDpiY(), false);
+    const auto& layouts = m_label_placement_cache[0].paint_layouts;
+    const bool cached_layouts = layouts.size() == labels.size();
+    const QRectF viewport(rect());
+    for (std::size_t i = 0; i < labels.size(); ++i) {
+        const auto& label = labels[i];
+        if (label.id != identity.id || label.callout_role != identity.callout_role ||
+            label.selection_type != identity.selection_type || !drawable_label(label)) continue;
+        const auto bounds = cached_layouts ? layouts[i].bounds
+            : label_layout(label, font(), this, m_scale, logicalDpiY()).bounds;
+        if (!finite_rect(bounds)) return std::nullopt;
+        const auto mapped = label_transform(label, toScreen(label.position, viewport)).mapRect(bounds);
+        if (!finite_rect(mapped)) return std::nullopt;
+        return mapped;
+    }
+    return std::nullopt;
+}
+
+// ---- Inline length editor (DimensionLabel "editing" state) ----------------
+
+void PlanCanvas::setInlineLengthEditRequested(
+    std::function<std::optional<QString>(CanvasLabelPresentationIdentity)> resolve,
+    std::function<QString(CanvasLabelPresentationIdentity, QString)> commit) {
+    m_inline_length_resolve = std::move(resolve);
+    m_inline_length_commit = std::move(commit);
+    if (!m_inline_length_resolve || !m_inline_length_commit) cancelInlineLengthEdit();
+}
+
+QString PlanCanvas::inlineLengthEditError() const {
+    return m_inline_length_message && m_inline_length_target ? m_inline_length_message->text() : QString{};
+}
+
+void PlanCanvas::setInlineLengthEditorInvalid(const QString& message) {
+    if (!m_inline_length_editor) return;
+    // Field per the design system's .vx-dim__input: surface-2, 1px accent
+    // border (danger when invalid), radius-sm, mono text and shadow-float.
+    const auto& tokens = design::for_surface(m_canvas_background.lightnessF() > 0.5);
+    const bool invalid = !message.isEmpty();
+    m_inline_length_editor->setProperty("invalid", invalid);
+    m_inline_length_editor->setStyleSheet(QStringLiteral(
+        "QLineEdit{background:%1;color:%2;border:1px solid %3;border-radius:%4px;"
+        "padding:0 %5px;font-family:%6;font-size:12px;font-weight:500;"
+        "selection-background-color:%7;selection-color:%8;}")
+        .arg(design::css(tokens.surface_2), design::css(tokens.ink),
+             design::css(invalid ? tokens.danger : tokens.accent))
+        .arg(design::radius_sm).arg(design::space_1)
+        .arg(design::font_mono(), design::css(tokens.accent), design::css(tokens.on_accent)));
+    m_inline_length_editor->setToolTip(message);
+    m_inline_length_editor->setAccessibleDescription(invalid ? message
+        : QStringLiteral("Type a length. Enter applies, Esc cancels."));
+    if (m_inline_length_message) {
+        m_inline_length_message->setText(message);
+        m_inline_length_message->setStyleSheet(QStringLiteral(
+            "QLabel{background:%1;color:%2;border:1px solid %3;border-radius:%4px;padding:2px %5px;font-size:12px;}")
+            .arg(design::css(tokens.surface_2), design::css(tokens.ink), design::css(tokens.danger))
+            .arg(design::radius_sm).arg(design::space_2));
+        m_inline_length_message->setVisible(invalid && m_inline_length_target.has_value());
+        m_inline_length_message->adjustSize();
+    }
+    updateInlineLengthEditorGeometry();
+}
+
+void PlanCanvas::updateInlineLengthEditorGeometry() {
+    if (!m_inline_length_target || !m_inline_length_editor || m_inline_length_busy) return;
+    const auto bounds = labelScreenBounds(*m_inline_length_target);
+    if (!bounds) {
+        // The edited length is no longer presented (deleted, hidden, replaced).
+        cancelInlineLengthEdit();
+        return;
+    }
+    const QFontMetrics metrics(m_inline_length_editor->font());
+    const int width = std::max({72, static_cast<int>(std::ceil(bounds->width())) + 2 * design::space_2,
+        metrics.horizontalAdvance(m_inline_length_editor->text()) + 3 * design::space_2});
+    const int height = std::max(20, metrics.height() + 6);
+    QRect field(0, 0, std::min(width, std::max(72, this->width() - 8)), height);
+    field.moveCenter(bounds->center().toPoint());
+    // Keep the field reachable when its label sits at the canvas edge.
+    field.moveLeft(std::clamp(field.left(), 4, std::max(4, this->width() - field.width() - 4)));
+    field.moveTop(std::clamp(field.top(), 4, std::max(4, this->height() - field.height() - 4)));
+    m_inline_length_editor->setGeometry(field);
+    if (m_inline_length_message && m_inline_length_message->isVisible()) {
+        m_inline_length_message->adjustSize();
+        QRect message(QPoint(0, 0), m_inline_length_message->size());
+        message.moveTopLeft(QPoint(field.center().x() - message.width() / 2, field.bottom() + design::space_1));
+        if (message.bottom() > this->height() - 4)
+            message.moveBottom(field.top() - design::space_1);
+        message.moveLeft(std::clamp(message.left(), 4, std::max(4, this->width() - message.width() - 4)));
+        m_inline_length_message->move(message.topLeft());
+        m_inline_length_message->raise();
+    }
+}
+
+bool PlanCanvas::beginInlineLengthEdit(const CanvasLabelPresentationIdentity& identity) {
+    if (m_inline_length_busy || !m_inline_length_resolve || !m_inline_length_commit) return false;
+    if (m_inline_length_target) {
+        if (*m_inline_length_target == identity) {
+            m_inline_length_editor->setFocus(Qt::OtherFocusReason);
+            return true;
+        }
+        cancelInlineLengthEdit();
+    }
+    if (!labelPresentation(identity)) return false;
+    const auto resolve = m_inline_length_resolve;
+    const QPointer<PlanCanvas> guard(this);
+    std::optional<QString> initial;
+    m_inline_length_busy = true;
+    try {
+        initial = resolve(identity);
+    } catch (...) {
+        initial.reset();
+    }
+    if (!guard) return false;
+    m_inline_length_busy = false;
+    // The host may refresh the presentation (for example selecting the owner).
+    if (!initial || !labelScreenBounds(identity)) return false;
+    if (!m_inline_length_editor) {
+        m_inline_length_editor = new QLineEdit(this);
+        m_inline_length_editor->setObjectName(QStringLiteral("canvasInlineLengthEditor"));
+        m_inline_length_editor->setAccessibleName(QStringLiteral("Length"));
+        m_inline_length_editor->setAlignment(Qt::AlignCenter);
+        m_inline_length_editor->setAttribute(Qt::WA_MacShowFocusRect, false);
+        m_inline_length_editor->installEventFilter(this);
+        auto* shadow = new QGraphicsDropShadowEffect(m_inline_length_editor);
+        shadow->setBlurRadius(12.0);
+        shadow->setOffset(0.0, 4.0);
+        shadow->setColor(m_canvas_background.lightnessF() > 0.5 ? QColor(22, 24, 27, 36) : QColor(0, 0, 0, 115));
+        m_inline_length_editor->setGraphicsEffect(shadow);
+        m_inline_length_editor->hide();
+        QObject::connect(m_inline_length_editor, &QLineEdit::textEdited, this, [this] {
+            if (m_inline_length_editor && m_inline_length_editor->property("invalid").toBool())
+                setInlineLengthEditorInvalid({});
+            else updateInlineLengthEditorGeometry();
+        });
+        m_inline_length_message = new QLabel(this);
+        m_inline_length_message->setObjectName(QStringLiteral("canvasInlineLengthMessage"));
+        m_inline_length_message->setAccessibleName(QStringLiteral("Length error"));
+        m_inline_length_message->setTextFormat(Qt::PlainText);
+        m_inline_length_message->setAttribute(Qt::WA_TransparentForMouseEvents);
+        m_inline_length_message->hide();
+    }
+    resetGesture();
+    m_inline_length_target = identity;
+    m_inline_length_initial_text = *initial;
+    m_inline_length_editor->setText(*initial);
+    setInlineLengthEditorInvalid({});
+    m_inline_length_editor->show();
+    m_inline_length_editor->raise();
+    m_inline_length_editor->setFocus(Qt::OtherFocusReason);
+    m_inline_length_editor->selectAll();
+    invalidateRetainedPresentation();
+    update();
+    return true;
+}
+
+bool PlanCanvas::beginInlineLengthEditForSelection() {
+    if (!m_inline_length_resolve || !m_inline_length_commit || m_inline_length_busy) return false;
+    const auto& selected = selectedIds();
+    std::vector<CanvasLabelPresentationIdentity> candidates;
+    const auto add = [&](const CanvasLabelPresentationIdentity& identity) {
+        if (std::find(candidates.begin(), candidates.end(), identity) == candidates.end())
+            candidates.push_back(identity);
+    };
+    for (const auto& identity : m_selected_generated_labels) add(identity);
+    if (selected.size() == 1)
+        for (const auto& label : m_labels)
+            if (label.id == selected.front() && drawable_label(label))
+                add({label.id, label.callout_role, label.selection_type});
+    // Only one unambiguous length label opens; a measured stroke's several
+    // edges keep the ordinary keyboard behavior (double-click picks one).
+    std::optional<CanvasLabelPresentationIdentity> target;
+    for (const auto& identity : candidates) {
+        const auto label = labelPresentation(identity);
+        if (!label || (!label->automatic_linear_placement && label->selection_type != QStringLiteral("dimension")))
+            continue;
+        if (target) return false;
+        target = identity;
+    }
+    return target && beginInlineLengthEdit(*target);
+}
+
+void PlanCanvas::closeInlineLengthEditor() {
+    if (!m_inline_length_target) return;
+    m_inline_length_target.reset();
+    m_inline_length_initial_text.clear();
+    const bool had_focus = m_inline_length_editor && m_inline_length_editor->hasFocus();
+    const bool busy = m_inline_length_busy;
+    m_inline_length_busy = true; // Hiding a focused field must not re-enter cancel.
+    if (had_focus) setFocus(Qt::OtherFocusReason);
+    if (m_inline_length_editor) {
+        m_inline_length_editor->hide();
+        m_inline_length_editor->setProperty("invalid", false);
+    }
+    if (m_inline_length_message) m_inline_length_message->hide();
+    m_inline_length_busy = busy;
+    invalidateRetainedPresentation();
+    update();
+}
+
+void PlanCanvas::cancelInlineLengthEdit() {
+    closeInlineLengthEditor();
+}
+
+bool PlanCanvas::acceptInlineLengthEdit() {
+    if (!m_inline_length_target || m_inline_length_busy || !m_inline_length_editor || !m_inline_length_commit)
+        return false;
+    const auto identity = *m_inline_length_target;
+    const auto text = m_inline_length_editor->text();
+    // The prefilled text is rounded for display; accepting it unchanged must
+    // not resize the object to that rounded value.
+    if (text.trimmed() == m_inline_length_initial_text.trimmed()) {
+        cancelInlineLengthEdit();
+        return true;
+    }
+    const auto commit = m_inline_length_commit;
+    const QPointer<PlanCanvas> guard(this);
+    QString error;
+    m_inline_length_busy = true;
+    try {
+        error = commit(identity, text);
+    } catch (const std::exception& failure) {
+        error = QString::fromUtf8(failure.what());
+    } catch (...) {
+        error = QStringLiteral("The length could not be applied. Check the value and try again.");
+    }
+    if (!guard) return false;
+    m_inline_length_busy = false;
+    if (!m_inline_length_target || !(*m_inline_length_target == identity)) return error.isEmpty();
+    if (!error.isEmpty()) {
+        setInlineLengthEditorInvalid(error);
+        if (m_inline_length_target) {
+            m_inline_length_editor->setFocus(Qt::OtherFocusReason);
+            m_inline_length_editor->selectAll();
+        }
+        return false;
+    }
+    closeInlineLengthEditor();
+    return true;
+}
+
 std::optional<QRectF> PlanCanvas::selectionBounds() const {
     return selectionFrame(QRectF(rect()));
 }
@@ -5054,6 +5383,32 @@ std::optional<QPointF> PlanCanvas::selectionRotationHandlePosition() const {
         selectedOpening() || !selectionFrame(viewport)) return std::nullopt;
     return selectionControlTransform(viewport).map(selectionRotationPoint(
         viewport,selectionAnnotationFootprints(viewport,font())));
+}
+
+std::vector<QPointF> PlanCanvas::selectionAxisHandlePositions() const {
+    // Mirrors drawSelectionFrame's side-handle condition and placement.
+    const QRectF viewport(rect());
+    std::vector<QPointF> result;
+    if (!m_selection_controls_visible || !m_selected_roof_openings.empty() || mixedSelectionEnabled()) return result;
+    if (const auto* opening = selectedOpening(); opening) return result;
+    if (!selectionFrame(viewport)) return result;
+    const bool singleton = selectedIds().size() == 1;
+    if (!(axisResizeCohortEnabled() ||
+          (singleton && m_selection_axis_resize_enabled && m_entity_axis_resize_requested))) return result;
+    const auto axes = selectionAxes();
+    if (!axes) return result;
+    const auto frame = selectionControlRect(viewport);
+    const auto transform = selectionControlTransform(viewport);
+    const auto footprints = selectionAnnotationFootprints(viewport, font());
+    if (axes->width_metres > 1e-9) {
+        result.push_back(transform.map(selectionHandlePoint({frame.left(), frame.center().y()}, {-1, 0}, viewport, footprints)));
+        result.push_back(transform.map(selectionHandlePoint({frame.right(), frame.center().y()}, {1, 0}, viewport, footprints)));
+    }
+    if (axes->depth_metres > 1e-9) {
+        result.push_back(transform.map(selectionHandlePoint({frame.center().x(), frame.top()}, {0, -1}, viewport, footprints)));
+        result.push_back(transform.map(selectionHandlePoint({frame.center().x(), frame.bottom()}, {0, 1}, viewport, footprints)));
+    }
+    return result;
 }
 
 std::optional<QRectF> PlanCanvas::selectionBounds(const QRectF& viewport) const {
@@ -8385,6 +8740,13 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
             event->accept();
             return;
         }
+        // Enter on a selected wall/edge/dimension length edits it in place.
+        if (!m_point_placement_requested && m_tool == CanvasTool::select &&
+            m_gesture_button == Qt::NoButton && !m_touch_active &&
+            beginInlineLengthEditForSelection()) {
+            event->accept();
+            return;
+        }
         if (!m_point_placement_requested && selectedIds().isEmpty() &&
             m_drawing_pen_up_requested && m_drawing_pen_up_requested()) {
             event->accept();
@@ -8500,6 +8862,7 @@ void PlanCanvas::resizeEvent(QResizeEvent* event) {
     }
     m_pending_dimension_space_tap.reset();
     QWidget::resizeEvent(event);
+    updateInlineLengthEditorGeometry();
     if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
     update();
 }
@@ -11339,7 +11702,13 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
         // surface's ink token, never the draw-dimension amber reserved for
         // dimensions. Output keeps its established (theme-independent) colors.
         const auto& label_tokens = design::for_surface(background.lightnessF() > 0.5);
-        painter.setPen(label.color.isValid() ? label.color
+        // DimensionLabel "editing": the length under the inline field draws
+        // in draw-selection, like a selected dimension.
+        const bool inline_edited = !output && m_inline_length_target &&
+            m_inline_length_target->id == label.id && m_inline_length_target->callout_role == label.callout_role &&
+            m_inline_length_target->selection_type == label.selection_type;
+        painter.setPen(inline_edited ? label_tokens.draw_selection
+                       : label.color.isValid() ? label.color
                        : output ? (background.lightnessF() > 0.5 ? QColor(25, 25, 25)
                                                                 : QColor(255, 239, 172))
                               : label.selected ? label_tokens.draw_selection

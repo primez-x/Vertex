@@ -60,7 +60,7 @@ Quantity quantity(const Json& value, bool zero_allowed) {
         invalid("Hosted opening profile quantity expression budget exceeded");
     const auto result = decode_constraint_quantity_receipt(value);
     if (!std::isfinite(result.metres) || (zero_allowed ? result.metres < 0 : result.metres <= 0))
-        invalid("Hosted opening profile dimension is outside its admitted range");
+        invalid("Opening size is outside the allowed range");
     return result;
 }
 
@@ -87,7 +87,7 @@ double dimension(const Entity& entity, const char* canonical, const char* alias,
         invalid("Hosted opening profile dimension is missing or invalid");
     const auto result = selected->get<double>();
     if (!std::isfinite(result) || (zero_allowed ? result < 0 : result <= 0))
-        invalid("Hosted opening profile source dimension is outside its admitted range");
+        invalid("The existing opening size is outside the allowed range");
     if (legacy != properties.end() && (!legacy->is_number() || legacy->get<double>() != result))
         invalid("Hosted opening profile scalar aliases disagree");
     return result;

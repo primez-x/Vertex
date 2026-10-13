@@ -937,6 +937,39 @@ void test_precision_and_draw_first_classification_modals() {
     require(receipt.record->edges.front().receipt.kind == sketch::BoundaryConstructionKind::line_heading,
             "precision form must retain its exact input receipt through desktop commit");
     require_both_canvas_labels(window, 4);
+
+    // Once a drawn area has been classified, later drawn areas default to that
+    // classification without a prompt (ask only when needed).
+    const auto before_second = window.document().snapshot();
+    require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first),
+            "a second Draw First area must start");
+    // Keep the second area beside the first and inside the canvas at any
+    // header/menu layout width.
+    drawing->zoomBy(0.5);
+    QApplication::processEvents();
+    send_click(*drawing, {3, 0});
+    send_click(*drawing, {4.5, 0});
+    send_click(*drawing, {4.5, 2});
+    send_click(*drawing, {3, 2});
+    bool prompted = false;
+    QTimer guard;
+    guard.setSingleShot(true);
+    QObject::connect(&guard, &QTimer::timeout, &window, [&] {
+        if (auto* modal = qobject_cast<QDialog*>(QApplication::activeModalWidget())) {
+            prompted = true;
+            modal->reject();
+        }
+    });
+    guard.start(500);
+    send_key(*drawing, Qt::Key_Return);
+    guard.stop();
+    const auto after_second = window.document().snapshot();
+    std::string second_classification;
+    for (const auto& [id, entity] : after_second.entities())
+        if (!before_second.entities().contains(id) && entity.properties.contains("classification"))
+            second_classification = entity.properties.at("classification").get<std::string>();
+    require(!prompted && second_classification == "living",
+            "a later drawn area must reuse the last chosen classification without prompting");
 }
 
 void test_define_first_pending_dimension_keys_and_persistence() {
@@ -1155,7 +1188,7 @@ void test_saved_boundary_draft_resumes_without_unsaved_warning() {
     send_click(*drawing, {2, 2});
     send_key(*drawing, Qt::Key_Z, Qt::ControlModifier);
     const auto original = preview(*drawing);
-    require(original.segments.size() == 1 && window.windowTitle().endsWith(" *"),
+    require(original.segments.size() == 1 && window.isWindowModified(),
             "unsaved draft input must mark the project dirty");
 
     // Observe real native prompts and cancel them so a regression cannot hang.
@@ -1180,7 +1213,7 @@ void test_saved_boundary_draft_resumes_without_unsaved_warning() {
         }
     });
     modal_responder.start();
-    require(!window.saveProject() && prompted && window.windowTitle().endsWith(" *") &&
+    require(!window.saveProject() && prompted && window.isWindowModified() &&
                 same_boundary(preview(*drawing).segments, original.segments),
             "cancelling Save As must retain dirty draft input");
     modal_responder.stop();
@@ -1189,7 +1222,7 @@ void test_saved_boundary_draft_resumes_without_unsaved_warning() {
     require(directory.isValid(), "saved draft directory must exist");
     const auto path = directory.filePath(QStringLiteral("unfinished.bldproj"));
     require(window.saveProjectAs(path), "ordinary Save As must persist the unfinished draft");
-    require(!window.windowTitle().endsWith(" *"),
+    require(!window.isWindowModified(),
             "a saved unfinished draft must not retain the unsaved title marker");
     require(!window.statusBar()->currentMessage().contains(QStringLiteral("unsaved")),
             "successful draft save must not claim the draft is unsaved");
@@ -1200,7 +1233,7 @@ void test_saved_boundary_draft_resumes_without_unsaved_warning() {
     const auto checkpoint = *saved.recovery.decoded->active;
 
     send_move_at_screen(*drawing, model_to_canvas(*drawing, {1, 1}));
-    require(window.saveProject() && !window.windowTitle().endsWith(" *") &&
+    require(window.saveProject() && !window.isWindowModified() &&
                 !window.statusBar()->currentMessage().contains(QStringLiteral("unsaved")),
             "cursor motion after Save must not dirty the saved semantic draft");
     prompted = false;
@@ -1242,7 +1275,7 @@ void test_saved_boundary_draft_resumes_without_unsaved_warning() {
         require(resumed.createNewProject(), "fresh-window resume fixture must release its saved project");
     }
     require(window.openProject(path), "ordinary saved draft must reopen writable after New");
-    require(!window.windowTitle().endsWith(" *") &&
+    require(!window.isWindowModified() &&
                 same_boundary(preview(*drawing).segments, original.segments) &&
                 same_optional_point(preview(*drawing).anchor, original.anchor),
             "reopened draft must retain its exact geometry and clean saved state");
@@ -1254,11 +1287,11 @@ void test_saved_boundary_draft_resumes_without_unsaved_warning() {
     send_key(*drawing, Qt::Key_Y, Qt::ControlModifier);
     require(preview(*drawing).segments.size() == 2 &&
                 same_point(preview(*drawing).segments.back().end, {2, 2}) &&
-                window.windowTitle().endsWith(" *"),
+                window.isWindowModified(),
             "continuing restored draft redo must restore the exact input and mark it dirty");
     const auto invalid_path = directory.filePath(QStringLiteral("directory.bldproj"));
     require(QDir().mkdir(invalid_path), "failed draft save destination must be a directory");
-    require(!window.saveProjectAs(invalid_path) && window.windowTitle().endsWith(" *") &&
+    require(!window.saveProjectAs(invalid_path) && window.isWindowModified() &&
                 preview(*drawing).segments.size() == 2,
             "failed Save As must retain the changed dirty draft");
 
@@ -1278,14 +1311,14 @@ void test_saved_boundary_draft_resumes_without_unsaved_warning() {
     modal_responder.stop();
     choose_save = false;
     require(save_close.isAccepted() && prompted && save_changes_prompt && prompt_count == 1 &&
-                !window.windowTitle().endsWith(" *") && drawing->boundaryDraftPreview(),
+                !window.isWindowModified() && drawing->boundaryDraftPreview(),
             "Save during close must persist the changed draft without an extra discard prompt");
     prompted = false;
     modal_responder.start();
     QCloseEvent saved_close;
     QApplication::sendEvent(&window, &saved_close);
     modal_responder.stop();
-    require(saved_close.isAccepted() && !prompted && !window.windowTitle().endsWith(" *"),
+    require(saved_close.isAccepted() && !prompted && !window.isWindowModified(),
             "saved draft must close without demanding discard");
     require(window.openProject(path), "saved draft remains resumable after close approval");
     send_click(*drawing, {0, 2});
@@ -1877,6 +1910,23 @@ void test_inline_wall_cardinal_length_chain() {
     require(right->arrowType() == Qt::RightArrow && up->arrowType() == Qt::UpArrow &&
                 left->arrowType() == Qt::LeftArrow && down->arrowType() == Qt::DownArrow,
             "inline directions must use native cardinal arrow controls");
+    {
+        auto* keypad_toggle = panel->findChild<QToolButton*>(QStringLiteral("drawingKeypadToggle"));
+        require(right->accessibleName() == QStringLiteral("Draw right") &&
+                    up->accessibleName() == QStringLiteral("Draw up") &&
+                    left->accessibleName() == QStringLiteral("Draw left") &&
+                    down->accessibleName() == QStringLiteral("Draw down") &&
+                    right->toolTip().startsWith(QStringLiteral("Draw right (→)")) &&
+                    down->toolTip().startsWith(QStringLiteral("Draw down (↓)")) &&
+                    keypad_toggle && keypad_toggle->text() == QStringLiteral("Keypad") &&
+                    !keypad_toggle->accessibleName().isEmpty(),
+                "inline direction and keypad controls must carry descriptive names, not bare glyphs or digits");
+        // The bottom-left scale bar (12px inset, label line plus 21px backing)
+        // must stay visible below the panel.
+        const auto scale_bar_top = drawing->height() - 12 - drawing->fontMetrics().height() - 15;
+        require(panel->geometry().bottom() < scale_bar_top,
+                "the inline drawing panel must not cover the canvas scale bar");
+    }
     require_same_document(original, window.document().snapshot(),
                           "anchoring a wall must leave the document unchanged");
 

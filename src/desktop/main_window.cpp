@@ -12,6 +12,7 @@
 #include "plan_canvas.hpp"
 #include "vertex_design_tokens.hpp"
 #include "measurement_format.hpp"
+#include "advanced_section.hpp"
 #include "bundled_fonts.hpp"
 #include "assembly_profile_canvas_geometry.hpp"
 #include "assembly_directional_resize_authoring.hpp"
@@ -139,6 +140,7 @@
 #include "sketch/desktop/area_class_palette.hpp"
 #include "sketch/desktop/symbol_svg_palette.hpp"
 #include "sketch/desktop/svg_admission.hpp"
+#include "sketch/desktop/preferences_dialog.hpp"
 #include "sketch/boundary_commit.hpp"
 #include "sketch/area_subtraction.hpp"
 #include "sketch/boundary_construction.hpp"
@@ -262,6 +264,8 @@
 #include <QPointer>
 #include <QMessageBox>
 #include <QMenu>
+#include <QMenuBar>
+#include <QStyleHints>
 #include <QPageSize>
 #include <QPalette>
 #include <QBuffer>
@@ -281,6 +285,7 @@
 #include <QPushButton>
 #include <QStringList>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QScreen>
 #include <QScopedValueRollback>
 #include <QSignalBlocker>
@@ -297,6 +302,7 @@
 #include <QStandardItemModel>
 #include <QSplitter>
 #include <QSpinBox>
+#include <QTextEdit>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTableWidget>
@@ -458,6 +464,103 @@ protected:
 private:
     PlanCanvas* m_canvas;
     std::function<void(PlanCanvas*)> m_fit;
+};
+
+// Single-letter draw-mode keys (W, A, L) on a focused plan canvas. The
+// handler decides whether the key applies (an idle plan only); otherwise the
+// key reaches the canvas unchanged, so drawing keys such as A (close the
+// area) keep their meaning while a drawing is in progress.
+class DrawModeKeyFilter final : public QObject {
+public:
+    DrawModeKeyFilter(QWidget* canvas, std::function<bool(int)> handler)
+        : QObject(canvas), m_handler(std::move(handler)) {
+        canvas->installEventFilter(this);
+    }
+protected:
+    bool eventFilter(QObject*, QEvent* event) override {
+        if (event->type() != QEvent::KeyPress) return false;
+        const auto* key = static_cast<QKeyEvent*>(event);
+        if (key->isAutoRepeat() || (key->modifiers() & ~Qt::KeypadModifier) != Qt::NoModifier) return false;
+        if (key->key() != Qt::Key_W && key->key() != Qt::Key_A && key->key() != Qt::Key_L) return false;
+        return m_handler && m_handler(key->key());
+    }
+private:
+    std::function<bool(int)> m_handler;
+};
+
+// Returns keyboard focus to the active plan canvas after pointer use of the
+// toolbar, menu bar or status-bar controls, and after a popup or dialog
+// closes, so canvas shortcuts work without another click. Text entry keeps
+// its focus, open dialogs and popups are never interrupted, and focus that
+// keyboard navigation placed elsewhere is only reclaimed from window chrome.
+class CanvasFocusReturn final : public QObject {
+public:
+    CanvasFocusReturn(QWidget* window, std::function<QWidget*()> canvas)
+        : QObject(window), m_window(window), m_canvas(std::move(canvas)) {
+        qApp->installEventFilter(this);
+    }
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        const auto type = event->type();
+        if ((type != QEvent::MouseButtonRelease && type != QEvent::Hide) || !watched->isWidgetType())
+            return false;
+        const auto* widget = static_cast<QWidget*>(watched);
+        if (type == QEvent::Hide) {
+            // Menus, combo lists and dialogs; not tooltips or other windows.
+            const auto kind = widget->windowType();
+            if (!widget->isWindow() || widget == m_window ||
+                (kind != Qt::Popup && kind != Qt::Dialog && kind != Qt::Sheet)) return false;
+            schedule(false);
+        } else if (inChrome(widget)) {
+            schedule(true);
+        }
+        return false;
+    }
+private:
+    bool inChrome(const QWidget* widget) const {
+        for (auto* ancestor = widget; ancestor; ancestor = ancestor->parentWidget()) {
+            if (ancestor == m_window) return false;
+            if (qobject_cast<const QToolBar*>(ancestor) || qobject_cast<const QMenuBar*>(ancestor) ||
+                qobject_cast<const QStatusBar*>(ancestor))
+                return ancestor->window() == m_window;
+        }
+        return false;
+    }
+    static bool textEntry(const QWidget* widget) {
+        if (qobject_cast<const QLineEdit*>(widget) || qobject_cast<const QAbstractSpinBox*>(widget) ||
+            qobject_cast<const QTextEdit*>(widget) || qobject_cast<const QPlainTextEdit*>(widget))
+            return true;
+        const auto* combo = qobject_cast<const QComboBox*>(widget);
+        return combo && combo->isEditable();
+    }
+    void schedule(bool pointer_on_chrome) {
+        m_pointer_on_chrome = m_pointer_on_chrome || pointer_on_chrome;
+        if (m_pending) return;
+        m_pending = true;
+        QTimer::singleShot(0, this, [this] {
+            const bool pointer = std::exchange(m_pointer_on_chrome, false);
+            m_pending = false;
+            reclaim(pointer);
+        });
+    }
+    void reclaim(bool pointer_on_chrome) {
+        if (!m_window || !m_window->isVisible() ||
+            QApplication::activeModalWidget() || QApplication::activePopupWidget()) return;
+        if (auto* active = QApplication::activeWindow(); active && active != m_window) return;
+        auto* canvas = m_canvas ? m_canvas() : nullptr;
+        if (!canvas || !canvas->isVisible() || !canvas->isEnabled()) return;
+        auto* focus = QApplication::focusWidget();
+        if (focus == canvas) return;
+        if (focus && focus != m_window) {
+            if (focus->window() != m_window || textEntry(focus)) return;
+            if (!pointer_on_chrome && !inChrome(focus)) return;
+        }
+        canvas->setFocus(Qt::OtherFocusReason);
+    }
+    QPointer<QWidget> m_window;
+    std::function<QWidget*()> m_canvas;
+    bool m_pending{};
+    bool m_pointer_on_chrome{};
 };
 
 using json = nlohmann::json;
@@ -1367,6 +1470,28 @@ std::vector<Entity> clipboard_entities_for_selection(const DocumentSnapshot& sna
 // Source-owned vector glyphs follow the current theme and actual display scale.
 QIcon modern_toolbar_icon(const char* paths, QWidget* palette_owner) {
     return toolbar_svg_icon(QByteArray(paths), palette_owner);
+}
+
+// Qt style sheets accept spin-box arrow images only by path. Write a small
+// chevron per theme color once to a per-user temporary folder; an empty
+// result leaves the style's own arrow in place.
+QString themed_spin_arrow_path(bool up, const QColor& color) {
+    if (!color.isValid()) return {};
+    const QDir directory(QDir(QDir::tempPath()).filePath(QStringLiteral("vertex-ui-assets")));
+    const auto path = directory.filePath(QStringLiteral("spin-%1-%2.svg")
+        .arg(up ? QStringLiteral("up") : QStringLiteral("down"),
+             color.name(QColor::HexArgb).mid(1)));
+    if (QFileInfo::exists(path)) return path;
+    const QByteArray svg = QByteArrayLiteral(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'>"
+        "<path d='") + QByteArray(up ? "M2 6.5 5 3.5 8 6.5" : "M2 3.5 5 6.5 8 3.5") +
+        QByteArrayLiteral("' fill='none' stroke='") + color.name(QColor::HexRgb).toLatin1() +
+        QByteArrayLiteral("' stroke-opacity='") + QByteArray::number(color.alphaF(), 'f', 3) +
+        QByteArrayLiteral("' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+    QSaveFile file(path);
+    if (!QDir().mkpath(directory.path()) || !file.open(QIODevice::WriteOnly) ||
+        file.write(svg) != svg.size() || !file.commit()) return {};
+    return path;
 }
 
 QString id_from(std::string value) {
@@ -3018,8 +3143,11 @@ struct AnsiMeasurementControls {
     }
 };
 
+// Property-level ANSI measurement evidence. It is declared once, in Appraisal
+// setup; Edit facts only shows the floor and area evidence. Optional notes go
+// to `notes_form` (Setup's collapsed Advanced section) when one is given.
 AnsiMeasurementControls ansi_measurement_controls(QWidget* parent, QVBoxLayout& layout, const json& policy,
-                                                  QComboBox* basis = nullptr) {
+                                                  QComboBox* basis = nullptr, QFormLayout* notes_form = nullptr) {
     AnsiMeasurementControls controls;
     controls.basis = basis;
     if (policy.contains("measurement_basis") && policy.at("measurement_basis").is_string())
@@ -3027,6 +3155,7 @@ AnsiMeasurementControls ansi_measurement_controls(QWidget* parent, QVBoxLayout& 
     controls.group = new QGroupBox(QStringLiteral("ANSI measurement evidence"), parent);
     controls.group->setObjectName(QStringLiteral("ansiMeasurementEvidence"));
     auto* form = new QFormLayout(controls.group);
+    form->setRowWrapPolicy(QFormLayout::WrapLongRows);
     const auto evidence = policy.value("ansi", json::object());
     controls.inspected = appraisal_observation(*form, controls.group, "ansiInteriorInspected", QStringLiteral("Interior inspected"), evidence, "interior_inspected");
     controls.direct = appraisal_observation(*form, controls.group, "ansiDirectMeasurement", QStringLiteral("Direct measurement"), evidence, "direct_measurement");
@@ -3041,7 +3170,7 @@ AnsiMeasurementControls ansi_measurement_controls(QWidget* parent, QVBoxLayout& 
     if (evidence.is_object() && evidence.contains("limitations_statement") && evidence.at("limitations_statement").is_string())
         controls.limitations->setText(QString::fromStdString(evidence.at("limitations_statement").get<std::string>()));
     controls.limitations->setPlaceholderText(QStringLiteral("Additional measurement notes"));
-    form->addRow(QStringLiteral("Notes"), controls.limitations);
+    (notes_form ? notes_form : form)->addRow(QStringLiteral("Measurement notes"), controls.limitations);
     const std::array<QString, 3> labels{
         QStringLiteral("Uninspected interior declaration"), QStringLiteral("Plans measurement declaration"),
         QStringLiteral("Indirect measurement declaration")};
@@ -5488,7 +5617,13 @@ public:
         const auto metrics = fontMetrics();
         const int minimum_width = std::max(iconSize().width() + design::space_5,
                                            metrics.horizontalAdvance(QStringLiteral("Refrigerator 00")));
-        const int available = std::max(minimum_width, viewport()->width() - 2);
+        // Mirror the icon flow's own layout bounds: the largest viewport less
+        // a reserved vertical scroll bar, with a small margin so the last
+        // column never wraps.
+        const int scroll_bar = std::max(verticalScrollBar()->sizeHint().width(),
+            style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, verticalScrollBar()));
+        const int available = std::max(minimum_width, maximumViewportSize().width() - scroll_bar -
+            2 * spacing() - 4);
         const int columns = std::max(1, available / minimum_width);
         const int width = available / columns;
         const int height = iconSize().height() + design::space_3 + 2 * metrics.lineSpacing() + design::space_1;
@@ -5820,7 +5955,7 @@ std::optional<json> merged_quantity_entries(const Entity* original, const Entity
         const bool inherited = has_original_binding && old_entries && old_entries->is_object() && old_entries->contains(original_pointer) &&
             old_entries->at(original_pointer) == receipt;
         if (!inherited)
-            throw std::invalid_argument("Quantity entry does not match its canonical dimension: " + pointer);
+            throw std::invalid_argument("The entered value uses the wrong kind of unit: " + pointer);
         if (!is_building_quantity_path(pointer)) {
             result[pointer] = receipt;
             continue;
@@ -6525,7 +6660,9 @@ public:
         }
         m_project_ownership = std::make_unique<ProjectOwnershipSession>();
         capture_diagnostic_stage("constructor.scaffold.begin");
+        const bool scaffolded = m_document->snapshot().entities().empty();
         ensure_project_scaffold(*m_document);
+        if (scaffolded) rememberPristineProject();
         capture_diagnostic_stage("constructor.scaffold.end");
         capture_diagnostic_stage("constructor.workspace.begin");
         m_project_workspace = std::make_unique<ProjectWorkspace>(m_document->snapshot());
@@ -6535,10 +6672,15 @@ public:
         capture_diagnostic_stage("constructor.drawing_context.end");
         capture_diagnostic_stage("constructor.build_ui.begin");
         buildUi();
+        installStatusToggleCues();
+        m_canvas_focus_return = new CanvasFocusReturn(owner, [this]() -> QWidget* {
+            return m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+        });
         capture_diagnostic_stage("constructor.build_ui.end");
         capture_diagnostic_stage("constructor.refresh.begin");
         refresh();
         capture_diagnostic_stage("constructor.refresh.end");
+        loadSavedPreferences();
         m_save_timer = new QTimer(owner);
         m_save_timer->setObjectName(QStringLiteral("workspaceSavePoll"));
         m_save_timer->setInterval(100);
@@ -6572,6 +6714,8 @@ public:
     }
 
     ~Impl() {
+        // Its callback reads this Impl's canvases; retire it first.
+        delete m_canvas_focus_return.data();
         m_mixed_plan_transform_timer->stop();
         m_mixed_plan_transform_queue.shutdown(false);
         m_mixed_clipboard_preview_timer->stop();
@@ -7501,13 +7645,13 @@ public:
                 if (!modalContextUnchanged(context) || !sourceEditAuthorityUnchanged(authority)) return false;
                 if (canvas->font()!=label_font || canvas->logicalDpiX()!=label_dpi_x || canvas->logicalDpiY()!=label_dpi_y ||
                     !canvas->labelPresentation(identity)) {
-                    setError(QStringLiteral("The displayed label changed. Reopen its properties."));return false;
+                    setError(QStringLiteral("The label changed while its properties were open. Open its properties again."));return false;
                 }
                 if (site_frame) {
                     try {
                         requireSitePublicationCurrent();
                         if (site_generation!=m_site_publication_generation)
-                            throw std::invalid_argument("The Site Plan changed. Reopen label properties.");
+                            throw std::invalid_argument("The Site Plan changed while the label properties were open. Open them again.");
                     } catch (const std::exception& error) {setError(QString::fromUtf8(error.what()));return false;}
                 }
                 return true;
@@ -7875,7 +8019,7 @@ public:
                     setError(QStringLiteral("The view changed while placing the label. Start placement again.")); return;
                 }
                 if (site_frame) {
-                    if(document_snapshot_digest(authoringSnapshot())!=site_digest) {setError(QStringLiteral("The Site Plan source changed while placing the label. Start again."));return;}
+                    if(document_snapshot_digest(authoringSnapshot())!=site_digest) {setError(QStringLiteral("The Site Plan changed while you were placing the label. Place the label again."));return;}
                     point=site_source_plan_point(point,*site_frame);
                 }
                 else if (view) point=unproject_plan_point(point,view->frame);
@@ -8559,7 +8703,7 @@ public:
                     const auto found=std::find_if(aliases.begin(),aliases.end(),[&](const auto& entry) {
                         return entry.second==original;
                     });
-                    if (found==aliases.end()) throw std::invalid_argument("A component copy lost its captured source alias.");
+                    if (found==aliases.end()) throw std::invalid_argument("A copied component no longer matches its original. Copy it again.");
                     root=found->first;
                 }
                 if (!catalogs.contains(root.first))
@@ -9204,7 +9348,7 @@ public:
             if(!decoded.supported())throw std::invalid_argument(decoded.diagnostic);
             expected.properties["model"]=encode_measurement_linework_model(transformed_measurement_linework(*decoded.model,transform));
             if(replacement->entity!=expected)
-                throw std::invalid_argument("Mixed movement differs from measured source replay.");
+                throw std::invalid_argument("The moved items no longer match the measured drawing. Try the move again.");
         }
         for(const auto& [id,entity]:source.entities())if(entity.type=="dimension") {
             const auto decoded=decode_boundary_dimension_entity(entity);
@@ -9343,7 +9487,7 @@ public:
     static Command mergeSourceDerivedSelectionChanges(const DocumentSnapshot& source,Command command,
         const ApplyEntityChanges& changes,const std::string& message) {
         if (changes.expected_revision!=source.revision() || !changes.asset_changes.empty())
-            throw std::invalid_argument("A selection edit must retain its captured revision and local assets.");
+            throw std::invalid_argument("The drawing changed while you were editing the selection. Your change was not applied. Try it again.");
         const auto* ordinary=std::get_if<ApplyEntityChanges>(&command);
         const auto candidate=ordinary && ordinary->entity_changes.empty() ? source :
             Document::preview_command(source,command);
@@ -9359,7 +9503,7 @@ public:
             const auto before=source.entities().find(change.entity.id);
             const auto current=candidate.entities().find(change.entity.id);
             if (before==source.entities().end() || current==candidate.entities().end())
-                throw std::invalid_argument("A selection edit lost its captured dependency identity.");
+                throw std::invalid_argument("An object linked to the selection changed. Your change was not applied. Try it again.");
             auto expected=change.entity;
             // Both lanes replay the original source. Equal consequences join
             // once; differing results never overwrite another owner's solve.
@@ -9603,7 +9747,7 @@ public:
                     if (retained==candidate.entities().end() || retained->second!=original ||
                         retained->second.properties.dump()!=original.properties.dump() ||
                         retained->second.extensions.dump()!=original.extensions.dump())
-                        throw std::invalid_argument("An unchanged wall transform cannot admit an independent geometry edit.");
+                        throw std::invalid_argument("This wall edit cannot be combined with a separate geometry change. Apply them one at a time.");
                 }
                 return command;
             }
@@ -9649,7 +9793,7 @@ public:
                 const auto operation=owner_transform ? owner_transform(entity.id) : transform;
                 if (owner_transform) source_transformations.push_back({entity.id,operation});
                 const auto baseline = read_required_segment(entity.properties,"baseline");
-                if (!baseline) throw std::invalid_argument("A selected wall has no canonical baseline.");
+                if (!baseline) throw std::invalid_argument("A selected wall has no valid centerline.");
                 const auto proposed = transform_segment(*baseline,operation);
                 wall_targets.push_back({entity.id,proposed.start,proposed.end,operation});
                 const auto built=detachedWallTransformCommand(source,entity,false,{},false,false,{}, {},false,operation,nullptr,true,kMaximumNumericSelectionGraphEntities);
@@ -9729,7 +9873,7 @@ public:
                     if (entity.type != "wall" && entity.type != "measurement_linework") continue;
                     const auto expected = supplemental.find(entity.id);
                     if (proposed.entities().at(entity.id) != (expected == supplemental.end() ? entity : expected->second))
-                        throw std::invalid_argument("The connected solve differs from a selected object's exact rigid source replay.");
+                        throw std::invalid_argument("Moving the connected objects would distort a selected object. Move it separately.");
                 }
                 for (auto& [id,entity] : supplemental) {
                     if (entity.type == "wall" || entity.type == "measurement_linework" || entity.type == "constraint") continue;
@@ -10017,7 +10161,7 @@ public:
             if (connected && is_physical_wall_room_active_constraint_review_command(movement)) {
                 const auto phase=decode_phase_constraint_authoring_intent(connected->phase_constraint_authoring_intent);
                 if (!phase.intent.joint_translation)
-                    throw std::invalid_argument("The connected selection did not retain its saved-phase translation authority.");
+                    throw std::invalid_argument("The connected objects could not be moved together in this design phase.");
                 const auto candidate=Document::preview_command(source,movement);
                 for (const auto& change:changes) {
                     if (change.kind==EntityChangeKind::upsert &&
@@ -10028,12 +10172,12 @@ public:
                     if (actual==candidate.entities().end() || actual->second!=change.entity ||
                         actual->second.properties.dump()!=change.entity.properties.dump() ||
                         actual->second.extensions.dump()!=change.entity.extensions.dump())
-                        throw std::invalid_argument("The saved-phase selection does not reproduce its captured presentation move.");
+                        throw std::invalid_argument("The selection in this design phase could not be moved as shown in the preview.");
                 }
                 return movement;
             }
             if (!connected || !connected->joint_translation_completion)
-                throw std::invalid_argument("The connected selection did not produce translation authority.");
+                throw std::invalid_argument("The connected objects could not be moved together.");
             for (const auto& change : changes) {
                 if (change.kind == EntityChangeKind::upsert && can_recognize_boundary_dimension_entity_type(change.entity.type)) continue;
                 const auto id=change.kind==EntityChangeKind::upsert ? change.entity.id : change.entity_id;
@@ -10043,7 +10187,7 @@ public:
                     });
                 if (existing!=connected->supplemental_entity_changes.end()) {
                     if (existing->kind!=change.kind || (change.kind==EntityChangeKind::upsert && existing->entity!=change.entity))
-                        throw std::invalid_argument("The selected presentation differs from its captured-source translation: "+id);
+                        throw std::invalid_argument("A selected item could not be moved as shown in the preview: "+id);
                 } else connected->supplemental_entity_changes.push_back(change);
                 connected->supplemental_source_completion = true;
             }
@@ -10176,7 +10320,7 @@ public:
                 if(!preview.accepted()) throw std::invalid_argument(movement_error(preview));
                 auto movement=append_presentations(constraint_authoring_verified_command(source,preview,nullptr));
                 auto* connected=std::get_if<ApplyBoundaryConstraintChanges>(&movement);
-                if(!connected)throw std::invalid_argument("The partial perimeter did not produce connected geometry authority.");
+                if(!connected)throw std::invalid_argument("The partial room outline could not be connected to its walls.");
                 (void)Document::preview_command(source,movement);
                 return movement;
             }
@@ -10278,7 +10422,7 @@ public:
             auto movement=wallGeometryCommand(source,wallTranslationIntent(source,model_ids,offset).targets,
                 "Move walls and measurement callouts");
             auto* connected=std::get_if<ApplyBoundaryConstraintChanges>(&movement);
-            if(!connected)throw std::invalid_argument("The selected wall movement did not produce connected geometry authority.");
+            if(!connected)throw std::invalid_argument("The selected walls could not be moved with their connected geometry.");
             for(const auto& change:changes) {
                 if(change.kind!=EntityChangeKind::upsert || !can_recognize_boundary_dimension_entity_type(change.entity.type))continue;
                 const auto& original=source.entities().at(change.entity.id);
@@ -10779,7 +10923,7 @@ public:
                 const auto& actual = source.entities().at(entity.id);
                 if (actual != entity || actual.properties.dump() != entity.properties.dump() ||
                     actual.extensions.dump() != entity.extensions.dump())
-                    throw std::invalid_argument("The mixed copy no longer matches its captured source.");
+                    throw std::invalid_argument("The copied items no longer match the drawing. Copy them again.");
                 if (entity.type == "roof_join") {
                     for (const auto& id : parse_roof_join(entity.properties, entity.id).roof_ids) owners.insert(id);
                     families.insert("roof");
@@ -10815,7 +10959,7 @@ public:
                 const auto& actual = source.entities().at(entity.id);
                 if (actual != entity || actual.properties.dump() != entity.properties.dump() ||
                     actual.extensions.dump() != entity.extensions.dump())
-                    throw std::invalid_argument("The stair copy no longer matches its captured source.");
+                    throw std::invalid_argument("The copied stair no longer matches the drawing. Copy it again.");
                 const auto operation = owner_transform ? owner_transform(entity.id) : transform;
                 operations.push_back({entity.id, {{operation.pivot.x, operation.pivot.y, 0.0},
                     {operation.offset.x, operation.offset.y, 0.0}, operation.rotation_radians, 1.0,
@@ -10838,7 +10982,7 @@ public:
                 const auto& actual = source.entities().at(entity.id);
                 if (actual != entity || actual.properties.dump() != entity.properties.dump() ||
                     actual.extensions.dump() != entity.extensions.dump())
-                    throw std::invalid_argument("The structural copy no longer matches its captured source.");
+                    throw std::invalid_argument("The copied columns or beams no longer match the drawing. Copy them again.");
                 const auto operation = owner_transform ? owner_transform(entity.id) : transform;
                 operations.push_back({entity.id, {{operation.pivot.x, operation.pivot.y, 0.0},
                     {operation.offset.x, operation.offset.y, 0.0}, operation.rotation_radians, 1.0,
@@ -10862,7 +11006,7 @@ public:
                 const auto& actual = source.entities().at(entity.id);
                 if (actual != entity || actual.properties.dump() != entity.properties.dump() ||
                     actual.extensions.dump() != entity.extensions.dump())
-                    throw std::invalid_argument("The horizontal copy no longer matches its captured source.");
+                    throw std::invalid_argument("The copied slabs no longer match the drawing. Copy them again.");
                 owners.push_back(entity.id);
                 const auto operation = owner_transform ? owner_transform(entity.id) : transform;
                 operations.push_back({entity.id, {{operation.pivot.x, operation.pivot.y, 0.0},
@@ -10889,7 +11033,7 @@ public:
             std::set<std::string, std::less<>> owners;
             for (const auto& entity : seeds) {
                 if (source.entities().at(entity.id) != entity)
-                    throw std::invalid_argument("The roof copy no longer matches its captured source.");
+                    throw std::invalid_argument("The copied roof no longer matches the drawing. Copy it again.");
                 if (entity.type == "roof") owners.insert(entity.id);
                 else for (const auto& roof : parse_roof_join(entity.properties, entity.id).roof_ids) owners.insert(roof);
             }
@@ -10968,7 +11112,7 @@ public:
             const auto physical=targets.empty() ? ApplyEntityChanges{source.revision(),{}, {},"Copy structural objects"} :
                 architectural_group_transform_command(source,targets,new_id("architectural-group-copy"),source.revision());
             if (physical.expected_revision!=source.revision() || !physical.asset_changes.empty())
-                throw std::invalid_argument("An architectural copy must retain its captured revision and shared assets.");
+                throw std::invalid_argument("The drawing changed after you copied these objects. Copy them again.");
             for (const auto& change : physical.entity_changes) {
                 if (change.kind!=EntityChangeKind::upsert || !graph_ids.contains(change.entity.id) ||
                     !physical_values.emplace(change.entity.id,change.entity).second)
@@ -11618,7 +11762,7 @@ public:
         } catch (const Standard_Failure& error) {
             const auto* message=error.GetMessageString();
             setError(QStringLiteral("Schedule geometry: %1").arg(QString::fromUtf8(
-                message && *message ? message : "The native geometry could not be admitted.")));
+                message && *message ? message : "The geometry could not be built. Check its dimensions and try again.")));
             return false;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Schedule edit: %1").arg(QString::fromUtf8(error.what())));
@@ -12273,6 +12417,16 @@ public:
             QComboBox:disabled, QLineEdit:disabled, QAbstractSpinBox:disabled { color: $faint;
                 background: transparent; border-color: $border; }
             QLineEdit[invalid="true"], QAbstractSpinBox[invalid="true"] { border-color: $danger; }
+            QAbstractSpinBox::up-button, QAbstractSpinBox::down-button { subcontrol-origin: border;
+                width: 18px; background: transparent; border: 0; border-left: 1px solid $border; }
+            QAbstractSpinBox::up-button { subcontrol-position: top right; border-top-right-radius: 6px; }
+            QAbstractSpinBox::down-button { subcontrol-position: bottom right; border-bottom-right-radius: 6px; }
+            QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover { background: $hover; }
+            QAbstractSpinBox::up-button:pressed, QAbstractSpinBox::down-button:pressed { background: $selection; }
+            QAbstractSpinBox::up-arrow { image: url($spinUpArrow); width: 10px; height: 10px; }
+            QAbstractSpinBox::down-arrow { image: url($spinDownArrow); width: 10px; height: 10px; }
+            QAbstractSpinBox::up-arrow:disabled, QAbstractSpinBox::up-arrow:off { image: url($spinUpDisabledArrow); }
+            QAbstractSpinBox::down-arrow:disabled, QAbstractSpinBox::down-arrow:off { image: url($spinDownDisabledArrow); }
             QComboBox { padding-right: 24px; }
             QComboBox::drop-down { border: 0; width: 24px; }
             QToolBar QComboBox { font-size: 12px; border-radius: 6px; padding: 0 16px 0 8px; min-height: 26px; max-height: 26px; }
@@ -12284,6 +12438,10 @@ public:
             QMenu::item:selected { background: $hover; color: $hoverText; }
             QMenu::item:disabled { color: $faint; }
             QMenu::separator { height: 1px; background: $border; margin: 4px 8px; }
+            QMenuBar#mainMenuBar { background: $frame; color: $ink; border: 0; padding: 2px 4px 0 4px; }
+            QMenuBar#mainMenuBar::item { background: transparent; color: $ink; padding: 3px 8px; border-radius: 4px; }
+            QMenuBar#mainMenuBar::item:selected, QMenuBar#mainMenuBar::item:pressed {
+                background: $hover; color: $hoverText; }
             QLabel#panelHeading, QLabel#componentLibraryHeading { color: $muted; font-size: 12px; font-weight: 500; }
             QLabel#annotationEditorStatus { color: $muted; font-size: 11px; }
             QLabel#drawingModeLabel { color: $muted; font-size: 12px; font-weight: 500; background: transparent; }
@@ -12294,7 +12452,8 @@ public:
             QWidget#appraisalDetailsContent, QWidget#appraisalDetailsViewport,
             QScrollArea#appraisalDetailsScroll { background: $panel; }
             QWidget#appraisalDetailsPanel QLabel { color: $ink; }
-            QGroupBox#floorReferenceControls QLabel, QGroupBox#floorReferenceControls QCheckBox {
+            QGroupBox#floorReferenceControls QLabel, QGroupBox#floorReferenceControls QCheckBox,
+            QGroupBox#wallOpeningPalette QLabel, QLabel#annotationSymbolSizeLabel {
                 color: $ink; background: transparent; }
             QDialog#appraisalFactsDialog QLabel, QDialog#appraisalSetupDialog QLabel,
             QDialog#appraisalFactsDialog QCheckBox, QDialog#appraisalSetupDialog QCheckBox,
@@ -12356,6 +12515,26 @@ public:
             .replace("$selectedText", selectedText).replace("$selection", selection)
             .replace("$muted", muted).replace("$faint", faint).replace("$ink", ink)
             .replace("$danger", danger);
+        // Spin-box chevrons use the muted ink token; disabled/limit states use
+        // the faint token. Without a written image the rules are dropped so
+        // the style's own arrows remain.
+        const auto spin_arrow = contrast ? QColor(Qt::white) : tokens.ink_muted;
+        const auto spin_arrow_faint = contrast ? QColor(Qt::white) : tokens.ink_faint;
+        const std::array<std::pair<QString, QString>, 4> spin_arrows{{
+            {QStringLiteral("$spinUpDisabledArrow"), themed_spin_arrow_path(true, spin_arrow_faint)},
+            {QStringLiteral("$spinDownDisabledArrow"), themed_spin_arrow_path(false, spin_arrow_faint)},
+            {QStringLiteral("$spinUpArrow"), themed_spin_arrow_path(true, spin_arrow)},
+            {QStringLiteral("$spinDownArrow"), themed_spin_arrow_path(false, spin_arrow)}}};
+        for (const auto& [token, path] : spin_arrows) {
+            if (path.isEmpty()) {
+                QStringList kept;
+                for (const auto& line : stylesheet.split(QLatin1Char('\n')))
+                    if (!line.contains(token)) kept.push_back(line);
+                stylesheet = kept.join(QLatin1Char('\n'));
+            } else {
+                stylesheet.replace(token, path);
+            }
+        }
         owner->setStyleSheet(stylesheet);
         owner->setProperty("workspaceTheme", QString::fromStdString(workspace_theme_name(theme)));
         m_theme = theme;
@@ -12548,6 +12727,7 @@ public:
                 QSignalBlocker blocker(m_overview_button);
                 m_overview_button->setChecked(m_overview_map_enabled);
             }
+            if (m_refresh_status_toggle_cues) m_refresh_status_toggle_cues();
             m_measurementCanvas->setMetricUnits(m_metric_units);
             m_architecturalCanvas->setMetricUnits(m_metric_units);
             m_measurementCanvas->setGridEnabled(m_grid_enabled);
@@ -12690,6 +12870,12 @@ public:
         } catch (const std::exception& error) {
             setError(QStringLiteral("Calculation profile: %1")
                          .arg(QString::fromUtf8(error.what())));
+            return;
+        }
+        if (appraisal_editor) {
+            // Appraisal area precision has one home: Appraisal setup. The
+            // fixed appraisal rules have nothing else to edit here.
+            if (const auto property = propertyEntity()) showAppraisalSetup(id_from(property->id));
             return;
         }
         QDialog dialog(owner);
@@ -13681,7 +13867,7 @@ public:
             try {
                 if (!modalContextUnchanged(context) || m_selected_ids != selection ||
                     document_snapshot_digest(authoringSnapshot()) != digest)
-                    throw std::invalid_argument("The embedded assembly source changed. Reopen properties.");
+                    throw std::invalid_argument("The assembly changed while its properties were open. Open its properties again.");
                 auto instance = binding->instance;
                 if (x->text()!=initial[0] || y->text()!=initial[1] || z->text()!=initial[2] || yaw->text()!=initial[3] ||
                     scale->text()!=initial[4] || height_scale->text()!=initial[5]) {
@@ -13762,7 +13948,7 @@ public:
             if (!site_copy) return;
             requireSiteEditCurrent();
             if (site_generation!=m_site_edit_generation || site_publication_generation!=m_site_publication_generation)
-                throw std::invalid_argument("The Site Plan frame changed. Reopen Transform.");
+                throw std::invalid_argument("The Site Plan moved while Transform was open. Open Transform again.");
             (void)admittedSiteSelectionFrames(source,m_site_edit_frames,m_site_edit_geometry_selection,
                 m_site_edit_annotation_targets,m_site_edit_selected_presentations,authority.selection);
         };
@@ -13860,7 +14046,7 @@ public:
                 if (!m_document->is_editable())
                     throw std::invalid_argument("This document is read-only.");
                 if (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(authority))
-                    throw std::invalid_argument("The project or selection changed. Reopen the transform editor.");
+                    throw std::invalid_argument("The drawing or selection changed while Transform was open. Open Transform again.");
                 require_site_copy_current();
                 if (embedded) {
                     const auto gesture=parseArchitecturalTransform(rotation->text(),offset_x->text(),offset_y->text(),offset_z->text(),scale->text());
@@ -14006,7 +14192,7 @@ public:
                 candidate_catalog_copy.reset();
                 if (catalog_copy_preview) { catalog_copy_preview->setEntities({}); catalog_copy_preview->setLabels({}); }
                 apply->setEnabled(false);
-                status->setText(QStringLiteral("The project or selection changed. Reopen the transform editor."));
+                status->setText(QStringLiteral("The drawing or selection changed while Transform was open. Open Transform again."));
             }
         });
         source_guard.start();
@@ -14062,7 +14248,7 @@ public:
                             return identity.presentation_key==QString::fromStdString(assembly_profile_presentation_key(
                                 embedded->assembly_catalog_id,embedded->instance,profile).dump());
                         })!=1)
-                        throw std::invalid_argument("A selected embedded profile has no unique canonical source identity.");
+                        throw std::invalid_argument("A selected profile inside an assembly could not be identified.");
                 }
                 showArchitecturalObjectTransformEditor();
                 return;
@@ -14189,7 +14375,7 @@ public:
                             binding.assembly_catalog_id,binding.instance,profile,
                             embedded ? std::optional<std::string>{} : std::optional{persisted->first}).dump());
                     })!=1)
-                        throw std::invalid_argument("A selected assembly profile has no unique canonical source identity.");
+                        throw std::invalid_argument("A selected assembly profile could not be identified.");
                 }
                 if (site_group) {
                     captureSiteEdit(m_architecturalCanvas);
@@ -14232,7 +14418,7 @@ public:
                             throw std::invalid_argument("The architectural selection exceeds the 1000-object limit.");
                         const auto& expansion=selection_assembly_expansion(id.toStdString(),embedded);
                         if (expansion.profiles.empty())
-                            throw std::invalid_argument("A selected embedded assembly has no canonical geometric profiles.");
+                            throw std::invalid_argument("A selected assembly has no geometry to transform.");
                         for (const auto& profile : expansion.profiles) {
                             const auto path=assembly_plan_profile_outer(profile);
                             include_path(geometry,path,id);
@@ -14283,7 +14469,7 @@ public:
                             throw std::invalid_argument("A selected reference has no unique decoded visible presentation.");
                         const auto reference=std::find_if(presentation_scene->references.begin(),presentation_scene->references.end(),[&](const auto& item){return item.id==id;});
                         if (reference==presentation_scene->references.end() || !reference->visible || reference->image.isNull())
-                            throw std::invalid_argument("A selected reference cannot be decoded from the captured source.");
+                            throw std::invalid_argument("A selected reference could not be read from the drawing.");
                         reference_targets.push_back(found->first);
                         const auto width=reference->image.width()*reference->metres_per_source_unit*reference->scale;
                         const auto depth=reference->image.height()*reference->metres_per_source_unit*reference->scale;
@@ -14336,7 +14522,7 @@ public:
                     if (found == source.entities().end() || (!geometry_root(found->second) && !architectural_root(found->second)))
                         throw std::invalid_argument("Select supported plan objects, qualified assembly profiles, explicit symbol/text children and reference images. Generated labels/dimensions require their semantic owner.");
                     if (!visible.contains(found->first))
-                        throw std::invalid_argument("A selected object is outside the current visible source. Reopen Transform with a visible selection.");
+                        throw std::invalid_argument("A selected object is hidden in this view. Select only visible objects, then open Transform.");
                     const auto& entity = found->second;
                     if (embeddedAssemblyChild(source,found->first))
                         throw std::invalid_argument("A selected ID names both a persisted body and an embedded assembly. Select an unambiguous semantic target.");
@@ -14345,7 +14531,7 @@ public:
                         if (architectural_selection.size()+embedded_selection.size()>=maximum_architectural_group_targets)
                             throw std::invalid_argument("The architectural selection exceeds the 1000-object limit.");
                         const auto path=assemblyHostPlan(source,found->first,presentation_scene->wall_plans);
-                        if (path.empty()) throw std::invalid_argument("A selected architectural object has no canonical plan profile.");
+                        if (path.empty()) throw std::invalid_argument("A selected object has no plan outline to transform.");
                         include_path(geometry,path,id);
                         architectural_selection.push_back(found->first);
                         continue;
@@ -14353,14 +14539,14 @@ public:
                     geometry_selection.push_back(id);
                     if (entity.type == "wall") {
                         const auto baseline = read_required_segment(entity.properties, "baseline");
-                        if (!baseline) throw std::invalid_argument("A selected wall has no canonical axis geometry.");
+                        if (!baseline) throw std::invalid_argument("A selected wall has no valid centerline to transform.");
                         include_path(geometry,{*baseline},id);
                     } else if (entity.type == "measurement_linework") {
                         for (const auto& edge : resolve_dimension_geometry_owner(entity).segments)
                             include_path(geometry,{edge.segment},id);
                     } else {
                         const auto boundary = read_boundary(entity.properties);
-                        if (boundary.empty()) throw std::invalid_argument("A selected area has no canonical outline geometry.");
+                        if (boundary.empty()) throw std::invalid_argument("A selected area has no valid outline.");
                         include_path(geometry,boundary,id);
                     }
                 }
@@ -14388,12 +14574,12 @@ public:
             if (!sourceEditAuthorityUnchanged(authority)) return false;
             if (group && (selection_canvas->selectedEntityPresentations() != selection_presentations ||
                 selection_canvas->selectedLabelPresentations() != selection_labels)) {
-                setError(QStringLiteral("The selected presentations changed. Reopen Transform to review the complete selection."));
+                setError(QStringLiteral("The selected items changed while Transform was open. Open Transform again to review the selection."));
                 return false;
             }
             if (group && (selection_canvas->font()!=selection_font ||
                 selection_canvas->logicalDpiX()!=selection_dpi_x || selection_canvas->logicalDpiY()!=selection_dpi_y)) {
-                setError(QStringLiteral("The presentation font or display scale changed. Reopen Transform."));
+                setError(QStringLiteral("The text font or display scale changed while Transform was open. Open Transform again."));
                 return false;
             }
             if (group && hasPendingPlacementEdit()) {
@@ -14407,7 +14593,7 @@ public:
                         m_site_edit_annotation_targets,m_site_edit_selected_presentations,selection);
                     if (site_generation != m_site_edit_generation ||
                         site_publication_generation != m_site_publication_generation)
-                        throw std::invalid_argument("The Site Plan frame changed. Reopen Transform.");
+                        throw std::invalid_argument("The Site Plan moved while Transform was open. Open Transform again.");
                 } catch (const std::exception& error) {
                     setError(QString::fromUtf8(error.what()));
                     return false;
@@ -14562,7 +14748,7 @@ public:
                     if (site_group && !clone->isChecked() && transform.rotation_radians==0.0 &&
                         !horizontal && !vertical && (transform.offset.x!=0.0 || transform.offset.y!=0.0)) {
                         if (!numeric_site_translation_input)
-                            throw std::invalid_argument("The Site translation has no captured selection frames. Reopen Transform.");
+                            throw std::invalid_argument("The Site Plan positions of the selection are unavailable. Open Transform again.");
                         // Numeric movement and direct dragging share one typed
                         // per-owner solve, including presentation/physical edits
                         // and exact source-owned dimension placement. Do not run
@@ -14573,7 +14759,7 @@ public:
                     shared_callout_transform=transform;
                     if (site_group) callout_owner_transform=[&,world=transform](const std::string& id) {
                         if (!site_owner_frames.contains(id))
-                            throw std::invalid_argument("A transformed dependency has no captured canonical Site frame: "+id);
+                            throw std::invalid_argument("A linked object has no Site Plan position: "+id);
                         return siteLocalPlanTransform(world,site_owner_frames.at(id));
                     };
                     const ArchitecturalGroupTransform physical_transform{{group_pivot->x,group_pivot->y,0.0},
@@ -14733,7 +14919,7 @@ public:
                         if (!embedded_targets.empty()) {
                             if (roof_copy_capture.intent && (roof_copy_capture.source_digest!=document_snapshot_digest(source) ||
                                     command_to_json(Command{copied}).dump()!=command_to_json(Command{*roof_copy_capture.intent}).dump()))
-                                throw std::invalid_argument("The component copy lost its admitted architectural source intent.");
+                                throw std::invalid_argument("The copied component lost its link to the original design. Copy it again.");
                             auto occupied = retainedSlabIdentityNames(source, true);
                             std::set<std::string, std::less<>> existing_copy_destinations;
                             for (const auto& [original_id, fresh_id] : candidate_copy_ids) {
@@ -14799,7 +14985,7 @@ public:
                             const auto embedded=embedded_assembly_group_copy_command(source,embedded_targets,physical_transform,
                                 source.revision(), dimension_copies);
                             if (embedded.expected_revision!=source.revision() || !embedded.asset_changes.empty())
-                                throw std::invalid_argument("An embedded assembly copy must retain its captured revision and shared assets.");
+                                throw std::invalid_argument("The drawing changed after you copied the assembly. Copy it again.");
                             std::set<std::string,std::less<>> fresh_ids;
                             for (const auto& change : copied.entity_changes) fresh_ids.insert(change.entity.id);
                             for (const auto& change : embedded.entity_changes) {
@@ -15011,7 +15197,7 @@ public:
                         if (!embedded_targets.empty()) {
                             const auto embedded=embedded_assembly_group_transform_command(source,embedded_targets,physical_transform,source.revision());
                             if (embedded.expected_revision!=source.revision() || !embedded.asset_changes.empty())
-                                throw std::invalid_argument("An embedded assembly transform must retain its captured revision and local assets.");
+                                throw std::invalid_argument("The drawing changed while you were transforming the assembly. Your change was not applied. Try it again.");
                             for (const auto& change : embedded.entity_changes) {
                                 const auto existing=std::find_if(architectural.entity_changes.begin(),architectural.entity_changes.end(),[&](const auto& other) {
                                     return other.entity.id==change.entity.id;
@@ -15067,7 +15253,7 @@ public:
                     if (auto physical_preview = projectAlternativeWallCanvasCommand(source, candidate.first,
                             retained, retained, retained_labels, context.metric_units, view_context, &detached)) {
                         if (!detached.alternative_wall)
-                            throw std::invalid_argument("The transform preview lost its pending wall review authority.");
+                            throw std::invalid_argument("The transform preview is out of date with its room review. Try the transform again.");
                         const auto identities = alternativeCommandReplacementIdentities(candidate.first);
                         const auto changed_owner = [&](const QString& id) {
                             if (identities.contains(id.toStdString())) return true;
@@ -15410,7 +15596,7 @@ public:
                             const auto& frames=entity.selected ? numeric_site_candidate_frames : numeric_site_source_frames;
                             const auto found=frames.geometry.find({entity.id,entity.presentation_key});
                             if (found==frames.geometry.end())
-                                throw std::invalid_argument("A measured Site preview has no exact canonical frame.");
+                                throw std::invalid_argument("A measured item has no exact Site Plan position.");
                             entity=site_presented_canvas_entity(entity,found->second.placement);
                         }
                         for (auto& label : labels) {
@@ -15451,7 +15637,7 @@ public:
                         for (auto entity : scene.all_geometry) {
                             if (!physical_preview_ids[selected ? 1 : 0].contains(entity.id.toStdString())) continue;
                             if (!admitted_physical.emplace(entity.id,entity.presentation_key).second)
-                                throw std::invalid_argument("A physical consequence has an ambiguous canonical preview profile.");
+                                throw std::invalid_argument("An affected object has more than one possible preview outline.");
                             if (site_group) entity=site_presented_canvas_entity(entity,site_frames.geometryAt(entity));
                             entity.selected=selected;
                             if (plan_frame) {
@@ -15471,7 +15657,7 @@ public:
                             const auto id=selected ? (clone->isChecked() ? candidate_copy_ids.at(original_id) :
                                 alternativeReplacementTargetID(candidate.first, original_id)) : original_id;
                             if (std::none_of(admitted_physical.begin(),admitted_physical.end(),[&](const auto& key) {return key.first.toStdString()==id;}))
-                                throw std::invalid_argument("A selected architectural root is unavailable in the complete canonical preview: "+id);
+                                throw std::invalid_argument("A selected object is missing from the preview: "+id);
                         }
                         for (const auto& [alias,binding] : embedded_selection) {
                             const auto id=selected && clone->isChecked() ? candidate_copy_ids.at(alias) : alias;
@@ -15485,13 +15671,13 @@ public:
                             std::size_t retained{};
                             for (const auto& key : admitted_physical) if (key.first.toStdString()==id) ++retained;
                             if (expansion.profiles.empty() || retained!=expansion.profiles.size())
-                                throw std::invalid_argument("A selected embedded assembly has an incomplete canonical preview: "+id);
+                                throw std::invalid_argument("A selected assembly could not be fully previewed: "+id);
                             for (const auto& profile : expansion.profiles) {
                                 const auto key=QString::fromStdString(assembly_profile_presentation_key(
                                     presented_binding.assembly_catalog_id,presented_binding.instance,profile,
                                     copied ? std::optional{id} : std::optional<std::string>{}).dump());
                                 if (!admitted_physical.contains({id_from(id),key}))
-                                    throw std::invalid_argument("A selected embedded profile is missing from the canonical preview: "+id);
+                                    throw std::invalid_argument("A profile inside a selected assembly is missing from the preview: "+id);
                             }
                         }
                         for (const auto& id : physical_preview_ids[selected ? 1 : 0]) {
@@ -15578,7 +15764,7 @@ public:
                 preview->setReferences({});
                 const auto* message=error.GetMessageString();
                 status->setText(QString::fromUtf8(message && *message ? message :
-                    "The complete copied physical geometry could not be admitted."));
+                    "The copied objects could not be built at this location."));
                 buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
             } catch (const std::exception& error) {
                 candidate_command.reset(); candidate_snapshot.reset();
@@ -15665,7 +15851,7 @@ public:
                         const auto* child = std::get_if<ApplyBoundaryConstraintChanges>(&retained.first);
                         if (!child || !child->phase_constraint_authoring_completion ||
                             child->phase_constraint_authoring_intent.dump() != encode_phase_constraint_authoring_intent(proposal.intent).dump())
-                            throw std::invalid_argument("The numeric transform differs from its displayed physical proposal.");
+                            throw std::invalid_argument("The entered values no longer match the preview. Check them and apply again.");
                         const auto generation = input_generation;
                         const auto values = input_values();
                         const auto input_fence = [&] {
@@ -15688,7 +15874,7 @@ public:
                     const auto primary = authority.context.selected_id.toStdString();
                     const auto coordinated_room_seed = coordinatedOrdinaryWallRoomReviewRoot(source, candidate_command->first, authority.selection,candidate_room_placements);
                     if (!candidate_room_placements.empty() && !coordinated_room_seed)
-                        throw std::invalid_argument("The numeric room callouts lost their captured wall review source.");
+                        throw std::invalid_argument("The room labels are out of date with the wall review. Apply the transform again.");
                     const auto review_primary = coordinated_room_seed.value_or(primary);
                     const bool wall_selection = coordinated_room_seed || physicalWallRoomReviewSelection(source,authority.selection,primary);
                     if (wall_selection &&
@@ -15700,7 +15886,7 @@ public:
                         const auto retained_room_placements=candidate_room_placements;
                         if (retained.second!=primary ||
                             fullSnapshotDigest(Document::preview_command(source,retained.first))!=fullSnapshotDigest(admitted))
-                            throw std::invalid_argument("The wall transform's admitted command or history changed.");
+                            throw std::invalid_argument("The drawing or undo history changed while you were transforming the walls. Your change was not applied. Try it again.");
                         const auto generation = input_generation;
                         const auto values = input_values();
                         const auto input_fence = [&] {
@@ -16000,7 +16186,7 @@ public:
             std::vector<CanvasEntity> geometry;std::vector<CanvasLabel> labels;
             try {
                 if(!selected || selected->type!="wall" || m_selected_ids.size()!=1) throw std::invalid_argument("Select one wall first.");
-                if(!context_valid()) throw std::invalid_argument("The editing context changed. Reopen this tool after finishing the drawing.");
+                if(!context_valid()) throw std::invalid_argument("The active floor or layer changed while this tool was open. Finish the drawing, then open the tool again.");
                 const auto expression=distance->text().trimmed();
                 if(expression.isEmpty()) throw std::invalid_argument("Enter the distance to the new wall point.");
                 // Untouched display rounding must retain the exact midpoint.
@@ -16070,7 +16256,7 @@ public:
             try {
                 if(!context_valid()){update();return;}
                 const auto exact=Document::preview_command(source,*candidate);
-                if(exact.entities()!=proposed->entities()) throw std::invalid_argument("The preview changed. Reopen the tool.");
+                if(exact.entities()!=proposed->entities()) throw std::invalid_argument("The preview is out of date. Open the tool again.");
                 applyDocumentCommand(*candidate);clearError();refresh();dialog.accept();
             } catch(const std::exception& error) {status->setText(QString::fromUtf8(error.what()));}
         });
@@ -16201,7 +16387,7 @@ public:
                 buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
                 preview->setEntities({});preview->setLabels({});
                 try {
-                    if (!unchanged()) throw std::invalid_argument("The project or editing context changed. Reopen Merge walls.");
+                    if (!unchanged()) throw std::invalid_argument("The drawing changed while Merge walls was open. Open Merge walls again.");
                     const auto pair=choices->currentData().toStringList();
                     if (pair.size()!=2) throw std::invalid_argument("Choose one wall connection.");
                     const WallMergeIntent intent{pair.at(0).toStdString(),pair.at(1).toStdString()};
@@ -16252,7 +16438,7 @@ public:
                 try {
                     if (!candidate || !proposed || !unchanged()) {update();return;}
                     const auto exact=Document::preview_command(source,*candidate);
-                    if (exact.entities()!=proposed->entities()) throw std::invalid_argument("The merge preview changed. Reopen the tool.");
+                    if (exact.entities()!=proposed->entities()) throw std::invalid_argument("The merge preview is out of date. Open Merge walls again.");
                     applyDocumentCommand(*candidate);
                     m_selected_id=selected->type=="measurement_boundary" ? id_from(selected->id) : id_from(survivor);
                     m_selected_ids={m_selected_id};
@@ -16319,7 +16505,7 @@ public:
                 preview->setEntities({item(original,QStringLiteral(":original"),QColor(150,160,176))});
                 preview->setLabels({});status->clear();summary->clear();
                 try {
-                    if(!unchanged()) throw std::invalid_argument("The editing context changed. Reopen Remove point.");
+                    if(!unchanged()) throw std::invalid_argument("The active floor or layer changed while Remove point was open. Open Remove point again.");
                     command=boundaryVertexRemovalCommand(source,point->currentData().toString().toStdString(),retained_child_mapping);
                     auto entity=*selected;entity.properties["segments"]=command->edit.replacement_segments;
                     const auto replacement=decode_identified_boundary_entity(entity);
@@ -16448,7 +16634,7 @@ public:
                 geometry.push_back({QStringLiteral("source"), QStringLiteral("source"),
                     read_boundary(selected->properties), 0, false});
                 if (!context_valid()) throw std::invalid_argument(
-                    "The editing context changed or a drawing is active. Reopen this tool after finishing the drawing.");
+                    "The active floor or layer changed, or a drawing is in progress. Finish the drawing, then open this tool again.");
                 auto command = boundaryVertexInsertionCommand(source, selected->id,
                     segment->currentData().toString(), fraction->text());
                 auto proposed = Document::preview_command(source, command);
@@ -16504,7 +16690,7 @@ public:
                 if (!context_valid()) { update_preview(); return; }
                 const auto exact = Document::preview_command(source, *candidate);
                 if (exact.entities() != candidate_snapshot->entities())
-                    throw std::invalid_argument("Insertion preview changed. Reopen the tool.");
+                    throw std::invalid_argument("The insertion preview is out of date. Open the tool again.");
                 applyDocumentCommand(*candidate);
                 clearError();
                 refresh();
@@ -16604,21 +16790,16 @@ public:
             return;
         }
         const auto context = captureModalContext();
-        QString classification;
         if (selected->type == "measurement_linework") {
             showMeasuredAreaReview(id_from(selected->id));
             return;
-        } else {
-            bool accepted = false;
-            classification = QInputDialog::getText(
-                owner, QStringLiteral("Detect closed areas"),
-                QStringLiteral("Classification for each detected room:"), QLineEdit::Normal,
-                QStringLiteral("room"), &accepted);
-            if (!accepted || classification.trimmed().isEmpty()) return;
         }
+        // No prompt: detected rooms are classified "room" and renamed or
+        // reclassified afterwards through quick properties.
+        const auto classification = QStringLiteral("room");
         if (!modalContextUnchanged(context)) return;
         const auto created = detectRoomBoundariesFromExistingWalls(
-            classification.trimmed(), context.revision);
+            classification, context.revision);
         if (!created.isEmpty()) {
             owner->statusBar()->showMessage(
                 QStringLiteral("Detected %1 closed area%2.")
@@ -16816,8 +16997,24 @@ public:
         const auto snapshot = m_document->snapshot();
         const auto found = snapshot.entities().find(id.toStdString());
         if (found == snapshot.entities().end() || !is_visibility_container_type(found->second.type)) {
-            setError(QStringLiteral("Visibility can be changed only for a floor or drawing layer."));
+            setError(QStringLiteral("Visibility can be changed only for a property, building, floor or drawing layer."));
             return false;
+        }
+        if (found->second.type == "building" || found->second.type == "property") {
+            // A property or building eye shows or hides every floor it contains.
+            const auto floors = navigatorContainedFloors(organize_project(snapshot), found->first, found->second.type);
+            bool changed = false;
+            for (const auto& floor : floors) {
+                changed = visible ? m_view_filter.hidden_floor_ids.erase(floor) > 0 || changed
+                                  : m_view_filter.hidden_floor_ids.insert(floor).second || changed;
+            }
+            if (changed) {
+                clearError();
+                refresh();
+            } else {
+                refreshNavigator(); // An empty container keeps its eye open.
+            }
+            return true;
         }
 
         auto& hidden = found->second.type == "floor"
@@ -17247,7 +17444,7 @@ public:
                 if (additional_fence) additional_fence();
                 if (!sourceEditAuthorityCurrent(authority) || hasPendingPlacementEdit() ||
                     m_text_placement_context || m_plan_label_context || m_armed_area_class)
-                    throw std::invalid_argument("The project or drawing changed. Reopen the room review.");
+                    throw std::invalid_argument("The drawing changed during the room review. Open the room review again.");
                 return authoringSnapshot();
             },parent);
         styleDialog(dialog);
@@ -19380,7 +19577,7 @@ public:
     bool assemblyDraftSourceUnchanged(const DocumentSnapshot& source, Workspace workspace) {
         if (!m_document->is_editable() || workspace != m_workspace ||
             document_snapshot_digest(source) != document_snapshot_digest(authoringSnapshot())) {
-            setError(QStringLiteral("The project or workspace changed. Reopen the assembly editor to review the current source."));
+            setError(QStringLiteral("The drawing or workspace changed while the assembly editor was open. Open it again to see the current assembly."));
             return false;
         }
         return true;
@@ -21058,7 +21255,7 @@ public:
             const auto source=authoringSnapshot();
             if(!source.is_editable())throw std::invalid_argument("This document is read-only.");
             if(expected_revision && *expected_revision!=source.revision())
-                throw std::invalid_argument("The component changed. Reopen its colors.");
+                throw std::invalid_argument("The component changed while its colors were open. Open its colors again.");
             const auto target=annotationActionTarget(source,symbol_id);
             const auto id=target ? target->child_id : symbol_id.toStdString();
             const auto parent=target ? std::optional{target->owner_entity_id} : annotation_parent_for_child(source,id);
@@ -21128,7 +21325,7 @@ public:
             auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,&dialog);layout->addWidget(buttons);
             QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
             QObject::connect(buttons->button(QDialogButtonBox::Apply),&QPushButton::clicked,&dialog,[&] {
-                if(!modalContextUnchanged(context)||m_selected_id!=id||document_snapshot_digest(authoringSnapshot())!=source_digest){error->setText(QStringLiteral("The document or selection changed. Reopen component colors."));return;}
+                if(!modalContextUnchanged(context)||m_selected_id!=id||document_snapshot_digest(authoringSnapshot())!=source_digest){error->setText(QStringLiteral("The drawing or selection changed while component colors were open. Open them again."));return;}
                 std::optional<SymbolSvgPalette> palette;
                 if(!inherit->isChecked())palette=SymbolSvgPalette{initial.profile,outline->text().trimmed().toStdString(),surface->text().trimmed().toStdString()};
                 if(!editSymbolSvgPalette(id,std::move(palette),source.revision())){error->setText(lastError());return;}
@@ -21889,7 +22086,7 @@ public:
             throw std::invalid_argument("Assisted boundary ID already exists.");
         }
         const auto context = m_assistance_sources.at(proposal.id).drawing_context;
-        if (!context) throw std::invalid_argument("The assisted boundary has no captured drawing layer.");
+        if (!context) throw std::invalid_argument("The traced outline has no drawing layer. Choose a layer and try again.");
         const auto holes_value = args.value("holes", json::array());
         const auto hole_ids_value = args.value("hole_ids", json::array());
         if (!holes_value.is_array() || !hole_ids_value.is_array() ||
@@ -22212,7 +22409,7 @@ public:
                 throw std::invalid_argument("The measured stroke's anchor history changed.");
         } else if (found == checkpoint.entities.end() || found->second.type != "measurement_linework" ||
                    found->second.properties.at("model") != encode_measurement_linework_model(drawing.model)) {
-            throw std::invalid_argument("The measured stroke's receipt history changed.");
+            throw std::invalid_argument("The measured line's history changed. Draw the line again.");
         }
     }
 
@@ -22243,7 +22440,7 @@ public:
                 if (!decoded.model || decoded.model->stroke_id != model.stroke_id || decoded.model->closed ||
                     decoded.model->edges.size() != index || decoded.model->anchor.x != model.anchor.x ||
                     decoded.model->anchor.y != model.anchor.y)
-                    throw std::invalid_argument("The measured stroke's history receipts changed.");
+                    throw std::invalid_argument("The measured line's saved steps changed. Draw the line again.");
                 model = *decoded.model;
             }
             drawing.model = std::move(model);
@@ -22576,7 +22773,7 @@ public:
             if (m_boundary_session) throw std::invalid_argument("Finish or cancel the current drawing before adjusting an area.");
             const auto snapshot=authoringSnapshot();
             if (expected_revision && *expected_revision!=snapshot.revision())
-                throw std::invalid_argument("The project changed while choosing a parent area. Start again.");
+                throw std::invalid_argument("The drawing changed while you were choosing a parent area. Choose it again.");
             const auto source=selectedEntity();
             if (!source || m_selected_ids.size()!=1) throw std::invalid_argument("Select one closed area to subtract.");
             const auto target=prepare_area_subtraction_target(snapshot,*source,target_id.trimmed().toStdString(),remove);
@@ -23697,7 +23894,7 @@ public:
                 if (!candidate || !unchanged()) { update(); return; }
                 try {
                     if (authoringSnapshot().entities() != source.entities())
-                        throw std::invalid_argument("The captured source document changed. Cancel and reopen the review.");
+                        throw std::invalid_argument("The drawing changed during this review. Cancel, then open the review again.");
                     if (no_op) { clearError(); dialog.accept(); return; }
                     auto command = *candidate;
                     if (topology_changed) {
@@ -23711,7 +23908,7 @@ public:
                         throw std::invalid_argument("The proposed exterior changed. Review it again.");
                     if (!unchanged()) { update(); return; }
                     if (authoringSnapshot().entities() != source.entities())
-                        throw std::invalid_argument("The captured source document changed during reference review. Cancel and reopen the review.");
+                        throw std::invalid_argument("The drawing changed during the reference review. Cancel, then open the review again.");
                     applyDocumentCommand(command);
                     clearError();
                     refresh();
@@ -24220,16 +24417,16 @@ public:
             setError(QStringLiteral("Select existing walls or a closed boundary first."));
             return;
         }
-        const auto initial = QString::fromStdString(
-            read_string(selected->properties, "classification").value_or("room"));
-        bool accepted = false;
-        const auto classification = QInputDialog::getText(
-            owner, QStringLiteral("Create room boundary"),
-            QStringLiteral("Room name or classification:"), QLineEdit::Normal,
-            initial, &accepted);
-        if (!accepted || classification.trimmed().isEmpty()) return;
+        // No prompt: the room takes the source classification (or "room") and
+        // is renamed later through quick properties.
+        auto classification = QString::fromStdString(
+            read_string(selected->properties, "classification").value_or("room")).trimmed();
+        if (classification.isEmpty()) classification = QStringLiteral("room");
         if (!modalContextUnchanged(context)) return;
-        (void)createRoomBoundaryFromExistingGeometry(classification.trimmed(), context.revision);
+        if (!createRoomBoundaryFromExistingGeometry(classification, context.revision).isEmpty())
+            owner->statusBar()->showMessage(
+                QStringLiteral("Room boundary created as \"%1\". Rename it in Properties.").arg(classification),
+                6000);
     }
 
     void createRoomVolumeFromDialog() {
@@ -24239,18 +24436,15 @@ public:
             setError(QStringLiteral("Select a closed boundary before creating a room volume."));
             return;
         }
-        bool accepted = false;
-        const auto height = QInputDialog::getText(
-            owner, QStringLiteral("Create room volume"), QStringLiteral("Room height:"),
-            QLineEdit::Normal, m_metric_units ? QStringLiteral("2.4 m")
-                                               : QStringLiteral("8 ft"), &accepted);
-        if (!accepted) return;
-        const auto elevation = QInputDialog::getText(
-            owner, QStringLiteral("Create room volume"), QStringLiteral("Base elevation:"),
-            QLineEdit::Normal, m_metric_units ? QStringLiteral("0 m")
-                                               : QStringLiteral("0 ft"), &accepted);
-        if (!accepted || !modalContextUnchanged(context)) return;
-        (void)createRoomVolumeFromSelectedBoundary(height, elevation, context.revision);
+        std::vector<CompactFormField> fields{
+            {QStringLiteral("roomVolumeHeight"), QStringLiteral("Height"),
+             units::length_input_text(m_metric_units ? 2.4 : 8.0 * units::metres_per_foot, m_metric_units)},
+            {QStringLiteral("roomVolumeElevation"), QStringLiteral("Base elevation"),
+             units::length_input_text(0.0, m_metric_units)}};
+        if (!runCompactForm(owner, QStringLiteral("roomVolumeForm"), QStringLiteral("Create room volume"),
+                            QStringLiteral("Create room"), fields) ||
+            !modalContextUnchanged(context)) return;
+        (void)createRoomVolumeFromSelectedBoundary(fields[0].value, fields[1].value, context.revision);
     }
 
     void editRoomVolumeFromDialog() {
@@ -24581,7 +24775,7 @@ public:
             }
             const auto revision = expected_revision.value_or(source.revision());
             if (revision != source.revision())
-                throw std::invalid_argument("The wall source changed before creation. Start again.");
+                throw std::invalid_argument("The drawing changed before the wall was created. Draw the wall again.");
             const auto drawing_context = requireDrawingContext(source);
             if (!drawing_context) return {};
             if (!std::isfinite(start.x) || !std::isfinite(start.y) || !std::isfinite(end.x) ||
@@ -24589,8 +24783,8 @@ public:
                 setError(QStringLiteral("Wall endpoints must be finite and distinct."));
                 return {};
             }
-            double thickness = 0.14;
-            double height = 2.4384;
+            double thickness = m_preferences.wall_thickness_m;
+            double height = m_preferences.wall_height_m;
             try {
                 const auto unit = m_metric_units ? Unit::metre : Unit::foot;
                 if (m_wall_draw_thickness) thickness = parse_quantity(m_wall_draw_thickness->text().toStdString(), unit).metres;
@@ -24753,7 +24947,7 @@ public:
             }
             const auto revision = expected_revision.value_or(source.revision());
             if (revision != source.revision())
-                throw std::invalid_argument("The sloped wall source changed before creation. Start again.");
+                throw std::invalid_argument("The drawing changed before the sloped wall was created. Draw it again.");
             const auto drawing_context = requireDrawingContext(source);
             if (!drawing_context) return {};
             try {
@@ -24994,7 +25188,7 @@ public:
             if (!m_document->is_editable())
                 throw std::invalid_argument("This document is read-only.");
             if (revision != m_document->revision())
-                throw std::invalid_argument("The project changed while the curved wall was being edited. Reopen its properties.");
+                throw std::invalid_argument("The drawing changed while you were editing the curved wall. Your change was not applied. Open its properties again.");
             const auto snapshot = authoringSnapshot();
             const auto authority = captureSourceEditAuthority(snapshot);
             const auto found = snapshot.entities().find(m_selected_id.toStdString());
@@ -25018,7 +25212,7 @@ public:
                     const auto preview = preview_constraint_authoring(snapshot, intent);
                     requireAcceptedConstraintPreview(preview);
                     if (!sourceEditAuthorityCurrent(authority))
-                        throw std::invalid_argument("The curved wall source or editing context changed. Reopen its properties.");
+                        throw std::invalid_argument("The curved wall or active layer changed while its properties were open. Open its properties again.");
                     if (!applyConstraintPreview(preview)) { clearError(); refreshInspector(); return false; }
                     clearError();
                     m_selected_id = QString::fromStdString(selected->id);
@@ -25045,7 +25239,7 @@ public:
                 throw std::invalid_argument(diagnostic);
             validate_wall_semantics(wall);
             if (!sourceEditAuthorityCurrent(authority))
-                throw std::invalid_argument("The curved wall source or editing context changed. Reopen its properties.");
+                throw std::invalid_argument("The curved wall or active layer changed while its properties were open. Open its properties again.");
             if (candidate == *selected) {
                 clearError();
                 return true;
@@ -25117,7 +25311,7 @@ public:
             const auto source = authoringSnapshot();
             const auto authority = captureSourceEditAuthority(source);
             const auto revision = expected_revision.value_or(source.revision());
-            if (revision != source.revision()) throw std::invalid_argument("The horizontal assembly source changed. Reopen its editor.");
+            if (revision != source.revision()) throw std::invalid_argument("The slab assembly changed while its editor was open. Open the editor again.");
             const auto selected = selectedEntity();
             if (!selected || selected->type != "slab") {
                 throw std::invalid_argument("Select a slab, floor, ceiling, or foundation before editing its assembly layers.");
@@ -25202,7 +25396,7 @@ public:
             const auto source = authoringSnapshot();
             const auto authority = captureSourceEditAuthority(source);
             if (expected_revision && *expected_revision != source.revision())
-                throw std::invalid_argument("The wall changed. Reopen its properties.");
+                throw std::invalid_argument("The wall changed while its properties were open. Open its properties again.");
             const auto selected = selectedEntity();
             if (!selected || selected->type != "wall" || authority.selection.size() != 1) {
                 throw std::invalid_argument("Select a wall before editing its slope.");
@@ -25211,7 +25405,7 @@ public:
             if (actual == source.entities().end() || actual->second != *selected ||
                 actual->second.properties.dump() != selected->properties.dump() ||
                 actual->second.extensions.dump() != selected->extensions.dump())
-                throw std::invalid_argument("The selected wall does not match the captured project.");
+                throw std::invalid_argument("The selected wall changed while you were editing it. Your change was not applied. Try it again.");
             const auto expression = rise_expression.trimmed();
             if (expression.isEmpty()) throw std::invalid_argument("Wall slope rise is required.");
             const auto rise = parse_quantity(
@@ -25252,7 +25446,7 @@ public:
                 throw std::runtime_error("This document is read-only.");
             const auto snapshot = authoringSnapshot();
             if (snapshot.revision() != expected_revision)
-                throw std::runtime_error("The project changed. Reopen the object editor.");
+                throw std::runtime_error("The drawing changed while the object editor was open. Open it again.");
             const auto source_authority=captureSourceEditAuthority(snapshot);
             std::vector<EntityChange> changes;
             std::map<std::string, json, std::less<>> related_context_completions;
@@ -25585,7 +25779,7 @@ public:
         } catch (const Standard_Failure& error) {
             const auto* message=error.GetMessageString();
             setError(QStringLiteral("Opening geometry: %1").arg(QString::fromUtf8(
-                message && *message ? message : "The native geometry could not be admitted.")));
+                message && *message ? message : "The geometry could not be built. Check its dimensions and try again.")));
             return {};
         } catch (const std::exception& error) {
             setError(QStringLiteral("Opening: %1").arg(QString::fromUtf8(error.what())));
@@ -25985,7 +26179,7 @@ public:
             fullSnapshotDigest(*source)!=fullSnapshotDigest(authoringSnapshot())) {
             m_native_input_authority.reset();
             synchronizeNativeSelection();
-            throw std::invalid_argument("The displayed 3D source changed during selection. Start again in the current view.");
+            throw std::invalid_argument("The 3D view updated while you were selecting. Select again.");
         }
         // Selection and its owning layer intentionally changed in this admitted
         // event. Renew their authority only against the original displayed source.
@@ -26217,16 +26411,16 @@ public:
                 if ((!canvas || !siteCanvas(canvas)) &&
                     physicalWallRoomReviewSelection(source,authority.selection,primary)) {
                     if (!sameSelectionMembership(ids,authority.selection))
-                        throw std::invalid_argument("The wall move selection differs from its captured original objects.");
+                        throw std::invalid_argument("The selected walls changed during the move. Move them again.");
                     std::optional<DocumentSnapshot> candidate;
                     const auto command = model_ids.size()>1
                         ? makeSelectionGeometryTranslationCommand(source,model_ids,model_delta)
                         : constraint_authoring_verified_command(source,preview,&candidate);
                     if (!candidate) candidate=Document::preview_command(source,command);
-                    if (!candidate) throw std::invalid_argument("The wall move has no admitted geometry candidate.");
+                    if (!candidate) throw std::invalid_argument("The wall move preview is not ready. Move the wall again.");
                     if (affectedPhysicalWallRooms(source, candidate->entities(), primary) != 0) {
                         if (canvas)
-                            throw std::invalid_argument("This wall drag has no retained horizontal-plan proposal for room review. Start the move again in a horizontal plan.");
+                            throw std::invalid_argument("Rooms can only be reviewed for wall moves made in a plan view. Move the wall again in a plan view.");
                         const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(source, *candidate, command,
                             primary, authority, owner);
                         if (!reviewed) { clearError(); refreshInspector(); return false; }
@@ -26252,7 +26446,7 @@ public:
                 const auto candidate=Document::preview_command(source,command);
                 if (affectedPhysicalWallRooms(source,candidate.entities(),*room_seed)!=0) {
                     if (!sameSelectionMembership(ids,authority.selection))
-                        throw std::invalid_argument("The move selection differs from its captured original objects.");
+                        throw std::invalid_argument("The selected objects changed during the move. Move them again.");
                     const auto reviewed=reviewPhysicalWallRoomsAfterGeometry(source,candidate,command,*room_seed,
                         authority,owner,{},json(nullptr),{},room_placements);
                     if (!reviewed) { clearError(); refreshInspector(); return false; }
@@ -26433,7 +26627,7 @@ public:
             operations[0].action == ArchitecturalAction::transform && operations[0].object_id == original.id &&
             operations[0].transform;
         if (!clone && !move)
-            throw std::invalid_argument("A component transform requires one captured move or copy operation.");
+            throw std::invalid_argument("Move or copy the component in a single step.");
         const auto before = decode_document_assembly_instance(original);
         auto command = architectural_transaction_command(source, transaction, source.revision());
         const auto candidate = Document::preview_command(source, command);
@@ -27271,7 +27465,7 @@ public:
                 return *candidate;
             }();
             if (detached_projection) return detached_projection;
-            if (!candidate_snapshot) throw std::invalid_argument("The boundary edit has no admitted preview.");
+            if (!candidate_snapshot) throw std::invalid_argument("The outline edit preview is not ready. Try the edit again.");
             const auto& candidate=candidate_snapshot->entities();
             auto result = computeConstraintGeometryProjection(source, *candidate_snapshot, retained, eligible,
                 labels, metric_units, appraisal_area_ids, label_footprints, component_bounds, view_context, label_font, site_input);
@@ -27570,7 +27764,7 @@ public:
                 if (!std::isfinite(angle) || !std::isfinite(ratio) || ratio<=0.0 ||
                     !std::isfinite(start.x) || !std::isfinite(start.y) ||
                     !std::isfinite(end.x) || !std::isfinite(end.y))
-                    throw std::invalid_argument("The component proposal has an invalid physical placement.");
+                    throw std::invalid_argument("The component cannot be placed here.");
                 // Canonical obstacle paths stay in source XY. Retained model
                 // symbols already use the saved frame, including its handedness;
                 // legacy overlays retain their explicit view-oriented axes.
@@ -27586,7 +27780,7 @@ public:
                     const auto x=value.x-start.x,y=value.y-start.y;
                     value={end.x+ratio*(c*x-s*y),end.y+ratio*(s*x+c*y)};
                     if (!std::isfinite(value.x) || !std::isfinite(value.y))
-                        throw std::invalid_argument("The component proposal exceeds the supported geometry range.");
+                        throw std::invalid_argument("The component placement is outside the supported size or distance range.");
                 };
                 const auto path=[&](Boundary& value) {
                     for (auto& edge:value) { point(edge.start);point(edge.end); }
@@ -27813,7 +28007,7 @@ public:
                     if (const auto original=embedded) {
                         if (!item.presentation_key.isEmpty()) {
                             const auto binding=assembly_binding(item.id.toStdString(),true);
-                        if (!binding) throw std::invalid_argument("The admitted geometric assembly child is unavailable.");
+                        if (!binding) throw std::invalid_argument("A part of the assembly is missing from the preview.");
                         if (candidate.at(binding->assembly_catalog_id)==source.entities().at(original->assembly_catalog_id)) continue;
                         const auto& expansion=candidate_assembly(item.id.toStdString(),binding);
                             const auto profile=std::find_if(expansion.profiles.begin(),expansion.profiles.end(),[&](const auto& part) {
@@ -27821,7 +28015,7 @@ public:
                                     binding->assembly_catalog_id,binding->instance,part).dump());
                             });
                             if (profile==expansion.profiles.end())
-                                throw std::invalid_argument("The admitted assembly profile presentation changed.");
+                                throw std::invalid_argument("An assembly profile changed during the preview. Try again.");
                             AssemblyExpansion part;part.profiles.push_back(*profile);
                             const auto canonical=project_assembly_plan(part);
                             if (component_sources && !canonical.empty())
@@ -27858,9 +28052,9 @@ public:
                         }
                         const auto binding=assembly_binding(item.id.toStdString(),true);
                         if (!binding || !binding->instance.placement)
-                            throw std::invalid_argument("The admitted assembly child placement is unavailable.");
+                            throw std::invalid_argument("The position of a part of the assembly is unavailable.");
                         if (!candidate_assembly(item.id.toStdString(),binding).profiles.empty())
-                            throw std::invalid_argument("The admitted host-copy assembly changed geometry ownership.");
+                            throw std::invalid_argument("The copied assembly changed which object owns its geometry. Copy it again.");
                         const auto& placement=*binding->instance.placement;
                         if (candidate.at(binding->assembly_catalog_id)==source.entities().at(original->assembly_catalog_id) &&
                             original->instance.placement && assemblyHostGeometryKey(candidate_snapshot,placement.host_entity_id)==
@@ -27886,13 +28080,13 @@ public:
                                 BuildingViewKind::plan,*view_context).value_or(Boundary{});
                         } else {
                             const auto host=assemblyHostPlan(candidate_snapshot,placement.host_entity_id,candidate_plans);
-                            if (host.empty()) throw std::invalid_argument("The admitted assembly host plan is empty.");
+                            if (host.empty()) throw std::invalid_argument("The assembly's host has no plan outline.");
                             proposed.segments=assembly_placement_boundary(host,placement);
                             for (const auto& edge : proposed.segments)
                                 if (!std::isfinite(edge.start.x) || !std::isfinite(edge.start.y) ||
                                     !std::isfinite(edge.end.x) || !std::isfinite(edge.end.y) ||
                                     !std::isfinite(edge.sweep_radians))
-                                    throw std::invalid_argument("The admitted assembly host plan transform is not finite.");
+                                    throw std::invalid_argument("The assembly's host has an invalid plan position.");
                             if (view_context) {
                                 proposed.segments=project_plan_path(std::move(proposed.segments),view_context->frame);
                                 if (view_context->crop) {
@@ -27917,11 +28111,11 @@ public:
                         const auto a=std::find_if(before.symbols.begin(),before.symbols.end(),[&](const auto& value){return value.id==target.child_id;});
                         const auto b=std::find_if(after.symbols.begin(),after.symbols.end(),[&](const auto& value){return value.id==target.child_id;});
                         if (a==before.symbols.end() || b==after.symbols.end())
-                            throw std::invalid_argument("The Site component lost its captured annotation owner.");
+                            throw std::invalid_argument("The Site Plan component is no longer linked to its annotation.");
                         const auto angle=b->placement.rotation_radians-a->placement.rotation_radians;
                         const auto ratio=b->placement.scale/a->placement.scale;
                         if (!std::isfinite(angle) || !std::isfinite(ratio) || ratio<=0.0)
-                            throw std::invalid_argument("The Site component proposal has an invalid physical placement.");
+                            throw std::invalid_argument("The component cannot be placed here on the Site Plan.");
                         if (angle==0.0 && ratio==1.0 && a->placement.position.x==b->placement.position.x &&
                             a->placement.position.y==b->placement.position.y) continue;
                         auto proposed=item;
@@ -28095,7 +28289,7 @@ public:
                             return item.presentation_key==QString::fromStdString(assembly_profile_presentation_key(
                                 binding.assembly_catalog_id,binding.instance,value,entity.id).dump());
                         });
-                        if (profile==expansion.profiles.end()) throw std::invalid_argument("The admitted document assembly profile changed.");
+                        if (profile==expansion.profiles.end()) throw std::invalid_argument("A saved assembly profile changed during the preview. Try again.");
                         presented.profiles.push_back(*profile);
                     }
                     auto canonical=project_assembly_plan(presented);
@@ -28374,13 +28568,13 @@ public:
                         if (original && !component.presentation_key.isEmpty() &&
                             candidate.at(original->assembly_catalog_id)!=source.entities().at(original->assembly_catalog_id)) {
                             const auto placed=assembly_binding(component.id.toStdString(),true);
-                            if (!placed) throw std::invalid_argument("The admitted component assembly is unavailable.");
+                            if (!placed) throw std::invalid_argument("The component's assembly is unavailable.");
                             const auto& expansion=candidate_assembly(component.id.toStdString(),placed);
                             const auto profile=std::find_if(expansion.profiles.begin(),expansion.profiles.end(),[&](const auto& part) {
                                 return component.presentation_key==QString::fromStdString(assembly_profile_presentation_key(
                                     placed->assembly_catalog_id,placed->instance,part).dump());
                             });
-                            if (profile==expansion.profiles.end()) throw std::invalid_argument("The admitted component profile changed.");
+                            if (profile==expansion.profiles.end()) throw std::invalid_argument("The component's profile changed during the preview. Try again.");
                             AssemblyExpansion part;part.profiles.push_back(*profile);
                             const auto plan=project_assembly_plan(part);
                             if (!plan.empty()) ordinary_component_bounds.push_back(boundary_bounds(plan));
@@ -28777,12 +28971,12 @@ public:
         if (context && !context->view_id.empty()) {
             const auto owner = candidate.entities().find(context->sheet_view_entity_id);
             if (owner == candidate.entities().end() || owner->second.type != kSheetViewEntityType)
-                throw std::invalid_argument("The proposed physical preview lost its captured saved-view owner.");
+                throw std::invalid_argument("The saved view that owns this preview is no longer available.");
             const auto model = decode_sheet_view_entity(owner->second);
             const auto view = std::find_if(model.views().begin(), model.views().end(),
                 [&](const auto& item) { return item.id == context->view_id; });
             if (view == model.views().end())
-                throw std::invalid_argument("The proposed physical preview lost its captured saved view.");
+                throw std::invalid_argument("The saved view for this preview is no longer available.");
             context = architectural_view_context(*view);
             context->sheet_view_entity_id = owner->first;
         }
@@ -28822,7 +29016,7 @@ public:
         auto projection = computeConstraintGeometryProjection(source, candidate, proposed_retained,
             proposed_eligible, proposed_labels, metric_units, appraisal_area_ids, label_footprints, component_bounds,
             context, label_font, site ? &*site : nullptr);
-        if (!projection) throw std::invalid_argument("The proposed physical geometry could not be projected in the captured view.");
+        if (!projection) throw std::invalid_argument("The preview could not be drawn in this view.");
         for (auto& item : projection->entities) {
             if (const auto alias = aliases.find(item.id); alias != aliases.end()) item.id = alias->second;
             if (const auto alias=profile_aliases.find(item.presentation_key);alias!=profile_aliases.end())
@@ -28971,7 +29165,7 @@ public:
     static DocumentSnapshot prepareCanvasEdit(const DocumentSnapshot& source,
         const Command& command,const std::shared_ptr<const CanvasEditSourceCapture>& capture,
         PreparedCanvasEdit& prepared) {
-        if (!capture) throw std::invalid_argument("The canvas edit has no captured publication source.");
+        if (!capture) throw std::invalid_argument("The drawing was not ready for this edit. Try it again.");
         if (capture->workspace) {
             if (!capture->mirror) throw std::invalid_argument("The recovered canvas edit has no compatibility source.");
             auto edit=ProjectWorkspace::prepare_captured(*capture->workspace,command);
@@ -29008,7 +29202,7 @@ public:
         }
         const auto wanted=capture.reference ? capture.id.toStdString() : capture.child_id;
         if (capture.reference) {
-            if (capture.references.size()!=1) throw std::invalid_argument("The captured reference presentation is unavailable.");
+            if (capture.references.size()!=1) throw std::invalid_argument("The reference is no longer shown in this view.");
             auto reference=capture.references.front();
             const auto& owner=candidate.entities().at(wanted);
             reference.scale=read_number(owner.properties,"scale",1.0);
@@ -29021,7 +29215,7 @@ public:
             const auto label=std::find_if(state.labels.begin(),state.labels.end(),
                 [&](const auto& value){return value.id==wanted;});
             if (label==state.labels.end() || capture.labels.size()!=1)
-                throw std::invalid_argument("The captured label presentation is unavailable.");
+                throw std::invalid_argument("The label is no longer shown in this view.");
             auto proposed=capture.labels.front();
             proposed.position=label->placement.position;proposed.scale=label->placement.scale;
             proposed.rotation_radians=label->placement.rotation_radians;
@@ -29032,9 +29226,9 @@ public:
         const auto symbol=std::find_if(state.symbols.begin(),state.symbols.end(),
             [&](const auto& value){return value.id==wanted;});
         if (symbol==state.symbols.end() || capture.entities.size()!=1)
-            throw std::invalid_argument("The captured component presentation is unavailable.");
+            throw std::invalid_argument("The component is no longer shown in this view.");
         auto proposed=capture.entities.front();
-        if (!capture.definition) throw std::invalid_argument("The captured component definition is unavailable.");
+        if (!capture.definition) throw std::invalid_argument("The component's definition is unavailable.");
         const auto& definition=*capture.definition;
         proposed.segments.clear();
         for (const auto& stroke:transformed_symbol_preview(definition,*symbol))
@@ -29075,7 +29269,7 @@ public:
             if (capture.wall_ids.size()<2 || capture.site_input || capture.embedded ||
                 !capture.wall_group_pivot || intent.canvas_pivot.x!=capture.wall_group_pivot->x ||
                 intent.canvas_pivot.y!=capture.wall_group_pivot->y)
-                throw std::invalid_argument("The captured wall-group transform authority changed.");
+                throw std::invalid_argument("The walls changed while you were transforming them. Try again.");
             if (intent.scale!=1.0) {
                 if (intent.radians!=0.0 || intent.source_radians!=0.0)
                     throw std::invalid_argument("Resize and rotate the wall group in separate gestures.");
@@ -29111,7 +29305,7 @@ public:
             const auto& entity=source.entities().at(capture.id.toStdString());
             if (!can_transform_architectural_entity_type(entity.type) ||
                 (physicalPlanRotationFamily(entity.type) && entity.type!="assembly_instance"))
-                throw std::invalid_argument("The captured object does not support this geometric transform.");
+                throw std::invalid_argument("This object cannot be transformed this way.");
             if (entity.type == "assembly_instance")
                 return independentComponentPlanTransformCommand(source,entity,intent.scale,intent.source_radians,intent.source_pivot);
             if (entity.type == "slab") {
@@ -29288,9 +29482,9 @@ public:
                                 if (before==source->entities().end() || after==candidate.entities().end() ||
                                     before->second==after->second) continue;
                                 if (after->second.type!="reference_asset")
-                                    throw std::invalid_argument("The captured reference changed ownership.");
+                                    throw std::invalid_argument("The reference is now attached to a different object.");
                                 const auto position=read_point(after->second.properties.at("position_m"));
-                                if (!position) throw std::invalid_argument("The admitted reference placement is invalid.");
+                                if (!position) throw std::invalid_argument("The reference cannot be placed here.");
                                 proposed.position=*position;
                                 proposed.scale=read_number(after->second.properties,"scale",1.0);
                                 proposed.rotation_degrees=read_number(after->second.properties,"rotation_degrees",0.0);
@@ -29362,7 +29556,7 @@ public:
                                         throw std::invalid_argument("The selected reference changed ownership.");
                                     const auto start=read_point(before->second.properties.at("position_m"));
                                     const auto end=read_point(after->second.properties.at("position_m"));
-                                    if (!start || !end) throw std::invalid_argument("The admitted reference placement is invalid.");
+                                    if (!start || !end) throw std::invalid_argument("The reference cannot be placed here.");
                                     auto proposed=reference;
                                     proposed.position.x+=end->x-start->x;
                                     proposed.position.y+=end->y-start->y;
@@ -29396,7 +29590,7 @@ public:
                         }
                     } else if (site_wall_move && prepared_move) {
                         if (!site_input || site_input->move_frames.empty() || !room_dimension_placements)
-                            throw std::invalid_argument("The Site move has no captured target frames.");
+                            throw std::invalid_argument("The Site Plan positions for this move are unavailable. Try the move again.");
                         const bool no_op=site_wall_move->canvas_delta.x==0.0 && site_wall_move->canvas_delta.y==0.0;
                         Command command=no_op
                             ? Command{ApplyEntityChanges{source->revision(),{}, {},"Move selection"}}
@@ -29441,7 +29635,7 @@ public:
                                         continue;
                                     }
                                     const auto position=read_point(owner.properties.at("position_m"));
-                                    if (!position) throw std::invalid_argument("The admitted reference placement is invalid.");
+                                    if (!position) throw std::invalid_argument("The reference cannot be placed here.");
                                     proposed.position=*position;
                                     proposed.scale=read_number(owner.properties,"scale",1.0);
                                     proposed.rotation_degrees=read_number(owner.properties,"rotation_degrees",0.0);
@@ -29557,7 +29751,7 @@ public:
                         Command command;
                         if (component) {
                             if (!component_authoring)
-                                throw std::invalid_argument("The component resize has no captured authoring output.");
+                                throw std::invalid_argument("The component resize preview is not ready. Resize again.");
                             if (component_release) *component_authoring=component_release->authoring;
                             else if (axis_cohort) {
                                 const auto targets=componentCohortResizeTargets(*axis_cohort,axis_canvas_anchor,
@@ -29737,7 +29931,7 @@ public:
         if (siteCanvas(canvas)) {
             requireSitePublicationCurrent(require_editable);
             if (revision && *revision!=m_site_publication_source->revision())
-                throw std::invalid_argument("The displayed Site Plan revision changed. Begin the gesture again.");
+                throw std::invalid_argument("The Site Plan changed during the drag. Drag again.");
             return m_site_publication_source;
         }
         if (canvas != (m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas) ||
@@ -29755,7 +29949,7 @@ public:
             m_plan_publication_authority->named_view_owner != m_active_named_view_owner ||
             fullSnapshotDigest(*m_plan_publication_source) != fullSnapshotDigest(authoringSnapshot()) ||
             (revision && *revision != m_plan_publication_source->revision()))
-            throw std::invalid_argument("The displayed plan source or editing context changed. Begin the gesture again.");
+            throw std::invalid_argument("The plan or active layer changed during the drag. Drag again.");
         // Selection and workspace checkpoint counters are captured afresh for
         // this edit, not used as a gate on idle clicks or drawing continuation.
         return m_plan_publication_source;
@@ -29906,7 +30100,7 @@ public:
         else if (m_vertex_preview_view_context)
             position = unproject_plan_point(position, m_vertex_preview_view_context->frame);
         if (position.x != preview->position.x || position.y != preview->position.y)
-            throw std::invalid_argument("The endpoint release differs from its admitted preview.");
+            throw std::invalid_argument("The wall end was released away from its preview. Drag the end again.");
         if (capture->source->entities().at(id.toStdString()).type=="roof")
             if (const auto* changes=std::get_if<ApplyEntityChanges>(&preview->command);
                 changes && changes->entity_changes.empty() && changes->asset_changes.empty()) {
@@ -29917,7 +30111,7 @@ public:
                 if (preview->prepared->alternative_wall) return std::nullopt;
                 if (preview->prepared->document) return preview->prepared->document->preview();
                 if (preview->prepared->workspace) return preview->prepared->workspace->preview();
-                throw std::invalid_argument("The wall endpoint has no admitted geometry candidate.");
+                throw std::invalid_argument("The wall end preview is not ready. Drag the end again.");
             }();
             if (preview->prepared->alternative_wall ||
                 (candidate && affectedPhysicalWallRooms(*capture->source, candidate->entities(), id.toStdString()) != 0)) {
@@ -29938,11 +30132,11 @@ public:
                         capture->canvas->boundaryVertexPreviewPending() ||
                         !capture->canvas->boundaryVertexPreviewEntities().empty() || m_plan_endpoint_capture ||
                         (!capture->site && source_publication != m_plan_publication_source))
-                        throw std::invalid_argument("The captured endpoint view or proposal changed during room review.");
+                        throw std::invalid_argument("The view or wall end changed during the room review. Drag the end again.");
                     if (capture->site && (capture->site_generation != m_site_edit_generation ||
                         site_publication_generation != m_site_publication_generation ||
                         capture->source != m_site_edit_source))
-                        throw std::invalid_argument("The captured Site Plan endpoint context changed during room review.");
+                        throw std::invalid_argument("The Site Plan changed during the room review. Drag the wall end again.");
                     if (capture->edit_source->mirror &&
                         fullSnapshotDigest(m_document->snapshot()) != fullSnapshotDigest(*capture->edit_source->mirror))
                         throw std::invalid_argument("The project's save or recovery state changed during room review.");
@@ -29953,7 +30147,7 @@ public:
                 // survive without depending on members retired by refresh/cancel.
                 if (m_pending_vertex_preview) {
                     if (m_pending_vertex_preview->plan_endpoint_capture != capture)
-                        throw std::invalid_argument("Another geometry proposal is pending; start the endpoint drag again.");
+                        throw std::invalid_argument("Another edit is still being prepared. Drag the wall end again.");
                     m_pending_vertex_preview.reset();
                 }
                 if (m_running_vertex_preview) {
@@ -30003,7 +30197,7 @@ public:
         const auto published = captureCanvasGeometrySource(canvas, revision);
         if (m_vertex_preview_source && m_vertex_preview_authority &&
             !sourceEditAuthorityCurrent(*m_vertex_preview_authority))
-            throw std::invalid_argument("The captured plan gesture context changed.");
+            throw std::invalid_argument("The plan changed during the drag. Try again.");
         if (!m_vertex_preview_source || m_vertex_preview_document!=m_document || m_vertex_preview_canvas!=canvas ||
             m_vertex_preview_source->revision()!=revision ||
             fullSnapshotDigest(*m_vertex_preview_source) != fullSnapshotDigest(*published)) {
@@ -30344,7 +30538,7 @@ public:
                 }
                 if (std::none_of(capture->scene->begin(),capture->scene->end(),
                     [&](const auto& item){return item.id==id && !item.segments.empty();}))
-                    throw std::invalid_argument("The selected geometry has no visible captured presentation.");
+                    throw std::invalid_argument("The selected geometry is not visible in this view.");
                 if (!m_entity_transform_edit_source) m_entity_transform_edit_source=captureCanvasEditSource();
                 m_ordinary_transform_capture=std::move(capture);
             }
@@ -30381,7 +30575,7 @@ public:
             capture->font=canvas->font();capture->dpi_x=canvas->logicalDpiX();capture->dpi_y=canvas->logicalDpiY();
             if (std::none_of(capture->scene->begin(),capture->scene->end(),
                 [&](const auto& item){return item.id==id && !item.segments.empty();}))
-                throw std::invalid_argument("The selected geometry has no visible captured presentation.");
+                throw std::invalid_argument("The selected geometry is not visible in this view.");
             if (!m_entity_transform_edit_source) m_entity_transform_edit_source=captureCanvasEditSource();
             m_ordinary_transform_capture=std::move(capture);
         }
@@ -30398,7 +30592,7 @@ public:
             hasPendingPlacementEdit() || !m_document->is_editable())
             throw std::invalid_argument("Select editable independent components in a horizontal plan before resizing.");
         const auto frame=canvas->selectionAxisResizeCohortFrame();
-        if (!frame) throw std::invalid_argument("The component cohort resize frame changed. Start again.");
+        if (!frame) throw std::invalid_argument("The components moved during the resize. Resize again.");
         auto cohort=std::make_shared<ComponentAxisResizeCohortCapture>();cohort->ids=ids;cohort->frame=*frame;
         m_entity_transform_source=captureCanvasGeometrySource(canvas);
         if (!m_entity_transform_source) throw std::invalid_argument("The component cohort lost its displayed source.");
@@ -30446,7 +30640,7 @@ public:
             throw std::invalid_argument("Select a physical wall group in a horizontal plan to transform it.");
         const auto pivot=canvas->wallGroupRotationPivot();
         if (!pivot || !std::isfinite(pivot->x) || !std::isfinite(pivot->y))
-            throw std::invalid_argument("The captured wall-group frame is unavailable.");
+            throw std::invalid_argument("The position of the selected walls is unavailable. Try again.");
         const auto source=captureCanvasGeometrySource(canvas);
         if (!physicalWallRoomReviewSelection(*source,ids,m_selected_id.toStdString()))
             throw std::invalid_argument("The selected group has ambiguous or unavailable physical walls.");
@@ -30485,7 +30679,7 @@ public:
         if ((found!=m_entity_transform_source->entities().end() && found->second.type=="reference_asset") ||
             (siteCanvas(canvas) ? m_site_edit_annotation_targets.contains(id)
                 : annotation_selection_owners(*m_entity_transform_source,{id}).contains(id.toStdString()))) {
-            setError(QStringLiteral("The presentation resize has no captured admitted preview. Start again."));
+            setError(QStringLiteral("The resize preview is not ready. Resize again."));
             return std::vector<CanvasEntity>{};
         }
         if (found==m_entity_transform_source->entities().end() ||
@@ -30507,13 +30701,13 @@ public:
                     m_selected_ids.size()!=1 || m_selected_ids.front()!=id) ||
                 !std::isfinite(scale_x) || !std::isfinite(scale_y) || scale_x<=0.0 || scale_y<=0.0 ||
                 !std::isfinite(canvas_anchor.x) || !std::isfinite(canvas_anchor.y))
-                throw std::invalid_argument("The project, selection or view changed during this resize. Start again.");
+                throw std::invalid_argument("The drawing, selection or view changed during the resize. Resize again.");
             const auto angle=found->second.type=="assembly_instance"
                 ? physicalPlanRotationAngle(found->second) : plan_axis_resize_frame(found->second);
             if (siteCanvas(canvas)) {
                 const auto capture=m_entity_transform_site_capture;
                 if (!capture || !capture->input || !sitePreviewContextCurrent())
-                    throw std::invalid_argument("The Site Plan resize source changed. Start again.");
+                    throw std::invalid_argument("The Site Plan changed during the resize. Resize again.");
                 const auto& input=capture->input;
                 const auto anchor=site_source_plan_point(canvas_anchor,m_component_axis_cohort
                     ? m_component_axis_cohort->site_frames.at(id) : input->edit_frame.value());
@@ -30545,7 +30739,7 @@ public:
             captureConstraintGeometryPreview(canvas,m_entity_transform_source->revision());
             if (!m_vertex_preview_source || !m_vertex_preview_authority ||
                 fullSnapshotDigest(*m_vertex_preview_source)!=fullSnapshotDigest(*m_entity_transform_source))
-                throw std::invalid_argument("The project changed during this resize. Start again.");
+                throw std::invalid_argument("The drawing changed during the resize. Your change was not applied. Resize again.");
             auto anchor=canvas_anchor;
             if (m_entity_transform_frame) anchor=unproject_plan_point(anchor,*m_entity_transform_frame);
             if (!canvas->markEntityTransformPreviewPending(serial)) return std::vector<CanvasEntity>{};
@@ -30605,7 +30799,7 @@ public:
                 (intent.axes && (!capture->symbol || !std::isfinite(intent.axes->first) || !std::isfinite(intent.axes->second) ||
                     intent.axes->first<=0.0 || intent.axes->second<=0.0 ||
                     !std::isfinite(intent.source_anchor.x) || !std::isfinite(intent.source_anchor.y))))
-                throw std::invalid_argument("The presentation transform source, selection or view changed. Start again.");
+                throw std::invalid_argument("The drawing, selection or view changed during the transform. Try the transform again.");
             if (intent.axes) intent.source_anchor=capture->site_frame
                 ? site_source_plan_point(intent.canvas_point,*capture->site_frame)
                 : capture->frame ? unproject_plan_point(intent.canvas_point,*capture->frame) : intent.canvas_point;
@@ -30660,7 +30854,7 @@ public:
             m_presentation_transform_intent->canvas_point.x!=preview->intent.canvas_point.x ||
             m_presentation_transform_intent->canvas_point.y!=preview->intent.canvas_point.y ||
             (axes && (preview->intent.canvas_point.x!=anchor.x || preview->intent.canvas_point.y!=anchor.y)))
-            throw std::invalid_argument("The exact presentation transform preview or editing source changed. Start again.");
+            throw std::invalid_argument("The transform preview is out of date. Try the transform again.");
         const bool no_op=axes ? axes->first==1.0 && axes->second==1.0 : scale==1.0 && radians==0.0;
         if (!no_op) publishPreparedCanvasEdit(preview->prepared,preview->edit_source);
         clearError();if (!no_op) refresh();return true;
@@ -30678,7 +30872,7 @@ public:
                 throw std::invalid_argument("Use typed dimensions to resize a physical object; rotation must be finite.");
             if (!entityTransformContextUnchanged() || m_entity_transform_canvas!=canvas || m_entity_transform_id!=id ||
                 m_selected_ids.size()!=1 || m_selected_ids.front()!=id)
-                throw std::invalid_argument("The physical rotation source, selection or view changed. Start again.");
+                throw std::invalid_argument("The drawing, selection or view changed during the rotation. Rotate again.");
             auto pivot=canvas_pivot;
             auto model_radians=radians;
             PendingVertexPreview request;
@@ -30701,7 +30895,7 @@ public:
                 if (!m_vertex_preview_source || m_vertex_preview_canvas!=canvas ||
                     !m_vertex_preview_authority || !sourceEditAuthorityCurrent(*m_vertex_preview_authority) ||
                     fullSnapshotDigest(*m_vertex_preview_source)!=fullSnapshotDigest(*m_entity_transform_source))
-                    throw std::invalid_argument("The captured physical rotation scene changed. Start again.");
+                    throw std::invalid_argument("The drawing changed during the rotation. Rotate again.");
                 if (const auto frame=m_entity_transform_frame) {
                     pivot=unproject_plan_point(canvas_pivot,*frame);
                     model_radians=model_plan_rotation_delta(radians,*frame);
@@ -30748,7 +30942,7 @@ public:
             const auto found=m_entity_transform_source->entities().find(id.toStdString());
             if (m_site_edit_annotation_targets.contains(id) ||
                 (found!=m_entity_transform_source->entities().end() && found->second.type=="reference_asset")) {
-                setError(QStringLiteral("The Site presentation transform has no captured admitted preview. Start again."));
+                setError(QStringLiteral("The Site Plan transform preview is not ready. Try the transform again."));
                 return std::vector<CanvasEntity>{};
             }
         }
@@ -30780,7 +30974,7 @@ public:
                 canvas->font()!=capture->font || canvas->logicalDpiX()!=capture->dpi_x || canvas->logicalDpiY()!=capture->dpi_y ||
                 !std::isfinite(scale) || scale<=0.0 || !std::isfinite(radians) ||
                 !std::isfinite(canvas_pivot.x) || !std::isfinite(canvas_pivot.y))
-                throw std::invalid_argument("The captured geometric transform source, selection or view changed. Start again.");
+                throw std::invalid_argument("The drawing, selection or view changed during the geometry transform. Try it again.");
             const auto owner=m_entity_transform_source->entities().find(id.toStdString());
             const bool site_wall=capture->site_input && !capture->embedded &&
                 owner!=m_entity_transform_source->entities().end() && owner->second.type=="wall";
@@ -30870,17 +31064,17 @@ public:
     // its own captured semantic selection, not a different surface's roster.
     void publishPreparedCapturedEdit(const std::shared_ptr<PreparedCanvasEdit>& prepared,
         const std::shared_ptr<const CanvasEditSourceCapture>& capture) {
-        if (!prepared || !capture) throw std::invalid_argument("The canvas edit has no admitted publication.");
+        if (!prepared || !capture) throw std::invalid_argument("The edit preview is not ready. Try the edit again.");
         if (prepared->alternative_wall)
             throw std::invalid_argument("Complete the proposed wall and room review before publishing this physical preview.");
         if (m_recovery_ledger.empty()) {
             if (capture->workspace || capture->mirror || !prepared->document || prepared->workspace || prepared->mirror)
-                throw std::invalid_argument("The canvas edit's document authority changed.");
+                throw std::invalid_argument("The drawing changed before the edit was applied. Your change was not applied. Try it again.");
             measureDocumentEdit([&] { (void)m_document->commit_prepared(*prepared->document); });
         } else {
             requireWorkspaceDocument();
             if (!capture->workspace || !capture->mirror || prepared->document || !prepared->workspace || !prepared->mirror)
-                throw std::invalid_argument("The canvas edit's recovery authority changed.");
+                throw std::invalid_argument("The project's recovery copy changed before the edit was applied. Try it again.");
             const auto live_mirror=m_document->snapshot();
             if (!live_mirror.shares_full_snapshot_with(*capture->mirror) &&
                 fullSnapshotDigest(live_mirror)!=fullSnapshotDigest(*capture->mirror))
@@ -30903,7 +31097,7 @@ public:
         const auto edit_source=std::move(m_entity_transform_edit_source);
         m_entity_transform_command.reset(); m_entity_transform_ready=false;
         if (!prepared || !edit_source)
-            throw std::invalid_argument("The physical transform has no admitted publication.");
+            throw std::invalid_argument("The object transform preview is not ready. Try again.");
         if (!no_op) publishPreparedCanvasEdit(prepared,edit_source);
     }
 
@@ -30918,14 +31112,14 @@ public:
             if (edit_source->workspace.has_value() != !m_recovery_ledger.empty() ||
                 static_cast<bool>(edit_source->mirror) != edit_source->workspace.has_value() ||
                 (edit_source->mirror && fullSnapshotDigest(*edit_source->mirror) != fullSnapshotDigest(m_document->snapshot())))
-                throw std::invalid_argument("The proposed wall preview's save or recovery authority changed.");
+                throw std::invalid_argument("The project was saved or recovered while the wall preview was open. Try the wall edit again.");
             if (viewport_fence) viewport_fence();
         };
         require_current();
         const auto* child = std::get_if<ApplyBoundaryConstraintChanges>(&provisional);
         if (!child || !child->phase_constraint_authoring_completion ||
             child->phase_constraint_authoring_intent.dump() != encode_phase_constraint_authoring_intent(proposal.intent).dump())
-            throw std::invalid_argument("The released wall intent differs from its displayed physical proposal.");
+            throw std::invalid_argument("The wall was released away from its preview. Try the wall edit again.");
         PhaseWallReplacementIdentityMap proposed_ids;
         const auto reviewed = proposal.intent.coordinated_replacements.is_null()
             ? finishAlternativeWallEdit(source, proposal.intent, *child, proposed_ids, require_current)
@@ -30957,25 +31151,25 @@ public:
             if (prepared->alternative_wall) return std::nullopt;
             if (edit_source->workspace) {
                 if (!edit_source->mirror || prepared->document || !prepared->workspace || !prepared->mirror)
-                    throw std::invalid_argument("The wall move's recovery authority changed.");
+                    throw std::invalid_argument("The project's recovery copy changed during the wall move. Move the wall again.");
                 return prepared->workspace->preview();
             }
             if (edit_source->mirror || !prepared->document || prepared->workspace || prepared->mirror)
-                throw std::invalid_argument("The wall move's document authority changed.");
+                throw std::invalid_argument("The drawing changed during the wall move. Move the wall again.");
             return prepared->document->preview();
         }();
         const auto command=preview->command;
         if (candidate && fullSnapshotDigest(Document::preview_command(*source,command))!=fullSnapshotDigest(*candidate))
-            throw std::invalid_argument("The wall move's admitted command or history changed.");
+            throw std::invalid_argument("The undo history changed during the wall move. Move the wall again.");
         const auto primary=authority->context.selected_id.toStdString();
         const auto coordinated_room_seed = coordinatedOrdinaryWallRoomReviewRoot(*source, command, authority->selection,preview->room_placements);
         const auto room_seed = coordinated_room_seed.value_or(primary);
         if (!preview->room_placements.empty() && !coordinated_room_seed)
-            throw std::invalid_argument("The selected room callouts lost their captured wall review source.");
+            throw std::invalid_argument("The selected room labels are out of date with the wall move. Move the wall again.");
         if (prepared->alternative_wall || coordinated_room_seed ||
             physicalWallRoomReviewSelection(*source,authority->selection,primary)) {
             if (!sameSelectionMembership(ids,authority->selection))
-                throw std::invalid_argument("The wall move selection differs from its captured original objects.");
+                throw std::invalid_argument("The selected walls changed during the move. Move them again.");
             if (prepared->alternative_wall || (candidate && affectedPhysicalWallRooms(*source, candidate->entities(), room_seed) != 0)) {
                 const auto source_publication=m_plan_publication_source;
                 const auto site_publication=m_site_publication_source;
@@ -31021,14 +31215,14 @@ public:
                         site_publication_generation!=m_site_publication_generation ||
                         (m_nativeModelView && native_publication!=m_nativeModelView->preparationSourceSnapshot()) ||
                         source_publication!=m_plan_publication_source || !sourceEditAuthorityCurrent(*authority))
-                        throw std::invalid_argument("The captured wall move view or proposal changed during room review.");
+                        throw std::invalid_argument("The view or wall move changed during the room review. Move the wall again.");
                     if (edit_source->mirror &&
                         fullSnapshotDigest(m_document->snapshot())!=fullSnapshotDigest(*edit_source->mirror))
                         throw std::invalid_argument("The project's save or recovery state changed during room review.");
                 };
                 if (m_pending_vertex_preview) {
                     if (!original_job(*m_pending_vertex_preview))
-                        throw std::invalid_argument("Another geometry proposal is pending; start the wall move again.");
+                        throw std::invalid_argument("Another edit is still being prepared. Move the wall again.");
                     m_pending_vertex_preview.reset();
                 }
                 if (m_running_vertex_preview) {
@@ -31107,20 +31301,20 @@ public:
                 authority->context.selected_id.toStdString()) && is_physical_wall_room_geometry_review_command(command))
             coordinated_room_seed=authority->context.selected_id.toStdString();
         if (!preview->room_placements.empty() && !coordinated_room_seed)
-            throw std::invalid_argument("The selected Site room callouts lost their captured wall review source.");
+            throw std::invalid_argument("The selected Site Plan room labels are out of date with the wall move. Move the wall again.");
         std::optional<DocumentSnapshot> room_candidate;
         if (coordinated_room_seed) {
             if (edit_source->workspace) {
                 if (!edit_source->mirror || prepared->document || !prepared->workspace || !prepared->mirror)
-                    throw std::invalid_argument("The Site wall move's recovery authority changed.");
+                    throw std::invalid_argument("The project's recovery copy changed during the Site Plan wall move. Move the wall again.");
                 room_candidate = prepared->workspace->preview();
             } else {
                 if (edit_source->mirror || !prepared->document || prepared->workspace || prepared->mirror)
-                    throw std::invalid_argument("The Site wall move's document authority changed.");
+                    throw std::invalid_argument("The drawing changed during the Site Plan wall move. Move the wall again.");
                 room_candidate = prepared->document->preview();
             }
             if (fullSnapshotDigest(Document::preview_command(*source, command)) != fullSnapshotDigest(*room_candidate))
-                throw std::invalid_argument("The Site wall move's complete admitted proposal changed.");
+                throw std::invalid_argument("The Site Plan wall move preview changed. Move the wall again.");
         }
         if (prepared->alternative_wall || (room_candidate &&
                 affectedPhysicalWallRooms(*source, room_candidate->entities(), *coordinated_room_seed) != 0)) {
@@ -31551,9 +31745,9 @@ public:
                     auto message=request.plan_endpoint_capture
                         ? QStringLiteral("The corner or endpoint conflicts with the current geometry or measurement constraints.")
                         : request.ordinary_transform_capture
-                        ? QStringLiteral("The transformed geometry could not be admitted or displayed.")
+                        ? QStringLiteral("The transformed geometry could not be built or shown.")
                         : request.presentation_capture
-                        ? QStringLiteral("The transformed presentation could not be admitted or displayed.")
+                        ? QStringLiteral("The transformed labels or symbols could not be shown.")
                         : request.physical_rotation_command
                         ? QStringLiteral("The rotated object could not be projected in the current view.")
                         : (request.site_wall_move || request.plan_move)
@@ -31882,7 +32076,7 @@ public:
         std::shared_ptr<PreparedCanvasEdit> prepared,
         std::shared_ptr<const CanvasEditSourceCapture> edit_source, bool unchanged) {
         if (!canvas || !source || !authority || !prepared || !edit_source)
-            throw std::invalid_argument("The opening drag has no captured publication authority.");
+            throw std::invalid_argument("The opening drag is not ready to apply. Drag the opening again.");
         const QPointer<PlanCanvas> viewport = canvas;
         const auto center = canvas->viewCenter();
         const auto zoom = canvas->viewScale();
@@ -31903,7 +32097,7 @@ public:
                 if (!siteCanvas(viewport.data()) || m_site_edit_generation != site_generation)
                     throw std::invalid_argument("The opening preview's Site presentation changed during review.");
             } else if (siteCanvas(viewport.data())) {
-                throw std::invalid_argument("The opening preview no longer belongs to its captured plan view.");
+                throw std::invalid_argument("The opening preview belongs to a different plan view. Drag the opening again.");
             }
         };
         require_viewport();
@@ -31932,7 +32126,7 @@ public:
             throw std::invalid_argument("The opening move or its displayed source changed. Start the drag again.");
         const auto opening=read_hosted_opening(m_opening_preview_source->entities().at(
             m_opening_preview_id.toStdString()));
-        if (!opening) throw std::invalid_argument("The opening's captured station is unavailable.");
+        if (!opening) throw std::invalid_argument("The opening's position along the wall is unavailable.");
         const bool unchanged=opening->offset==*m_opening_preview_move_offset;
         return publishOpeningCanvasEdit(canvas, m_opening_preview_source, m_opening_preview_authority,
             *m_opening_preview_command, m_opening_preview_prepared, m_opening_preview_edit_source, unchanged);
@@ -31988,7 +32182,7 @@ public:
                 m_opening_preview_prepared.reset();
                 if(m_opening_preview_release_pending) {
                     m_opening_preview_release_pending=false;
-                    setError(QStringLiteral("The opening width proposal is invalid or its captured source changed. Start the jamb drag again."));
+                    setError(QStringLiteral("The opening width is invalid, or the drawing changed. Drag the side of the opening again."));
                 }
             }
             // Invalid dimensions can recover within the same owned drag.
@@ -32055,7 +32249,7 @@ public:
         const std::optional<double>& relative_width_scale, bool keep_start_jamb) {
         const auto& original = source.entities().at(opening_id);
         const auto cut = read_hosted_opening(original);
-        if (!cut) throw std::invalid_argument("The opening's captured dimensions are unavailable.");
+        if (!cut) throw std::invalid_argument("The opening's dimensions are unavailable.");
         if (move_offset.has_value() == relative_width_scale.has_value())
             throw std::invalid_argument("An opening drag must change either its station or its jamb span.");
         auto candidate = original;
@@ -32099,7 +32293,7 @@ public:
     static void allocateQualifiedWallReplacementIdentities(const PhaseWallReplacementPlan& plan,
         PhaseWallReplacementAuthoring& replacement, std::set<std::string, std::less<>>& occupied) {
         if (!plan.ready() || !plan.complete_hosted_instances)
-            throw std::invalid_argument("The wall edit requires its complete captured component inventory.");
+            throw std::invalid_argument("Some components on this wall are missing, so the edit cannot be applied.");
         replacement.complete_hosted_instances = true;
         replacement.complete_component_dimensions = plan.complete_component_dimensions;
         const auto allocate = [&]() {
@@ -32339,7 +32533,7 @@ public:
                 keep_start_jamb!=m_opening_preview_keep_start ||
                 m_opening_preview_latest_serial==std::numeric_limits<std::uint64_t>::max() ||
                 canvas->openingWidthPreviewSerial()!=m_opening_preview_latest_serial+1)
-                throw std::invalid_argument("The exact opening width preview changed. Start again.");
+                throw std::invalid_argument("The opening width preview is out of date. Drag the side again.");
             if(m_opening_preview_command) {
                 return publishOpeningCanvasEdit(canvas, m_opening_preview_source, m_opening_preview_authority,
                     *m_opening_preview_command, m_opening_preview_prepared, m_opening_preview_edit_source, scale==1.0);
@@ -32355,7 +32549,7 @@ public:
                     request->scale==scale && request->keep_start==keep_start_jamb;
             };
             if(!matching(m_running_opening_preview) && !matching(m_pending_opening_preview))
-                throw std::invalid_argument("The admitted opening width proposal is unavailable. Start again.");
+                throw std::invalid_argument("The opening width preview is not ready. Drag the side again.");
             m_opening_preview_release_pending=true;return true;
         } catch (const Standard_Failure& error) {
             setError(QStringLiteral("Resize opening: %1").arg(QString::fromUtf8(error.GetMessageString())));
@@ -32438,7 +32632,7 @@ public:
             !m_entity_transform_source || !m_entity_transform_context || !m_entity_transform_edit_source ||
             !m_entity_transform_viewport || !m_entity_transform_canvas || m_pending_vertex_preview ||
             m_running_vertex_preview)
-            throw std::invalid_argument("The component resize has no complete captured proposal. Start again.");
+            throw std::invalid_argument("The component resize preview is incomplete. Resize again.");
         auto release=std::make_shared<ComponentAxisResizeRelease>();
         release->document=m_document;release->source=m_entity_transform_source;
         release->authority=m_entity_transform_context;release->edit_source=m_entity_transform_edit_source;
@@ -32479,7 +32673,7 @@ public:
         }
         if (!request.retained || !request.eligible || !request.labels || !request.appraisal_area_ids ||
             !request.label_footprints || !request.component_bounds)
-            throw std::invalid_argument("The component resize lost its captured projection source.");
+            throw std::invalid_argument("The view used for the component resize is no longer available. Resize again.");
         request.axis_resize_scales=std::pair{sx,sy};request.entity_transform_canvas_point=canvas_anchor;
         request.axis_resize_cohort=release->cohort;
         if (request.axis_resize_cohort) request.axis_resize_cohort_frame=std::make_shared<std::optional<CanvasSelectionFrame>>();
@@ -32539,7 +32733,7 @@ public:
                 sx!=m_entity_axis_scale_x || sy!=m_entity_axis_scale_y ||
                 anchor.x!=m_entity_axis_anchor.x || anchor.y!=m_entity_axis_anchor.y ||
                 fullSnapshotDigest(*m_entity_transform_source)!=fullSnapshotDigest(authoringSnapshot()))
-                throw std::invalid_argument("The complete component resize preview or its captured source changed. Start again.");
+                throw std::invalid_argument("The drawing or component resize preview changed. Resize again.");
             if (siteCanvas(canvas)) requireSiteEditCurrent();
             if (sx!=1.0 || sy!=1.0) return releaseComponentAxisResize(ids.front(),sx,sy,anchor);
             publishEntityTransformPreparedEdit(true);
@@ -32547,7 +32741,7 @@ public:
         } catch (const Standard_Failure& failure) {
             const auto* detail=failure.GetMessageString();
             setError(detail && *detail ? QStringLiteral("Resize components: %1").arg(QString::fromUtf8(detail))
-                : QStringLiteral("The component resize could not be admitted."));
+                : QStringLiteral("The component cannot be resized to this size."));
         } catch (const std::exception& failure) {
             setError(QStringLiteral("Resize components: %1").arg(QString::fromUtf8(failure.what())));
         }
@@ -32578,7 +32772,7 @@ public:
             const bool physical=model!=source.entities().end() && canvasPlanAxisResizeFamily(model->second.type) &&
                 (!siteCanvas(m_architecturalCanvas) || !m_site_edit_annotation_targets.contains(requested_id));
             if (physical && !m_entity_transform_axis_resize)
-                throw std::invalid_argument("The physical resize needs its own admitted side-handle preview. Start the resize again.");
+                throw std::invalid_argument("Wait for the resize preview before releasing the side handle. Resize again.");
             if (m_entity_transform_axis_resize) {
                 const auto* canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
                 if (!m_entity_transform_ready || !m_entity_transform_command || !m_entity_transform_source ||
@@ -32588,7 +32782,7 @@ public:
                     scale_x!=m_entity_axis_scale_x || scale_y!=m_entity_axis_scale_y ||
                     anchor.x!=m_entity_axis_anchor.x || anchor.y!=m_entity_axis_anchor.y ||
                     fullSnapshotDigest(*m_entity_transform_source)!=fullSnapshotDigest(source))
-                    throw std::invalid_argument("The exact resize preview or its editing source changed. Start again.");
+                    throw std::invalid_argument("The resize preview is out of date. Resize again.");
                 if (siteCanvas(canvas)) requireSiteEditCurrent();
                 if (model!=source.entities().end() && model->second.type=="assembly_instance" &&
                     !(scale_x==1.0 && scale_y==1.0))
@@ -32600,7 +32794,7 @@ public:
             if (siteCanvas(m_architecturalCanvas)) {
                 anchor=site_source_plan_point(anchor,siteEditFrame({requested_id}));
                 if (m_site_edit_annotation_targets.contains(requested_id)) {
-                    throw std::invalid_argument("The Site symbol resize has no captured admitted preview. Start again.");
+                    throw std::invalid_argument("The Site Plan symbol resize preview is not ready. Resize again.");
                 }
             }
             if (!siteCanvas(m_architecturalCanvas) &&
@@ -32610,7 +32804,7 @@ public:
             const auto wanted = requested_id.toStdString();
             if (!siteCanvas(m_architecturalCanvas) &&
                 annotation_selection_owners(source, {requested_id}).contains(wanted))
-                throw std::invalid_argument("The symbol resize has no captured admitted preview. Start again.");
+                throw std::invalid_argument("The symbol resize preview is not ready. Resize again.");
             const auto& entity = source.entities().at(wanted);
             if (const auto frame = m_entity_transform_frame)
                 anchor = unproject_plan_point(anchor, *frame);
@@ -32662,7 +32856,7 @@ public:
             m_ordinary_transform_intent->source_pivot.x!=preview->intent.source_pivot.x ||
             m_ordinary_transform_intent->source_pivot.y!=preview->intent.source_pivot.y ||
             preview->intent.canvas_pivot.x!=m_entity_transform_pivot.x || preview->intent.canvas_pivot.y!=m_entity_transform_pivot.y)
-            throw std::invalid_argument("The exact geometric transform preview or editing source changed. Start again.");
+            throw std::invalid_argument("The geometry transform preview is out of date. Try the transform again.");
         const bool no_op=scale==1.0 && radians==0.0;
         const auto source=m_entity_transform_source;
         const auto selected=source->entities().find(id.toStdString());
@@ -32674,11 +32868,11 @@ public:
                 if (prepared->alternative_wall) return std::nullopt;
                 if (edit_source->workspace) {
                     if (!edit_source->mirror || prepared->document || !prepared->workspace || !prepared->mirror)
-                        throw std::invalid_argument("The wall rotation's recovery authority changed.");
+                        throw std::invalid_argument("The project's recovery copy changed during the wall rotation. Rotate again.");
                     return prepared->workspace->preview();
                 }
                 if (edit_source->mirror || !prepared->document || prepared->workspace || prepared->mirror)
-                    throw std::invalid_argument("The wall rotation's document authority changed.");
+                    throw std::invalid_argument("The drawing changed during the wall rotation. Rotate again.");
                 return prepared->document->preview();
             }();
             if (prepared->alternative_wall || (candidate &&
@@ -32687,7 +32881,7 @@ public:
                 // Retain the worker's exact admitted command and complete history;
                 // the release never constructs an alternate geometric proposal.
                 if (candidate && fullSnapshotDigest(Document::preview_command(*source,command))!=fullSnapshotDigest(*candidate))
-                    throw std::invalid_argument("The wall rotation's admitted command or history changed.");
+                    throw std::invalid_argument("The undo history changed during the wall rotation. Rotate again.");
                 const auto authority=m_entity_transform_context;
                 const auto viewport=*m_entity_transform_viewport;
                 const auto release_serial=preview->serial;
@@ -32729,12 +32923,12 @@ public:
                         site_generation!=m_site_edit_generation || site_publication_generation!=m_site_publication_generation ||
                         (m_nativeModelView && native_publication!=m_nativeModelView->preparationSourceSnapshot()) ||
                         !sourceEditAuthorityCurrent(*authority))
-                        throw std::invalid_argument("The captured wall rotation view or proposal changed during room review.");
+                        throw std::invalid_argument("The view or wall rotation changed during the room review. Rotate again.");
                     if (edit_source->mirror && fullSnapshotDigest(m_document->snapshot())!=fullSnapshotDigest(*edit_source->mirror))
                         throw std::invalid_argument("The project's save or recovery state changed during room review.");
                 };
                 if (m_pending_vertex_preview && !original_job(*m_pending_vertex_preview))
-                    throw std::invalid_argument("Another geometry proposal is pending; start the wall rotation again.");
+                    throw std::invalid_argument("Another edit is still being prepared. Rotate the walls again.");
                 if (m_running_vertex_preview && !original_job(*m_running_vertex_preview))
                     throw std::invalid_argument("Another geometry preview is running; start the wall rotation again.");
                 m_pending_vertex_preview.reset();
@@ -32820,18 +33014,18 @@ public:
                 const auto target=source.entities().find(requested_id.toStdString());
                 if (m_site_edit_annotation_targets.contains(requested_id) ||
                     (target!=source.entities().end() && target->second.type=="reference_asset"))
-                    throw std::invalid_argument("The Site presentation transform has no captured admitted preview. Start again.");
+                    throw std::invalid_argument("The Site Plan transform preview is not ready. Try the transform again.");
                 (void)siteEditFrame({requested_id});
                 if (!entityTransformContextUnchanged() || m_entity_transform_canvas!=m_architecturalCanvas ||
                     m_entity_transform_id!=requested_id || !m_entity_transform_ready || !m_entity_transform_command ||
                     m_architecturalCanvas->entityTransformPreviewSerial()!=m_entity_transform_serial ||
                     relative_scale!=m_entity_transform_scale || rotation_radians!=m_entity_transform_radians)
-                    throw std::invalid_argument("The exact Site Plan transform preview is unavailable. Start again.");
+                    throw std::invalid_argument("The Site Plan transform preview is unavailable. Try the transform again.");
                 if (m_entity_transform_physical_rotation) {
                     publishEntityTransformPreparedEdit(rotation_radians==0.0);
                     if (rotation_radians==0.0) { clearError(); return true; }
                 }
-                else throw std::invalid_argument("The Site geometry has no captured admitted transform preview. Start again.");
+                else throw std::invalid_argument("The Site Plan geometry transform preview is not ready. Try the transform again.");
                 clearError(); refresh(); return true;
             }
             const auto* gesture_canvas = m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
@@ -32858,17 +33052,17 @@ public:
             }
             const auto annotation_owners = annotation_selection_owners(source, {requested_id});
             if (annotation_owners.contains(wanted))
-                throw std::invalid_argument("The annotation transform has no captured admitted preview. Start again.");
+                throw std::invalid_argument("The annotation transform preview is not ready. Try the transform again.");
 
             const auto found = source.entities().find(wanted);
             if (found == source.entities().end())
                 throw std::invalid_argument("The selected object no longer exists.");
             m_selected_id = requested_id;
             if (found->second.type == "reference_asset") {
-                throw std::invalid_argument("The reference transform has no captured admitted preview. Start again.");
+                throw std::invalid_argument("The reference transform preview is not ready. Try the transform again.");
             }
             throw std::invalid_argument(
-                "The selected geometry has no captured admitted transform preview. Start again.");
+                "The selected geometry's transform preview is not ready. Try the transform again.");
         } catch (const std::exception& error) {
             if (m_entity_transform_physical_rotation || m_entity_transform_axis_resize) {
                 m_entity_transform_prepared.reset(); m_entity_transform_edit_source.reset();
@@ -34280,7 +34474,7 @@ public:
                 throw std::invalid_argument("Survey report exceeds 4 MiB.");
             const auto source = authoringSnapshot();
             if (expected_revision && *expected_revision != source.revision())
-                throw std::invalid_argument("The project changed. Reopen the survey before updating its boundary.");
+                throw std::invalid_argument("The drawing changed while the survey was open. Open the survey again before updating its boundary.");
             const auto command = survey_boundary_update_command(source, boundary_id.toStdString(),
                 json::parse(report_json.toStdString()), adjust_final_endpoint);
             applyDocumentCommand(command);
@@ -34494,7 +34688,7 @@ public:
         QObject::connect(add_boundary, &QPushButton::clicked, &dialog, [&] {
             if (!report) return;
             if (!modalContextUnchanged(drawing_context)) {
-                result->setText(QStringLiteral("The project context changed. Reopen Survey traverse before adding geometry."));
+                result->setText(QStringLiteral("The drawing changed while Survey traverse was open. Open it again before adding geometry."));
                 return;
             }
             try {
@@ -34520,7 +34714,7 @@ public:
         QObject::connect(update_boundary, &QPushButton::clicked, &dialog, [&] {
             if (!report || survey_target_id.isEmpty()) return;
             if (!modalContextUnchanged(drawing_context)) {
-                result->setText(QStringLiteral("The project context changed. Reopen Survey traverse before updating geometry."));
+                result->setText(QStringLiteral("The drawing changed while Survey traverse was open. Open it again before updating geometry."));
                 return;
             }
             const bool adjust = close_endpoint->isEnabled() && close_endpoint->isChecked();
@@ -34827,7 +35021,7 @@ public:
         QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
         QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
             try {
-                if (!modalContextUnchanged(context)) throw std::invalid_argument("Roof editing context changed. Reopen the openings editor.");
+                if (!modalContextUnchanged(context)) throw std::invalid_argument("The roof or active layer changed while the openings editor was open. Open it again.");
                 RoofOpeningEditIntent intent;
                 intent.roof_id=original->id;
                 intent.uses_skylight_schema = original->properties.at("version") == 3;
@@ -35306,7 +35500,7 @@ public:
             QObject::connect(buttons,&QDialogButtonBox::accepted,&dialog,[&] {
                 try {
                     if (!sourceEditAuthorityCurrent(authority))
-                        throw std::invalid_argument("The project or selection changed. Reopen Add window dimension.");
+                        throw std::invalid_argument("The drawing or selection changed while Add window dimension was open. Open it again.");
                     const auto model=candidate();
                     const auto id=createCornerWindowLegDimension(owner_id,*model.corner_leg,model.text_position,source.revision());
                     if (id.isEmpty()) throw std::invalid_argument(lastError().toStdString());
@@ -35566,7 +35760,7 @@ public:
                 throw std::invalid_argument("The selected ordinary identity has no actual object or geometric component source. The selection has been preserved.");
             const auto key=std::pair{binding->value.assembly_catalog_id,binding->value.instance.id};
             if (aliases.at(key)!=wanted)
-                throw std::invalid_argument("The selected component no longer has its captured presentation identity.");
+                throw std::invalid_argument("The selected component is no longer shown the same way. Select it again.");
             selected.architectural.components.push_back(key);
         }
         std::sort(selected.architectural.object_ids.begin(),selected.architectural.object_ids.end());
@@ -36512,7 +36706,7 @@ public:
         } catch (const Standard_Failure& error) {
             const auto* detail = error.GetMessageString();
             setError(QStringLiteral("Cut: %1").arg(detail && *detail ? QString::fromUtf8(detail)
-                : QStringLiteral("The selected geometry could not be admitted.")));
+                : QStringLiteral("The selected geometry could not be built.")));
             return false;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Cut: %1").arg(QString::fromUtf8(error.what())));
@@ -36950,7 +37144,7 @@ public:
                 cohort->push_back({sky,allocate("skylight")});
             }
         }
-        if (!sourceEditAuthorityCurrent(*session->authority)) throw std::invalid_argument("The complete paste destination changed.");
+        if (!sourceEditAuthorityCurrent(*session->authority)) throw std::invalid_argument("The drawing changed while the paste was being prepared. Paste again.");
         // Copy resolved artwork now. Workers receive immutable bytes rather
         // than reaching into the live library or UI-owned resources later.
         std::size_t symbol_count{},label_count{};
@@ -36979,10 +37173,13 @@ public:
         session->navigation=session->canvas->navigationGeneration(); session->had_focus=session->canvas->hasFocus();
         session->focus_connection=QObject::connect(qApp,&QApplication::focusChanged,owner,[this,weak=std::weak_ptr<MixedClipboardSession>{session}](QWidget*,QWidget* next) {
             const auto captured=weak.lock();
-            if (!captured || captured!=m_pending_mixed_clipboard || captured->reviewing_rooms || !captured->had_focus) return;
-            if (next==captured->canvas.data() || (next && captured->canvas->isAncestorOf(next))) return;
-            cancelMixedClipboardPlacement();
-            setError(QStringLiteral("The captured placement focus changed. Paste again."));
+            if (!captured || captured!=m_pending_mixed_clipboard || captured->reviewing_rooms) return;
+            // Focus moving to a toolbar or panel (Fit, zoom, a scroll bar)
+            // keeps the paste armed. Coming back to the canvas redraws the
+            // preview that the focus change cleared.
+            if (next!=captured->canvas.data()) return;
+            try { restoreMixedClipboardPreview(captured); }
+            catch (const std::exception& error) { cancelMixedClipboardPlacement(); setError(QString::fromUtf8(error.what())); }
         });
         // Pending placement owns stationary clicks, including clicks on its
         // destination hosts. Retained selection must not consume an anchor.
@@ -37013,14 +37210,57 @@ public:
             m_pending_opening_kind.isEmpty() || !sourceEditAuthorityCurrent(*session->authority) ||
             fullSnapshotDigest(*session->source)!=fullSnapshotDigest(authoringSnapshot()) ||
             session->registry!=phaseRegistryForAuthoring(*session->source))
-            throw std::invalid_argument("The complete paste source, selection or destination changed. Paste again.");
+            throw std::invalid_argument("The drawing changed while you were pasting, so the paste was cancelled. Copy and paste again.");
         if (session->site_frames && (!siteCanvas(session->canvas) || session->site_generation!=m_site_publication_generation))
-            throw std::invalid_argument("The captured Site Plan presentation changed. Paste again.");
-        const auto center=session->canvas->viewCenter();
-        if (center.x!=session->center.x || center.y!=session->center.y || session->zoom!=session->canvas->viewScale() ||
-            session->viewport_size!=session->canvas->size() || session->dpr!=session->canvas->devicePixelRatioF() ||
-            session->navigation!=session->canvas->navigationGeneration() || (session->had_focus && !session->reviewing_rooms && !session->canvas->hasFocus()))
-            throw std::invalid_argument("The captured placement view or focus changed. Paste again.");
+            throw std::invalid_argument("The Site Plan changed while you were pasting, so the paste was cancelled. Copy and paste again.");
+        // Pan, zoom, fit, resize and focus changes are navigation, not edits.
+        // They never cancel a pending paste; see followMixedClipboardView.
+    }
+
+    // Records the current view as the paste's view. Returns true when the
+    // view moved since the last call, which means the canvas cleared the
+    // preview ink and it needs to be drawn again.
+    static bool rebaselineMixedClipboardView(MixedClipboardSession& session) {
+        if (!session.canvas) return false;
+        const auto center=session.canvas->viewCenter();
+        const bool moved=center.x!=session.center.x || center.y!=session.center.y || session.zoom!=session.canvas->viewScale() ||
+            session.viewport_size!=session.canvas->size() || session.dpr!=session.canvas->devicePixelRatioF() ||
+            session.navigation!=session.canvas->navigationGeneration();
+        session.center=center; session.zoom=session.canvas->viewScale();
+        session.viewport_size=session.canvas->size(); session.dpr=session.canvas->devicePixelRatioF();
+        session.navigation=session.canvas->navigationGeneration();
+        return moved;
+    }
+
+    // Preview ink is in model/plan coordinates, so a new view only needs it
+    // redrawn. A worker still preparing the final preview gets a fresh
+    // pending preview to land in, instead of the paste being cancelled.
+    void restoreMixedClipboardPreview(const std::shared_ptr<MixedClipboardSession>& session) {
+        if (!session || session!=m_pending_mixed_clipboard || !session->canvas || session->reviewing_rooms) return;
+        using Stage=MixedClipboardSession::Stage;
+        if (session->stage==Stage::confirmation) {
+            if (session->preview_result) {
+                if (!session->canvas->componentPlacementPreviewPending() ||
+                    session->serial!=session->canvas->componentPlacementPreviewSerial())
+                    session->serial=session->canvas->beginComponentPlacementPreview();
+            } else if (session->command && session->candidate && session->prepared) {
+                session->serial=session->canvas->beginComponentPlacementPreview();
+                CanvasEntity ink; ink.id=QStringLiteral("mixed-clipboard-preview");
+                ink.type=QStringLiteral("source"); ink.segments=session->ghosts;
+                auto group=session->annotation_entities; group.insert(group.begin(),std::move(ink));
+                if (!session->canvas->completeComponentPlacementGroupPreview(session->serial,
+                    std::move(group),session->annotation_labels,mixedClipboardPreviewCrop(*session)))
+                    throw std::invalid_argument("The paste preview could not be redrawn at this view. Paste again.");
+            }
+            return;
+        }
+        if (session->stage==Stage::anchor || session->stage==Stage::corners || session->stage==Stage::skylights)
+            showMixedClipboardGroupPreview(*session,session->ghosts);
+    }
+
+    void followMixedClipboardView(const std::shared_ptr<MixedClipboardSession>& session) {
+        if (!session || session->reviewing_rooms || !rebaselineMixedClipboardView(*session)) return;
+        restoreMixedClipboardPreview(session);
     }
 
     void cancelMixedClipboardPlacement() {
@@ -37117,7 +37357,7 @@ public:
                     "Paste mixed selection",&session->reserved,false,true);
                 const auto* typed=std::get_if<ApplyBoundaryConstraintChanges>(&roof);
                 if (!typed || !typed->phase_constraint_authoring_completion)
-                    throw std::invalid_argument("The complete skylight placement has no closed roof authoring authority.");
+                    throw std::invalid_argument("The skylights could not be placed because the roof edit could not be completed.");
                 roof_authoring=typed->phase_constraint_authoring_intent;
             }
             const ApplyEntityChanges fresh{session->source->revision(),session->admitted.fresh_entity_changes,{},"Paste mixed selection"};
@@ -37163,7 +37403,7 @@ public:
 
     void pollMixedClipboardPreview() {
         if (m_pending_mixed_clipboard) {
-            try { requireMixedClipboardCurrent(m_pending_mixed_clipboard); }
+            try { requireMixedClipboardCurrent(m_pending_mixed_clipboard); followMixedClipboardView(m_pending_mixed_clipboard); }
             catch (const std::exception& error) { cancelMixedClipboardPlacement(); setError(QString::fromUtf8(error.what())); }
         }
         for (auto& completion:m_mixed_clipboard_preview_queue.take_completed()) {
@@ -37193,9 +37433,9 @@ public:
             if (!session || completion.sequence!=session->sequence) continue;
             try {
                 requireMixedClipboardCurrent(session);
-                if (!completion.succeeded()) { if (completion.error) std::rethrow_exception(completion.error); throw std::invalid_argument("The complete copied group was not admitted."); }
+                if (!completion.succeeded()) { if (completion.error) std::rethrow_exception(completion.error); throw std::invalid_argument("The pasted items could not be placed here."); }
                 const auto work=std::move(session->preview_result);
-                if (!work) throw std::invalid_argument("The complete placement preview lost its captured result.");
+                if (!work) throw std::invalid_argument("The paste preview result is missing. Paste again.");
                 session->ghosts=std::move(work->ghosts);
                 session->annotation_entities=std::move(work->annotation_entities);
                 session->annotation_labels=std::move(work->annotation_labels);
@@ -37214,15 +37454,17 @@ public:
                 }
                 session->admitted=std::move(work->admitted); session->command=std::move(work->command);
                 session->candidate=std::move(work->candidate); session->prepared=std::move(work->prepared);
-                const auto center=session->canvas->viewCenter();
-                if (center.x!=session->center.x || center.y!=session->center.y || session->zoom!=session->canvas->viewScale() ||
-                    session->viewport_size!=session->canvas->size() || session->dpr!=session->canvas->devicePixelRatioF() ||
-                    session->navigation!=session->canvas->navigationGeneration() || (session->had_focus && !session->canvas->hasFocus()))
-                    throw std::invalid_argument("The complete placement view changed. Paste again.");
+                (void)rebaselineMixedClipboardView(*session);
                 CanvasEntity ghost; ghost.id=QStringLiteral("mixed-clipboard-preview"); ghost.type=QStringLiteral("source"); ghost.segments=session->ghosts;
                 auto group=session->annotation_entities; group.insert(group.begin(),std::move(ghost));
+                // A click, pointer Leave, focus change or navigation while the
+                // worker ran clears the pending preview. The paste stays armed:
+                // open a fresh preview for the finished result.
+                if (!session->canvas->componentPlacementPreviewPending() ||
+                    session->serial!=session->canvas->componentPlacementPreviewSerial())
+                    session->serial=session->canvas->beginComponentPlacementPreview();
                 if (!session->canvas->completeComponentPlacementGroupPreview(session->serial,std::move(group),session->annotation_labels,mixedClipboardPreviewCrop(*session)))
-                    throw std::invalid_argument("The complete placement preview was retired. Paste again.");
+                    throw std::invalid_argument("The paste preview could not be drawn. Paste again.");
                 m_architecture_hint->setText(QStringLiteral("Click to place the complete copied group. Right-click or Esc cancels."));
             } catch (const Standard_Failure& error) { cancelMixedClipboardPlacement(); setError(QString::fromUtf8(error.GetMessageString())); }
             catch (const std::exception& error) { cancelMixedClipboardPlacement(); setError(QString::fromUtf8(error.what())); }
@@ -37234,7 +37476,7 @@ public:
     bool reviewMixedClipboardRooms(const std::shared_ptr<MixedClipboardSession>& session) {
         requireMixedClipboardCurrent(session);
         if (!is_physical_wall_room_mixed_clipboard_review_command(*session->command))
-            throw std::invalid_argument("The complete placement lost its room geometry authority.");
+            throw std::invalid_argument("The pasted walls could not be checked against existing rooms. Paste again.");
         std::vector<std::pair<DrawingContext,double>> groups;
         const auto organization=organize_project(*session->candidate);
         const auto active=active_physical_wall_room_ids(session->candidate->entities());
@@ -37267,7 +37509,7 @@ public:
             if (center.x!=session->center.x || center.y!=session->center.y || session->zoom!=session->canvas->viewScale() ||
                 session->viewport_size!=session->canvas->size() || session->dpr!=session->canvas->devicePixelRatioF() ||
                 session->navigation!=session->canvas->navigationGeneration())
-                throw std::invalid_argument("The complete copied group view changed during room review.");
+                throw std::invalid_argument("The view changed during the room review for the pasted items. Paste again.");
         };
         for (const auto& [context,elevation]:groups) {
             const auto captured=stage;
@@ -37283,7 +37525,7 @@ public:
             if (command_to_json(Command{decision}).at("version")!=29 || !intent.context_plane_selection ||
                 !intent.selected_wall_id.empty() || intent.context!=context ||
                 std::abs(intent.effective_elevation_m-elevation)>default_geometry_tolerance_metres)
-                throw std::invalid_argument("The complete room review changed its captured context or plane.");
+                throw std::invalid_argument("The room review for the pasted walls changed floor or height. Paste again.");
             stage=Document::preview_command(captured,Command{decision}); decisions.push_back(decision);
         }
         const auto reviewed=prepare_physical_wall_room_review_batch_after_geometry(*session->source,*session->command,decisions);
@@ -37887,14 +38129,14 @@ public:
                         throw std::invalid_argument("The complete cached placement preview could not be restored.");
                 }
                 if (!commit) return;
-                const auto center=session->canvas->viewCenter();
                 if (session->canvas->componentPlacementPreviewPending() || !session->command || !session->candidate || !session->prepared ||
-                    session->serial!=session->canvas->componentPlacementPreviewSerial())
-                    throw std::invalid_argument("Wait for the complete copied group preview, then click to place everything.");
-                if (center.x!=session->center.x || center.y!=session->center.y || session->zoom!=session->canvas->viewScale() ||
-                    session->viewport_size!=session->canvas->size() || session->dpr!=session->canvas->devicePixelRatioF() ||
-                    session->navigation!=session->canvas->navigationGeneration() || (session->had_focus && !session->canvas->hasFocus()))
-                    throw std::invalid_argument("The placement view changed. Paste again.");
+                    session->serial!=session->canvas->componentPlacementPreviewSerial()) {
+                    // An early click keeps the paste armed; the final preview
+                    // still lands when it is ready.
+                    restoreMixedClipboardPreview(session);
+                    throw std::invalid_argument("The pasted items are still being prepared. Click again when the preview appears.");
+                }
+                (void)rebaselineMixedClipboardView(*session);
                 if (!session->rooms_reviewed && reviewMixedClipboardRooms(session)) return;
                 requireMixedClipboardCurrent(session);
                 publishPreparedCanvasEdit(session->prepared,session->edit_source);
@@ -38018,7 +38260,7 @@ public:
                     roof.value("type","")!="roof" || !roof.contains("properties") || !roof.at("properties").is_object() ||
                     !roof.contains("required") || !roof.at("required").is_boolean() ||
                     !roof.contains("extensions") || !roof.at("extensions").is_object())
-                    throw std::invalid_argument("Clipboard skylight has an invalid passive roof envelope.");
+                    throw std::invalid_argument("A copied skylight has an invalid roof outline.");
                 return beginRoofOpeningClone({Entity{roof.at("id").get<std::string>(),"roof",roof.at("properties"),
                     roof.at("required").get<bool>(),roof.at("extensions")},payload.at("opening_id").get<std::string>()});
             }
@@ -38784,7 +39026,7 @@ public:
         } catch (const Standard_Failure& error) {
             const auto* detail = error.GetMessageString();
             setError(QStringLiteral("Delete: %1").arg(detail && *detail ? QString::fromUtf8(detail)
-                : QStringLiteral("The wall or opening geometry could not be admitted.")));
+                : QStringLiteral("The wall or opening geometry could not be built.")));
             return false;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Delete: %1").arg(QString::fromUtf8(error.what())));
@@ -40057,7 +40299,7 @@ public:
             styleDialog(dialog);
             if (dialog.exec() != QDialog::Accepted) return;
             if (!dialog.acceptedCommand() || document_snapshot_digest(current_source()) != source_digest)
-                throw std::invalid_argument("The complete room review source changed. Reopen the review.");
+                throw std::invalid_argument("The drawing changed during the room repair review. Open the review again.");
             (void)Document::preview_command(source, *dialog.acceptedCommand());
             applyDocumentCommand(*dialog.acceptedCommand());
             clearError();
@@ -40166,7 +40408,7 @@ public:
             return false;
         }
         if (expected_revision.value_or(m_document->revision()) != m_document->revision()) {
-            setError(QStringLiteral("The project changed while the opening assembly was being edited. Start again."));
+            setError(QStringLiteral("The drawing changed while you were editing the opening assembly. Your change was not applied. Try it again."));
             return false;
         }
         try {
@@ -40212,7 +40454,7 @@ public:
         const auto revision = expected_revision.value_or(m_document->revision());
         if (revision != m_document->revision()) {
             setError(QStringLiteral(
-                "The project changed while the opening assembly was being edited. Start again."));
+                "The drawing changed while you were editing the opening assembly. Your change was not applied. Try it again."));
             return false;
         }
         try {
@@ -40297,7 +40539,7 @@ public:
             const auto authority=captureSourceEditAuthority(source);
             ConstraintDialog dialog(source, m_selected_id, m_metric_units, owner);
             dialog.setCurrentSource([this,authority] {
-                if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The wall editing context changed. Reopen its dimensions.");
+                if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The wall or active layer changed while its dimensions were open. Open its dimensions again.");
                 return authoringSnapshot();
             });
             dialog.setLengthExpression(expression);
@@ -40713,18 +40955,73 @@ public:
         dialog.setWindowTitle(QStringLiteral("Edit appraisal facts"));
         styleDialog(dialog);
         auto* layout = new QVBoxLayout(&dialog);
-        auto* note = new QLabel(QStringLiteral("Property and grade declarations affect all areas on that property/floor.\n"
-            "Declare observed facts; names and elevations are not evidence.\n"
-            "ANSI observations must describe the current geometry. Incomplete evidence withholds totals."), &dialog);
+        auto* note = new QLabel(QStringLiteral("Record what you observed for this area. Names and elevations are not evidence. "
+            "Floor grade applies to every area on this floor. Missing facts withhold totals."), &dialog);
         note->setWordWrap(true);
         layout->addWidget(note);
         auto* scroll = new QScrollArea(&dialog); scroll->setWidgetResizable(true); scroll->setFrameShape(QFrame::NoFrame);
+        // Rows wrap to the dialog width; the form never scrolls sideways.
+        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         auto* content = new QWidget(scroll);content->setObjectName(QStringLiteral("appraisalFactsContent"));
         scroll->viewport()->setObjectName(QStringLiteral("appraisalFactsViewport"));
         auto* content_layout = new QVBoxLayout(content);
         scroll->setWidget(content); layout->addWidget(scroll); scroll->setMinimumHeight(400);
-        auto* form = new QFormLayout; content_layout->addLayout(form);
         const auto policy = property->properties.value("appraisal_policy", json::object());
+        // Property-level declarations (policy, property kind, measurement basis
+        // and ANSI measurement evidence) belong to Appraisal setup. Show them
+        // here read-only so the area facts are read in context.
+        const auto policy_token = [&](const char* key) {
+            return policy.is_object() && policy.contains(key) && policy.at(key).is_string()
+                ? QString::fromStdString(policy.at(key).get<std::string>()) : QString{};
+        };
+        const auto policy_label = [](const QString& token) -> QString {
+            static const std::map<QString, QString> labels{
+                {QStringLiteral("residential_declared"), QStringLiteral("Residential declared facts")},
+                {QStringLiteral("light_commercial_declared"), QStringLiteral("Light commercial declared facts")},
+                {QStringLiteral("ansi_z765_2021"), QStringLiteral("ANSI Z765-2021 evidence profile")},
+                {QStringLiteral("detached_single_family"), QStringLiteral("Detached single-family")},
+                {QStringLiteral("attached_single_family"), QStringLiteral("Attached single-family")},
+                {QStringLiteral("manufactured_home"), QStringLiteral("Manufactured home")},
+                {QStringLiteral("apartment_unit"), QStringLiteral("Apartment unit")},
+                {QStringLiteral("multifamily"), QStringLiteral("Multifamily")},
+                {QStringLiteral("light_commercial"), QStringLiteral("Light commercial")},
+                {QStringLiteral("exterior"), QStringLiteral("Exterior")},
+                {QStringLiteral("interior_perimeter"), QStringLiteral("Interior perimeter")},
+                {QStringLiteral("plans"), QStringLiteral("Plans")},
+                {QStringLiteral("unknown"), QStringLiteral("Unknown")}};
+            if (token.isEmpty()) return QStringLiteral("Undeclared");
+            const auto found = labels.find(token);
+            return found == labels.end() ? QStringLiteral("Unrecognized value") : found->second;
+        };
+        const bool ansi = policy_token("policy_kind") == QStringLiteral("ansi_z765_2021");
+        auto* property_group = new QGroupBox(QStringLiteral("Property (set in Appraisal setup)"), content);
+        property_group->setObjectName(QStringLiteral("appraisalFactsProperty"));
+        auto* property_form = new QFormLayout(property_group);
+        property_form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        auto* summary = new QLabel(QStringLiteral("%1 · %2 · %3 basis").arg(
+            policy_label(policy_token("policy_kind")), policy_label(policy_token("property_kind")),
+            policy_label(policy_token("measurement_basis"))), property_group);
+        summary->setObjectName(QStringLiteral("appraisalFactsPolicySummary"));
+        summary->setWordWrap(true);
+        property_form->addRow(QStringLiteral("Policy"), summary);
+        const auto increment_token = policy.is_object() && policy.contains("ansi") && policy.at("ansi").is_object() &&
+            policy.at("ansi").contains("acquisition_increment") && policy.at("ansi").at("acquisition_increment").is_string()
+            ? policy.at("ansi").at("acquisition_increment").get<std::string>() : std::string{};
+        const auto acquisition = parse_acquisition_increment(increment_token);
+        if (ansi) {
+            auto* increment_label = new QLabel(!acquisition ? QStringLiteral("Undeclared") :
+                *acquisition == AcquisitionIncrement::inch ? QStringLiteral("Nearest inch") : QStringLiteral("Nearest tenth foot"), property_group);
+            increment_label->setObjectName(QStringLiteral("appraisalFactsMeasurementIncrement"));
+            property_form->addRow(QStringLiteral("Measurement increment"), increment_label);
+        }
+        bool open_setup = false;
+        auto* change_setup = new QPushButton(QStringLiteral("Change in Setup…"), property_group);
+        change_setup->setObjectName(QStringLiteral("appraisalFactsOpenSetup")); change_setup->setAutoDefault(false);
+        change_setup->setToolTip(QStringLiteral("Close Edit facts without saving and open Appraisal setup."));
+        QObject::connect(change_setup, &QPushButton::clicked, &dialog, [&] { open_setup = true; dialog.reject(); });
+        property_form->addRow(change_setup);
+        content_layout->addWidget(property_group);
+        auto* form = new QFormLayout; form->setRowWrapPolicy(QFormLayout::WrapLongRows); content_layout->addLayout(form);
         const auto facts = selected->properties.value("appraisal_facts", json::object());
         const auto level = snapshot.entities().at(*floor_id).properties.value("appraisal_facts", json::object());
         const auto combo = [&](const QString& label, const char* key, const json& source,
@@ -40737,40 +41034,36 @@ public:
                 auto text = token;
                 text.replace(QLatin1Char('_'), QLatin1Char(' '));
                 text[0] = text[0].toUpper();
-                if (token == QStringLiteral("residential_declared")) text = QStringLiteral("Residential declared-facts policy");
-                if (token == QStringLiteral("light_commercial_declared")) text = QStringLiteral("Light commercial declared-facts policy");
-                if (token == QStringLiteral("ansi_z765_2021")) text = QStringLiteral("ANSI Z765-2021");
-                if (token == QStringLiteral("detached_single_family")) text = QStringLiteral("Detached single-family");
-                if (token == QStringLiteral("attached_single_family")) text = QStringLiteral("Attached single-family");
                 if (token == QStringLiteral("commercial_occupiable")) text = QStringLiteral("Occupiable");
                 if (token == QStringLiteral("commercial_common")) text = QStringLiteral("Common");
                 if (token == QStringLiteral("commercial_service")) text = QStringLiteral("Service");
+                if (token == QStringLiteral("other_non_living")) text = QStringLiteral("Other non-living");
                 box->addItem(text, token);
             }
             if (source.is_object() && source.contains(key) && source.at(key).is_string()) {
                 const auto token = QString::fromStdString(source.at(key).get<std::string>());
                 auto index = box->findData(token);
-                if (index < 0) { box->addItem(QStringLiteral("Unsupported: %1").arg(token), token); index = box->count()-1; }
+                if (index < 0) {
+                    // Keep a value this version does not recognize without showing raw tokens.
+                    box->addItem(QStringLiteral("Unrecognized value (keep)"), token); index = box->count()-1;
+                    box->setItemData(index, QStringLiteral("Recorded value: %1").arg(token), Qt::ToolTipRole);
+                }
                 box->setCurrentIndex(index);
             }
             form->addRow(label, box);
             return box;
         };
-        auto* kind = combo(QStringLiteral("Policy"), "policy_kind", policy, {"residential_declared", "light_commercial_declared", "ansi_z765_2021"});
-        auto* property_kind = combo(QStringLiteral("Property kind"), "property_kind", policy,
-            {"detached_single_family", "attached_single_family", "manufactured_home", "apartment_unit", "multifamily", "light_commercial"});
-        auto* basis = combo(QStringLiteral("Measurement basis"), "measurement_basis", policy, {"exterior", "interior_perimeter", "plans", "unknown"});
-        auto* grade = combo(QStringLiteral("Floor grade (partly below = below)"), "grade", level, {"above", "below", "unknown"});
+        auto* grade = combo(QStringLiteral("Floor grade (partly below counts as below)"), "grade", level, {"above", "below", "unknown"});
         auto* finish = combo(QStringLiteral("Finish"), "finish", facts, {"finished", "unfinished", "unknown"});
         auto* access = combo(QStringLiteral("Access"), "access", facts, {"direct_interior", "through_unfinished", "noncontinuous", "unknown"});
         auto* ceiling = combo(QStringLiteral("Ceiling eligibility"), "ceiling_eligibility", facts, {"standard", "nonstandard", "unknown"});
         auto* use = combo(QStringLiteral("Area use"), "area_use", facts,
             {"dwelling", "garage", "carport", "porch", "patio", "deck", "commercial_occupiable", "commercial_common", "commercial_service", "other_non_living"});
         auto* role = combo(QStringLiteral("Boundary role"), "boundary_role", facts, {"measured_area", "open_to_below", "stair_footprint", "other_void"});
-        const auto measurement = ansi_measurement_controls(content, *content_layout, policy, basis);
         auto* ansi_group = new QGroupBox(QStringLiteral("ANSI floor and area evidence"), content);
         ansi_group->setObjectName(QStringLiteral("ansiAreaEvidence")); content_layout->addWidget(ansi_group);
         auto* ansi_form = new QFormLayout(ansi_group);
+        ansi_form->setRowWrapPolicy(QFormLayout::WrapLongRows);
         const auto area_evidence = facts.value("ansi", json::object());
         const auto floor_evidence = level.value("ansi", json::object());
         const auto ceiling_evidence = area_evidence.value("ceiling", json::object());
@@ -40793,25 +41086,33 @@ public:
         if (ceiling_evidence.contains("kind") && ceiling_evidence.at("kind").is_string())
             ceiling_kind->setCurrentIndex(std::max(0, ceiling_kind->findData(QString::fromStdString(ceiling_evidence.at("kind").get<std::string>()))));
         ansi_form->addRow(QStringLiteral("Ceiling type"), ceiling_kind);
+        // The observed height is shown and entered in drawing units. A number
+        // without a unit is read in the drawing unit. The stored value is kept
+        // exactly unless the text is edited, so reopening never re-rounds it.
+        const bool metric_height = m_metric_units;
+        const auto height_unit = metric_height ? Unit::metre : Unit::foot;
         auto* minimum = new QLineEdit(ansi_group); minimum->setObjectName(QStringLiteral("ansiMinimumHeight"));
-        minimum->setPlaceholderText(QStringLiteral("Observed minimum, e.g. 7 ft or 2.2 m"));
-        if (ceiling_evidence.contains("minimum_height_m") && ceiling_evidence.at("minimum_height_m").is_number())
-            minimum->setText(QString::number(ceiling_evidence.at("minimum_height_m").get<double>(), 'g', 17) + QStringLiteral(" m"));
-        ansi_form->addRow(QStringLiteral("Minimum ceiling height (ft)"), minimum);
+        minimum->setPlaceholderText(metric_height ? QStringLiteral("Observed minimum, e.g. 2.13 m") : QStringLiteral("Observed minimum, e.g. 7' 0\""));
+        std::optional<double> recorded_minimum;
+        if (ceiling_evidence.contains("minimum_height_m") && ceiling_evidence.at("minimum_height_m").is_number()) {
+            recorded_minimum = ceiling_evidence.at("minimum_height_m").get<double>();
+            minimum->setText(units::length_input_text(*recorded_minimum, metric_height));
+        }
+        const auto recorded_minimum_text = minimum->text();
+        ansi_form->addRow(QStringLiteral("Minimum ceiling height"), minimum);
         auto* rounded_minimum = new QLabel(ansi_group);
         rounded_minimum->setObjectName(QStringLiteral("ansiRoundedMinimumHeight"));
         rounded_minimum->setWordWrap(true);
         ansi_form->addRow(QStringLiteral("Height used for classification"), rounded_minimum);
         const auto update_minimum_height = [=] {
-            const auto increment = parse_acquisition_increment(measurement.increment->currentData().toString().toStdString());
-            if (!increment) {rounded_minimum->setText(QStringLiteral("Choose inch or tenth-foot acquisition precision."));return;}
+            if (!acquisition) {rounded_minimum->setText(QStringLiteral("Choose the measurement increment in Appraisal setup."));return;}
             try {
-                const auto observed = parse_quantity(minimum->text().trimmed().toStdString(), Unit::foot);
-                rounded_minimum->setText(appraisal_rounded_ceiling_height_text(observed.metres,*increment));
+                const auto observed = minimum->text() == recorded_minimum_text && recorded_minimum ? *recorded_minimum
+                    : parse_quantity(minimum->text().trimmed().toStdString(), height_unit).metres;
+                rounded_minimum->setText(appraisal_rounded_ceiling_height_text(observed,*acquisition));
             } catch (const std::exception&) {rounded_minimum->setText(QStringLiteral("Enter a valid observed height."));}
         };
         QObject::connect(minimum, &QLineEdit::textChanged, &dialog, update_minimum_height);
-        QObject::connect(measurement.increment, &QComboBox::currentIndexChanged, &dialog, update_minimum_height);
         update_minimum_height();
         auto* high = new QLineEdit(ansi_group); high->setObjectName(QStringLiteral("ansiAtLeast7ftArea"));
         high->setPlaceholderText(QStringLiteral("Observed area at least 7 ft high in this complete room, in sq ft"));
@@ -40835,8 +41136,12 @@ public:
             item->setData(Qt::UserRole, QString::fromStdString(id)); item->setFlags(item->flags() | Qt::ItemIsUserCheckable); item->setCheckState(Qt::Checked);
         }
         ansi_form->addRow(QStringLiteral("Actual below-5-ft boundaries"), low);
-        auto* confirm = new QCheckBox(QStringLiteral("This boundary represents one complete physical room; the high-area observation excludes its current voids"), ansi_group);
-        confirm->setObjectName(QStringLiteral("ansiConfirmRoomGeometry")); ansi_form->addRow(confirm);
+        auto* confirm = new QCheckBox(QStringLiteral("Confirm complete room"), ansi_group);
+        confirm->setToolTip(QStringLiteral("This boundary is one complete physical room, and the high-area observation excludes its current voids."));
+        confirm->setObjectName(QStringLiteral("ansiConfirmRoomGeometry"));
+        auto* confirm_note = new QLabel(QStringLiteral("This boundary is one complete physical room, and the area at least 7 ft high excludes its current voids."), ansi_group);
+        confirm_note->setWordWrap(true);
+        ansi_form->addRow(confirm, confirm_note);
         auto* stair = new QComboBox(ansi_group); stair->setObjectName(QStringLiteral("ansiStairFromFloor"));
         stair->addItem(QStringLiteral("Undeclared"), QString{});
         for (const auto& [id, candidate] : snapshot.entities()) if (candidate.type == "floor")
@@ -40846,16 +41151,14 @@ public:
         ansi_form->addRow(QStringLiteral("Floor from which stairs descend"), stair);
         const auto show_field = [=](QWidget* field, bool visible) { field->setVisible(visible); if (auto* label = ansi_form->labelForField(field)) label->setVisible(visible); };
         const auto update_evidence = [=] {
-            const bool ansi = kind->currentData().toString() == QStringLiteral("ansi_z765_2021");
-            measurement.group->setVisible(ansi); ansi_group->setVisible(ansi);
+            ansi_group->setVisible(ansi);
             form->setRowVisible(grade, !ansi);form->setRowVisible(ceiling, !ansi);
             const auto type = ceiling_kind->currentData().toString();
             show_field(minimum, type == QStringLiteral("flat"));
             show_field(rounded_minimum, type == QStringLiteral("flat"));
-            for (QWidget* field : std::array<QWidget*,3>{high, low, confirm}) show_field(field, type == QStringLiteral("sloped"));
+            for (QWidget* field : std::array<QWidget*,3>{high, low, confirm_note}) show_field(field, type == QStringLiteral("sloped"));
             show_field(stair, type == QStringLiteral("stairs"));
         };
-        QObject::connect(kind, &QComboBox::currentIndexChanged, &dialog, update_evidence);
         QObject::connect(ceiling_kind, &QComboBox::currentIndexChanged, &dialog, update_evidence); update_evidence();
         auto* error = new QLabel(&dialog);
         error->setWordWrap(true);
@@ -40868,21 +41171,17 @@ public:
             if (m_selected_id.toStdString() != selected_id || m_document != facts_document || m_document->revision() != snapshot.revision() ||
                 entity_map_digest(m_document->snapshot().entities()) != facts_digest) { error->setText(QStringLiteral("Selection or project changed; reopen this dialog.")); return; }
             try {
+            // The property declaration is carried through unchanged; it is
+            // edited only in Appraisal setup.
             json declaration{{"appraisal_policy", policy}, {"floor_appraisal_facts", level}, {"appraisal_facts", facts}};
-            declaration["appraisal_policy"]["version"] = kind->currentData().toString() == QStringLiteral("ansi_z765_2021") ?
-                (policy.value("policy_kind", json()) == "ansi_z765_2021" ? policy.value("version", 1U) : 2U) : 1U;
             const auto save = [](json& target, const char* key, QComboBox* box) {
                 target.erase(key);
                 if (!box->currentData().toString().isEmpty()) target[key] = box->currentData().toString().toStdString();
             };
-            save(declaration["appraisal_policy"], "policy_kind", kind);
-            save(declaration["appraisal_policy"], "property_kind", property_kind);
-            save(declaration["appraisal_policy"], "measurement_basis", basis);
             save(declaration["floor_appraisal_facts"], "grade", grade);
             for (auto* box : {finish, access, ceiling, use, role})
                 save(declaration["appraisal_facts"], box->objectName().toStdString().c_str(), box);
-            if (kind->currentData().toString() == QStringLiteral("ansi_z765_2021")) {
-                measurement.save(declaration["appraisal_policy"]);
+            if (ansi) {
                 auto level_ansi = floor_evidence; save_appraisal_observation(level_ansi, "any_part_below_grade", below);
                 declaration["floor_appraisal_facts"]["ansi"] = level_ansi;
                 // The observed below-grade flag is authoritative; do not retain a contradictory legacy grade.
@@ -40897,7 +41196,8 @@ public:
                 json observed = json::object(); save(observed, "kind", ceiling_kind);
                 const auto type = ceiling_kind->currentData().toString();
                 if (type == QStringLiteral("flat") && !minimum->text().trimmed().isEmpty()) {
-                    const auto metres = parse_quantity(minimum->text().trimmed().toStdString(), Unit::foot).metres;
+                    const auto metres = minimum->text() == recorded_minimum_text && recorded_minimum ? *recorded_minimum
+                        : parse_quantity(minimum->text().trimmed().toStdString(), height_unit).metres;
                     if (!std::isfinite(metres) || metres < 0) throw std::invalid_argument("Minimum height must be finite and nonnegative");
                     observed["minimum_height_m"] = metres;
                 } else if (type == QStringLiteral("sloped")) {
@@ -40916,7 +41216,7 @@ public:
                     }
                     const auto boundary = read_boundary(selected->properties);
                     observed["room_boundary_id"] = selected_id;
-                    if (declaration["appraisal_policy"]["version"] == 2) observed["complete_room_observed"] = true;
+                    if (policy.value("version", json()) == 2) observed["complete_room_observed"] = true;
                     observed["room_floor_area_m2"] = std::abs(signed_area(boundary));
                     observed["source_geometry_sha256"] = appraisal_ceiling_geometry_digest(boundary, deductions);
                     observed["below_5ft_deduction_ids"] = low_ids;
@@ -40935,6 +41235,7 @@ public:
         });
         dialog.resize(620, 780);
         dialog.exec();
+        if (open_setup) showAppraisalSetup(id_from(property->id));
     }
 
     bool setSelectedCalculationRule(bool include_in_building, bool include_in_living) {
@@ -41171,6 +41472,7 @@ public:
             auto candidate_workspace = std::make_unique<ProjectWorkspace>(candidate->snapshot());
             beginPerformanceRun();
             m_document = std::move(candidate);
+            rememberPristineProject();
             m_project_workspace = std::move(candidate_workspace);
             m_recovery_ledger.clear();
             m_saved_edited_generation = 0;
@@ -42385,12 +42687,12 @@ public:
             if (!file.open(QIODevice::WriteOnly | QIODevice::Text) ||
                 file.write(QByteArray::fromStdString(payload)) !=
                     static_cast<qint64>(payload.size()) || !file.commit()) {
-                setError(QStringLiteral("Print receipt could not be written locally."));
+                setError(QStringLiteral("The print record could not be saved."));
                 return false;
             }
             return true;
         } catch (const std::exception& error) {
-            setError(QStringLiteral("Print receipt failed: %1")
+            setError(QStringLiteral("Saving the print record failed: %1")
                          .arg(QString::fromUtf8(error.what())));
             return false;
         }
@@ -42606,12 +42908,12 @@ public:
             if (!file.open(QIODevice::WriteOnly | QIODevice::Text) ||
                 file.write(QByteArray::fromStdString(payload)) !=
                     static_cast<qint64>(payload.size()) || !file.commit()) {
-                setError(QStringLiteral("Drawing-set print receipt could not be written locally."));
+                setError(QStringLiteral("The drawing-set print record could not be saved."));
                 return false;
             }
             return true;
         } catch (const std::exception& error) {
-            setError(QStringLiteral("Drawing-set print receipt failed: %1")
+            setError(QStringLiteral("Saving the drawing-set print record failed: %1")
                          .arg(QString::fromUtf8(error.what())));
             return false;
         }
@@ -42902,7 +43204,7 @@ public:
             return false;
         }
         if (m_nativeModelView == nullptr) {
-            setError(QStringLiteral("Native OCCT 3D is unavailable on this platform."));
+            setError(QStringLiteral("3D rendering is unavailable on this computer."));
             return false;
         }
         refreshOutput();
@@ -42912,8 +43214,8 @@ public:
         m_nativeModelView->fitAll();
         if (!m_nativeModelView->isReady()) {
             const auto reason = m_nativeModelView->lastError();
-            setError(reason.isEmpty() ? QStringLiteral("Native OCCT 3D is not ready.")
-                                      : QStringLiteral("Native OCCT 3D is unavailable: %1")
+            setError(reason.isEmpty() ? QStringLiteral("3D rendering is not ready yet.")
+                                      : QStringLiteral("3D rendering is unavailable: %1")
                                             .arg(reason));
             return false;
         }
@@ -42930,13 +43232,13 @@ public:
         const auto staged_path = staging.filePath(QFileInfo(path).fileName());
         if (!m_nativeModelView->exportViewImage(staged_path)) {
             const auto reason = m_nativeModelView->lastError();
-            setError(reason.isEmpty() ? QStringLiteral("Native OCCT 3D export failed.")
-                                      : QStringLiteral("Native OCCT 3D export failed: %1")
+            setError(reason.isEmpty() ? QStringLiteral("The 3D image export failed.")
+                                      : QStringLiteral("The 3D image export failed: %1")
                                             .arg(reason));
             return false;
         }
         if (!QFileInfo::exists(staged_path) || QFileInfo(staged_path).size() <= 0) {
-            setError(QStringLiteral("Native OCCT 3D export did not produce an image."));
+            setError(QStringLiteral("The 3D image export produced no image."));
             return false;
         }
         const auto visibility_note = outputVisibilityNote();
@@ -42946,19 +43248,19 @@ public:
         }
         QFile stamped(staged_path);
         if (!stamped.open(QIODevice::ReadOnly)) {
-            setError(QStringLiteral("Native OCCT 3D export could not reopen its stamped image."));
+            setError(QStringLiteral("The 3D image export could not open the saved image."));
             return false;
         }
         const auto bytes = stamped.readAll();
         if (stamped.error() != QFileDevice::NoError || bytes.isEmpty()) {
-            setError(QStringLiteral("Native OCCT 3D export could not read its stamped image."));
+            setError(QStringLiteral("The 3D image export could not read the saved image."));
             return false;
         }
         try {
             QSaveFile destination(path);
             destination.setDirectWriteFallback(false);
             if (!destination.open(QIODevice::WriteOnly) || destination.write(bytes) != bytes.size()) {
-                setError(QStringLiteral("Native OCCT 3D export could not stage its stamped image."));
+                setError(QStringLiteral("The 3D image export could not prepare the saved image."));
                 return false;
             }
             QSaveFile sidecar(path + QStringLiteral(".fingerprint.json"));
@@ -42966,14 +43268,14 @@ public:
                 bytes, QCryptographicHash::Sha256).toHex().toStdString();
             if (!prepareOutputFingerprint(sidecar, path, m_document->snapshot(),
                                           QStringLiteral("native-3d-image"), image_digest) ||
-                !publishOutputFiles(QStringLiteral("Native 3D image"), {&sidecar, &destination})) return false;
+                !publishOutputFiles(QStringLiteral("3D image"), {&sidecar, &destination})) return false;
         } catch (const std::exception& error) {
-            setError(QStringLiteral("Native OCCT 3D output fingerprint failed: %1")
+            setError(QStringLiteral("The exported 3D image could not be verified: %1")
                          .arg(QString::fromUtf8(error.what())));
             return false;
         }
         clearError();
-        owner->statusBar()->showMessage(QStringLiteral("Native 3D image exported locally."), 5000);
+        owner->statusBar()->showMessage(QStringLiteral("3D image exported."), 5000);
         return true;
     }
 
@@ -43679,10 +43981,10 @@ public:
                 if (owner->testAttribute(Qt::WA_DontShowOnScreen)) dialog.setAttribute(Qt::WA_DontShowOnScreen);
                 dialog.setWindowTitle(QStringLiteral("Review PincSketch import"));dialog.resize(760,560);
                 auto* layout=new QVBoxLayout(&dialog);
-                auto* summary=new QLabel(QStringLiteral("%1 pages. Choose which native floor owns each page. Each page keeps separate calculation and interior layers. Area categories describe the source; they do not verify appraisal eligibility.").arg(choices.size()),&dialog);
+                auto* summary=new QLabel(QStringLiteral("%1 pages. Choose the floor for each page. Each page keeps separate calculation and interior layers. Area categories describe the source; they do not verify appraisal eligibility.").arg(choices.size()),&dialog);
                 summary->setTextFormat(Qt::PlainText);summary->setWordWrap(true);layout->addWidget(summary);
                 auto* pages=new QTableWidget(static_cast<int>(choices.size()),2,&dialog);
-                pages->setObjectName(QStringLiteral("pincImportPages"));pages->setHorizontalHeaderLabels({QStringLiteral("Source page"),QStringLiteral("Native floor")});
+                pages->setObjectName(QStringLiteral("pincImportPages"));pages->setHorizontalHeaderLabels({QStringLiteral("Source page"),QStringLiteral("Floor")});
                 pages->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
                 std::vector<QComboBox*> destinations;
                 for (std::size_t page=0;page<choices.size();++page) {
@@ -43945,7 +44247,7 @@ public:
             if (dialog.exec() != QDialog::Accepted) return std::nullopt;
             if (m_document != source_document || !modalContextUnchanged(modal) ||
                 !sourceEditAuthorityCurrent(authority))
-                throw std::invalid_argument("The project changed while reviewing design sets. Reopen Import DXF.");
+                throw std::invalid_argument("The drawing changed while you were reviewing design sets. Open Import DXF again.");
             row = 0;
             for (const auto& id : graph.context_ids) {
                 const auto* choice = table->item(row++, 2);
@@ -44294,7 +44596,7 @@ public:
                     current.revision() != source.revision() || current.history().size() != source.history().size() ||
                     current.entities() != source.entities() || current.assets() != source.assets() ||
                     !m_document->is_editable())
-                    throw std::invalid_argument("The document changed while reviewing DXF layers. Reopen Import DXF and review the current destinations.");
+                    throw std::invalid_argument("The drawing changed while you were reviewing DXF layers. Open Import DXF again and review where each layer goes.");
                 row = 0;
                 for (const auto& [name, count] : source_layer_counts) {
                     const auto* choice = table->item(row++, 2);
@@ -44518,7 +44820,7 @@ public:
                 if (candidate.type == kAnnotationEntityType) continue;
                 const auto identity = identities.find(candidate.id);
                 if (identity == identities.end())
-                    throw std::invalid_argument("DXF mapping produced an unsupported native entity.");
+                    throw std::invalid_argument("A DXF item could not be converted into a supported object.");
                 auto imported = candidate;
                 if (native_member(candidate)) {
                     if (can_recognize_boundary_entity_type(candidate.type))
@@ -44756,7 +45058,7 @@ public:
                 : Command{ApplyEntityChanges{source.revision(), std::move(changes),
                     std::move(imported_asset_changes), "Import DXF"}};
             if (phase_import && !phase_import->source_current())
-                throw std::invalid_argument("The project changed before importing design sets. Reopen Import DXF.");
+                throw std::invalid_argument("The drawing changed before the design sets were imported. Open Import DXF again.");
             const auto final_import_preview = Document::preview_command(source, command);
             // Include original-file receipts and transferred payloads. Native
             // storage shares actual equal content but retains all metadata rows.
@@ -44766,7 +45068,7 @@ public:
                 if (entity.type == "wall" || entity.type == "corner_window") native_import_ids.push_back(entity.id);
             validateImportedHostedGeometry(final_import_preview, native_import_ids, &catalog_operation_budget);
             if (phase_import && !phase_import->source_current())
-                throw std::invalid_argument("The project changed during design-set preparation. Reopen Import DXF.");
+                throw std::invalid_argument("The drawing changed while design sets were being prepared. Open Import DXF again.");
             // V9 carries explicit complete source membership, including owners
             // that were deliberately unregistered. Generic fresh-object
             // enrollment would place them into the previously selected set.
@@ -45502,22 +45804,24 @@ public:
                 revisions->clear();
                 for (const auto& revision : found->revisions) {
                     auto* item = new QListWidgetItem(
-                        QStringLiteral("%1  ·  %2  ·  %3")
-                            .arg(QString::fromStdString(revision.id),
-                                 QString::fromStdString(revision.date),
+                        QStringLiteral("%1  ·  %2")
+                            .arg(QString::fromStdString(revision.date),
                                  QString::fromStdString(revision.description)), revisions);
                     item->setData(Qt::UserRole, QString::fromStdString(revision.id));
                 }
                 callouts->clear();
                 for (const auto& callout : found->callouts) {
+                    // Show the target by sheet number, not its internal ID.
+                    const auto target = std::find_if(record->model.sheets().begin(), record->model.sheets().end(),
+                        [&](const auto& sheet) { return sheet.id == callout.target_sheet_id; });
+                    const auto target_text = target == record->model.sheets().end()
+                        ? QStringLiteral("missing sheet") : QString::fromStdString(target->number);
                     auto* item = new QListWidgetItem(
-                        QStringLiteral("%1  ·  %2  →  %3/%4  ·  (%5, %6 mm)")
-                            .arg(QString::fromStdString(callout.id),
-                                 QString::fromStdString(callout.label),
-                                 QString::fromStdString(callout.target_sheet_id),
-                                 QString::fromStdString(callout.target_viewport_id),
-                                 QString::number(callout.x_mm, 'g', 8),
-                                 QString::number(callout.y_mm, 'g', 8)), callouts);
+                        QStringLiteral("%1  →  %2").arg(QString::fromStdString(callout.label), target_text),
+                        callouts);
+                    item->setToolTip(QStringLiteral("At %1, %2 mm on this sheet")
+                                         .arg(QString::number(callout.x_mm, 'g', 8),
+                                              QString::number(callout.y_mm, 'g', 8)));
                     item->setData(Qt::UserRole, QString::fromStdString(callout.id));
                 }
                 status->setText(QStringLiteral("%1 viewports • %2 callouts • %3 schedule placements • selected for output")
@@ -45600,6 +45904,36 @@ public:
             fill_selector();
             return false;
         };
+        // Next free number after the selected sheet's: A-201 -> A-202 (keeps the
+        // prefix and digit width, skips numbers already used in the set).
+        const auto next_sheet_number = [&]() -> QString {
+            QStringList used;
+            QString pattern;
+            try {
+                if (const auto record = selectedSheetModel(authoringSnapshot(), selected_id())) {
+                    const auto id = selected_id().toStdString();
+                    for (const auto& sheet : record->model.sheets()) {
+                        used.push_back(QString::fromStdString(sheet.number));
+                        if (sheet.id == id) pattern = QString::fromStdString(sheet.number);
+                    }
+                    if (pattern.isEmpty() && !used.isEmpty()) pattern = used.back();
+                }
+            } catch (const std::exception&) {
+            }
+            if (pattern.isEmpty()) return QStringLiteral("A-201");
+            auto split = pattern.size();
+            while (split > 0 && pattern.at(split - 1).isDigit()) --split;
+            const auto prefix = pattern.left(split);
+            const auto digits = pattern.mid(split);
+            qlonglong value = digits.isEmpty() ? 0 : digits.toLongLong();
+            const auto width = static_cast<int>(digits.size());
+            for (int attempt = 0; attempt < 10000; ++attempt) {
+                ++value;
+                const auto candidate = prefix + QStringLiteral("%1").arg(value, width, 10, QLatin1Char('0'));
+                if (!used.contains(candidate, Qt::CaseInsensitive)) return candidate;
+            }
+            return pattern + QStringLiteral("-2");
+        };
         const auto move_selected = [&](int offset) {
             const auto id = selected_id();
             if (id.isEmpty() || !modalContextUnchanged(context)) {
@@ -45632,32 +45966,32 @@ public:
         QObject::connect(add, &QPushButton::clicked, &dialog, [&] {
             if (!sheet_context_current()) return;
             const auto nested_context = captureModalContext();
-            bool accepted = false;
-            const auto new_number = QInputDialog::getText(
-                &dialog, QStringLiteral("Add drawing sheet"), QStringLiteral("Sheet number:"),
-                QLineEdit::Normal, QStringLiteral("A-201"), &accepted).trimmed();
-            if (!accepted || new_number.isEmpty()) return;
-            const auto new_title = QInputDialog::getText(
-                &dialog, QStringLiteral("Add drawing sheet"), QStringLiteral("Sheet title:"),
-                QLineEdit::Normal, QStringLiteral("New sheet"), &accepted).trimmed();
-            if (!accepted || !nested_context_current(nested_context)) return;
+            std::vector<CompactFormField> fields{
+                {QStringLiteral("newSheetNumber"), QStringLiteral("Sheet number"), next_sheet_number()},
+                {QStringLiteral("newSheetTitle"), QStringLiteral("Title"), QStringLiteral("New sheet")}};
+            if (!runCompactForm(&dialog, QStringLiteral("addDrawingSheetForm"), QStringLiteral("Add drawing sheet"),
+                                QStringLiteral("Add sheet"), fields)) return;
+            const auto new_number = fields[0].value.trimmed();
+            const auto new_title = fields[1].value.trimmed();
+            if (new_number.isEmpty() || !nested_context_current(nested_context)) return;
             if (!createDrawingSheet(new_number, QStringLiteral("420"), QStringLiteral("297"), new_title).isEmpty()) {
                 context = captureModalContext();
                 fill_selector();
             }
         });
+        // Removals are undoable document commands, so they apply at once
+        // without a confirmation and say how to get the item back.
+        const auto report_removed = [&](const QString& what) {
+            status->setText(QStringLiteral("%1 removed. Use Undo to restore it.").arg(what));
+        };
         QObject::connect(remove, &QPushButton::clicked, &dialog, [&] {
             if (!sheet_context_current()) return;
-            const auto nested_context = captureModalContext();
             const auto id = selected_id();
             if (id.isEmpty()) return;
-            if (QMessageBox::question(&dialog, QStringLiteral("Remove drawing sheet"),
-                                      QStringLiteral("Remove the selected sheet? This can be undone.")) !=
-                QMessageBox::Yes) return;
-            if (!nested_context_current(nested_context)) return;
             if (removeDrawingSheet(id)) {
                 context = captureModalContext();
                 fill_selector();
+                report_removed(QStringLiteral("Sheet"));
             }
         });
 
@@ -45670,20 +46004,128 @@ public:
             if (found == record->model.sheets().end()) return std::nullopt;
             return *found;
         };
+        struct CalloutEntry {
+            QString label;
+            QString target_sheet_id;
+            QString target_viewport_id;
+            QString x_mm;
+            QString y_mm;
+        };
+        // One callout form: label plus target sheet and view picked by sheet
+        // number/title and view name (no raw IDs). The paper position starts at
+        // a free default and sits in the collapsed Advanced section.
+        const auto run_callout_form = [&](const QString& title, const QString& accept_text,
+                                          const SheetViewModel& model, const DrawingSheet& sheet,
+                                          CalloutEntry entry) -> std::optional<CalloutEntry> {
+            QDialog form_dialog(&dialog);
+            styleDialog(form_dialog);
+            form_dialog.setObjectName(QStringLiteral("sheetCalloutForm"));
+            form_dialog.setWindowTitle(title);
+            form_dialog.setModal(true);
+            auto* layout = new QVBoxLayout(&form_dialog);
+            auto* form = new QFormLayout();
+            auto* label_edit = new QLineEdit(entry.label, &form_dialog);
+            label_edit->setObjectName(QStringLiteral("calloutLabel"));
+            auto* target_sheet = new QComboBox(&form_dialog);
+            target_sheet->setObjectName(QStringLiteral("calloutTargetSheet"));
+            auto* target_view = new QComboBox(&form_dialog);
+            target_view->setObjectName(QStringLiteral("calloutTargetView"));
+            form->addRow(QStringLiteral("Label"), label_edit);
+            form->addRow(QStringLiteral("Target sheet"), target_sheet);
+            form->addRow(QStringLiteral("Target view"), target_view);
+            layout->addLayout(form);
+            auto* advanced = new AdvancedSection(QStringLiteral("sheetCalloutForm"), &form_dialog,
+                                                 QStringLiteral("Position on sheet"));
+            auto* x_edit = new QLineEdit(entry.x_mm, advanced->body());
+            auto* y_edit = new QLineEdit(entry.y_mm, advanced->body());
+            x_edit->setObjectName(QStringLiteral("calloutX"));
+            y_edit->setObjectName(QStringLiteral("calloutY"));
+            advanced->form()->addRow(QStringLiteral("X (mm)"), x_edit);
+            advanced->form()->addRow(QStringLiteral("Y (mm)"), y_edit);
+            layout->addWidget(advanced);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &form_dialog);
+            buttons->setObjectName(QStringLiteral("sheetCalloutFormButtons"));
+            auto* accept_button = buttons->button(QDialogButtonBox::Ok);
+            accept_button->setText(accept_text);
+            accept_button->setDefault(true);
+            QObject::connect(buttons, &QDialogButtonBox::accepted, &form_dialog, &QDialog::accept);
+            QObject::connect(buttons, &QDialogButtonBox::rejected, &form_dialog, &QDialog::reject);
+            layout->addWidget(buttons);
+
+            const auto view_name = [&](const std::string& view_id) {
+                const auto view = std::find_if(model.views().begin(), model.views().end(),
+                    [&](const auto& candidate) { return candidate.id == view_id; });
+                return view == model.views().end() || view->name.empty()
+                    ? QStringLiteral("Untitled view") : QString::fromStdString(view->name);
+            };
+            for (const auto& candidate_id : model.sheet_order()) {
+                if (candidate_id == sheet.id) continue;
+                const auto candidate = std::find_if(model.sheets().begin(), model.sheets().end(),
+                    [&](const auto& value) { return value.id == candidate_id; });
+                if (candidate == model.sheets().end()) continue;
+                const bool current_target = QString::fromStdString(candidate->id) == entry.target_sheet_id;
+                if (candidate->viewports.empty() && !current_target) continue;
+                auto text = QString::fromStdString(candidate->number);
+                if (!candidate->title_block.title.empty())
+                    text += QStringLiteral("  ·  ") + QString::fromStdString(candidate->title_block.title);
+                target_sheet->addItem(text, QString::fromStdString(candidate->id));
+            }
+            // Keep an existing target that is no longer listed so editing the
+            // label alone never retargets the callout.
+            if (!entry.target_sheet_id.isEmpty() && target_sheet->findData(entry.target_sheet_id) < 0)
+                target_sheet->insertItem(0, QStringLiteral("Current target (not found)"), entry.target_sheet_id);
+            const auto fill_views = [&] {
+                target_view->clear();
+                const auto wanted = target_sheet->currentData().toString();
+                const auto found = std::find_if(model.sheets().begin(), model.sheets().end(),
+                    [&](const auto& value) { return QString::fromStdString(value.id) == wanted; });
+                if (found != model.sheets().end()) {
+                    for (const auto& viewport : found->viewports)
+                        target_view->addItem(QStringLiteral("%1  ·  1:%2")
+                                                 .arg(view_name(viewport.view_id))
+                                                 .arg(viewport.scale_denominator, 0, 'g', 6),
+                                             QString::fromStdString(viewport.id));
+                }
+                if (wanted == entry.target_sheet_id && !entry.target_viewport_id.isEmpty()) {
+                    auto index = target_view->findData(entry.target_viewport_id);
+                    if (index < 0) {
+                        target_view->insertItem(0, QStringLiteral("Current view (not found)"),
+                                                entry.target_viewport_id);
+                        index = 0;
+                    }
+                    target_view->setCurrentIndex(index);
+                }
+                accept_button->setEnabled(target_view->count() > 0);
+            };
+            const auto initial_sheet = target_sheet->findData(entry.target_sheet_id);
+            target_sheet->setCurrentIndex(initial_sheet >= 0 ? initial_sheet : 0);
+            fill_views();
+            QObject::connect(target_sheet, &QComboBox::currentIndexChanged, &form_dialog,
+                             [&](int) { fill_views(); });
+            label_edit->setFocus();
+            label_edit->selectAll();
+            if (form_dialog.exec() != QDialog::Accepted) return std::nullopt;
+            entry.label = label_edit->text();
+            entry.target_sheet_id = target_sheet->currentData().toString();
+            entry.target_viewport_id = target_view->currentData().toString();
+            entry.x_mm = x_edit->text();
+            entry.y_mm = y_edit->text();
+            return entry;
+        };
         QObject::connect(add_revision, &QPushButton::clicked, &dialog, [&] {
             if (!sheet_context_current()) return;
             const auto nested_context = captureModalContext();
             const auto sheet_id = selected_id();
             if (selected_id().isEmpty()) return;
-            bool accepted = false;
-            const auto date = QInputDialog::getText(&dialog, QStringLiteral("Add revision"),
-                                                    QStringLiteral("Date or issue identifier:"),
-                                                    QLineEdit::Normal, issue_date->text(), &accepted);
-            if (!accepted) return;
-            const auto description = QInputDialog::getText(&dialog, QStringLiteral("Add revision"),
-                                                           QStringLiteral("Description:"),
-                                                           QLineEdit::Normal, {}, &accepted);
-            if (!accepted || !nested_context_current(nested_context)) return;
+            std::vector<CompactFormField> fields{
+                {QStringLiteral("revisionDate"), QStringLiteral("Date or issue"),
+                 QDate::currentDate().toString(Qt::ISODate)},
+                {QStringLiteral("revisionDescription"), QStringLiteral("Description"), QString{}}};
+            if (!runCompactForm(&dialog, QStringLiteral("sheetRevisionForm"), QStringLiteral("Add revision"),
+                                QStringLiteral("Add revision"), fields) ||
+                !nested_context_current(nested_context)) return;
+            const auto& date = fields[0].value;
+            const auto& description = fields[1].value;
             if (!addSheetRevision(sheet_id, date, description).isEmpty()) {
                 context = captureModalContext();
                 fill_selector();
@@ -45701,17 +46143,16 @@ public:
             const auto found = std::find_if(sheet->revisions.begin(), sheet->revisions.end(),
                 [&](const auto& value) { return QString::fromStdString(value.id) == revision_id; });
             if (found == sheet->revisions.end()) return;
-            bool accepted = false;
-            const auto date = QInputDialog::getText(&dialog, QStringLiteral("Edit revision"),
-                                                    QStringLiteral("Date or issue identifier:"),
-                                                    QLineEdit::Normal, QString::fromStdString(found->date),
-                                                    &accepted);
-            if (!accepted) return;
-            const auto description = QInputDialog::getText(&dialog, QStringLiteral("Edit revision"),
-                                                           QStringLiteral("Description:"),
-                                                           QLineEdit::Normal, QString::fromStdString(found->description),
-                                                           &accepted);
-            if (!accepted || !nested_context_current(nested_context)) return;
+            std::vector<CompactFormField> fields{
+                {QStringLiteral("revisionDate"), QStringLiteral("Date or issue"),
+                 QString::fromStdString(found->date)},
+                {QStringLiteral("revisionDescription"), QStringLiteral("Description"),
+                 QString::fromStdString(found->description)}};
+            if (!runCompactForm(&dialog, QStringLiteral("sheetRevisionForm"), QStringLiteral("Edit revision"),
+                                QStringLiteral("Save revision"), fields) ||
+                !nested_context_current(nested_context)) return;
+            const auto& date = fields[0].value;
+            const auto& description = fields[1].value;
             if (editSheetRevision(sheet_id, revision_id, date, description)) {
                 context = captureModalContext();
                 fill_selector();
@@ -45724,13 +46165,11 @@ public:
             const auto* item = revisions->currentItem();
             if (!item || selected_id().isEmpty()) return;
             const auto revision_id = item->data(Qt::UserRole).toString();
-            if (QMessageBox::question(&dialog, QStringLiteral("Remove revision"),
-                                      QStringLiteral("Remove the selected revision? This can be undone.")) !=
-                QMessageBox::Yes) return;
             if (!nested_context_current(nested_context)) return;
             if (removeSheetRevision(sheet_id, revision_id)) {
                 context = captureModalContext();
                 fill_selector();
+                report_removed(QStringLiteral("Revision"));
             }
         });
         QObject::connect(add_callout, &QPushButton::clicked, &dialog, [&] {
@@ -45745,50 +46184,29 @@ public:
                 setError(QStringLiteral("Add sheet callout: create a second drawing sheet first."));
                 return;
             }
-            QStringList target_sheets;
-            std::vector<std::string> target_sheet_ids;
-            for (const auto& candidate : record->model.sheets()) {
-                if (candidate.id == sheet->id) continue;
-                target_sheet_ids.push_back(candidate.id);
-                target_sheets.push_back(QStringLiteral("%1. %2  ·  %3")
-                                            .arg(static_cast<qulonglong>(target_sheet_ids.size()))
-                                            .arg(QString::fromStdString(candidate.number),
-                                                 QString::fromStdString(candidate.id)));
+            if (std::none_of(record->model.sheets().begin(), record->model.sheets().end(),
+                    [&](const auto& candidate) { return candidate.id != sheet->id && !candidate.viewports.empty(); })) {
+                setError(QStringLiteral("Add sheet callout: place a view on another drawing sheet first."));
+                return;
             }
-            bool accepted = false;
-            const auto label = QInputDialog::getText(&dialog, QStringLiteral("Add callout"),
-                                                     QStringLiteral("Label:"), QLineEdit::Normal,
-                                                     QStringLiteral("Section"), &accepted);
-            if (!accepted) return;
-            const auto target_choice = QInputDialog::getItem(&dialog, QStringLiteral("Add callout"),
-                                                             QStringLiteral("Target sheet:"), target_sheets,
-                                                             0, false, &accepted);
-            if (!accepted) return;
-            // The displayed choices have an explicit ID mapping. Suffix
-            // matching would confuse valid local IDs such as b and a-b.
-            const auto target_index = target_sheets.indexOf(target_choice);
-            if (target_index < 0) return;
-            const auto& target_id = target_sheet_ids.at(static_cast<std::size_t>(target_index));
-            const auto target_pos = std::find_if(record->model.sheets().begin(), record->model.sheets().end(),
-                [&](const auto& candidate) { return candidate.id == target_id; });
-            if (target_pos == record->model.sheets().end() || target_pos->viewports.empty()) return;
-            QStringList target_viewports;
-            for (const auto& viewport : target_pos->viewports)
-                target_viewports.push_back(QString::fromStdString(viewport.id));
-            const auto viewport = QInputDialog::getItem(&dialog, QStringLiteral("Add callout"),
-                                                        QStringLiteral("Target viewport:"), target_viewports,
-                                                        0, false, &accepted);
-            if (!accepted) return;
-            const auto x = QInputDialog::getText(&dialog, QStringLiteral("Add callout"),
-                                                 QStringLiteral("X on sheet (mm):"), QLineEdit::Normal,
-                                                 QStringLiteral("20"), &accepted);
-            if (!accepted) return;
-            const auto y = QInputDialog::getText(&dialog, QStringLiteral("Add callout"),
-                                                 QStringLiteral("Y on sheet (mm):"), QLineEdit::Normal,
-                                                 QStringLiteral("20"), &accepted);
-            if (!accepted || !nested_context_current(nested_context)) return;
-            if (!addSheetCallout(sheet_id, label, QString::fromStdString(target_pos->id),
-                                 viewport, x, y).isEmpty()) {
+            // Default to a free spot near the sheet's top-left corner.
+            const auto taken = [&](double x, double y) {
+                return std::any_of(sheet->callouts.begin(), sheet->callouts.end(), [&](const auto& existing) {
+                    return std::abs(existing.x_mm - x) < 10.0 && std::abs(existing.y_mm - y) < 10.0;
+                });
+            };
+            double x = 20.0, y = 20.0;
+            for (int attempt = 0; attempt < 400 && taken(x, y); ++attempt) {
+                y += 15.0;
+                if (y > sheet->height_mm - 20.0) { y = 20.0; x += 40.0; }
+                if (x > sheet->width_mm - 20.0) { x = 20.0; y = 20.0; break; }
+            }
+            const auto entry = run_callout_form(QStringLiteral("Add callout"), QStringLiteral("Add callout"),
+                record->model, *sheet,
+                {QStringLiteral("Section"), {}, {}, QString::number(x, 'g', 12), QString::number(y, 'g', 12)});
+            if (!entry || !nested_context_current(nested_context)) return;
+            if (!addSheetCallout(sheet_id, entry->label, entry->target_sheet_id,
+                                 entry->target_viewport_id, entry->x_mm, entry->y_mm).isEmpty()) {
                 context = captureModalContext();
                 fill_selector();
             }
@@ -45806,31 +46224,14 @@ public:
             const auto found = std::find_if(sheet->callouts.begin(), sheet->callouts.end(),
                 [&](const auto& value) { return QString::fromStdString(value.id) == callout_id; });
             if (found == sheet->callouts.end()) return;
-            bool accepted = false;
-            const auto label = QInputDialog::getText(&dialog, QStringLiteral("Edit callout"),
-                                                     QStringLiteral("Label:"), QLineEdit::Normal,
-                                                     QString::fromStdString(found->label), &accepted);
-            if (!accepted) return;
-            const auto target_sheet_id = QInputDialog::getText(&dialog, QStringLiteral("Edit callout"),
-                                                               QStringLiteral("Target sheet ID:"),
-                                                               QLineEdit::Normal,
-                                                               QString::fromStdString(found->target_sheet_id), &accepted);
-            if (!accepted) return;
-            const auto target_viewport_id = QInputDialog::getText(&dialog, QStringLiteral("Edit callout"),
-                                                                  QStringLiteral("Target viewport ID:"),
-                                                                  QLineEdit::Normal,
-                                                                  QString::fromStdString(found->target_viewport_id), &accepted);
-            if (!accepted) return;
-            const auto x = QInputDialog::getText(&dialog, QStringLiteral("Edit callout"),
-                                                 QStringLiteral("X on sheet (mm):"), QLineEdit::Normal,
-                                                 QString::number(found->x_mm, 'g', 12), &accepted);
-            if (!accepted) return;
-            const auto y = QInputDialog::getText(&dialog, QStringLiteral("Edit callout"),
-                                                 QStringLiteral("Y on sheet (mm):"), QLineEdit::Normal,
-                                                 QString::number(found->y_mm, 'g', 12), &accepted);
-            if (!accepted || !nested_context_current(nested_context)) return;
-            if (editSheetCallout(sheet_id, callout_id, label,
-                                 target_sheet_id, target_viewport_id, x, y)) {
+            const auto entry = run_callout_form(QStringLiteral("Edit callout"), QStringLiteral("Save callout"),
+                record->model, *sheet,
+                {QString::fromStdString(found->label), QString::fromStdString(found->target_sheet_id),
+                 QString::fromStdString(found->target_viewport_id),
+                 QString::number(found->x_mm, 'g', 12), QString::number(found->y_mm, 'g', 12)});
+            if (!entry || !nested_context_current(nested_context)) return;
+            if (editSheetCallout(sheet_id, callout_id, entry->label,
+                                 entry->target_sheet_id, entry->target_viewport_id, entry->x_mm, entry->y_mm)) {
                 context = captureModalContext();
                 fill_selector();
             }
@@ -45842,13 +46243,11 @@ public:
             const auto* item = callouts->currentItem();
             if (!item || selected_id().isEmpty()) return;
             const auto callout_id = item->data(Qt::UserRole).toString();
-            if (QMessageBox::question(&dialog, QStringLiteral("Remove callout"),
-                                      QStringLiteral("Remove the selected callout? This can be undone.")) !=
-                QMessageBox::Yes) return;
             if (!nested_context_current(nested_context)) return;
             if (removeSheetCallout(sheet_id, callout_id)) {
                 context = captureModalContext();
                 fill_selector();
+                report_removed(QStringLiteral("Callout"));
             }
         });
         try {
@@ -46014,7 +46413,7 @@ public:
             QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
                 try {
                     if (!sourceEditAuthorityCurrent(authority))
-                        throw std::invalid_argument("The project or active view changed. Reopen Add view dimension.");
+                        throw std::invalid_argument("The drawing or active view changed while Add view dimension was open. Open it again.");
                     auto candidate = candidate_view();
                     const auto resolution = resolve_section_dimension(source, dimension_view(candidate), candidate.overlays.back());
                     if (!resolution.dimension) throw std::invalid_argument(resolution.diagnostic);
@@ -46218,10 +46617,10 @@ public:
         QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
             try {
                 if(active_owner!=m_active_named_view_owner || active_view!=m_active_named_view) {
-                    error->setText(QStringLiteral("The selected saved view changed. Reopen named views."));return;
+                    error->setText(QStringLiteral("The selected saved view changed while Named views was open. Open it again."));return;
                 }
                 if (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(source_authority)) {
-                    error->setText(QStringLiteral("The project or active view changed. Reopen saved views."));
+                    error->setText(QStringLiteral("The drawing or active view changed while Saved views was open. Open it again."));
                     return;
                 }
                 const auto scalar = [](const QString& text) {
@@ -46402,11 +46801,22 @@ public:
             enabled->setObjectName(QStringLiteral("appraisalSetupEnabled"));
             enabled->setChecked(workflow == "appraisal" || !property->properties.contains("appraisal_policy"));
             layout->addWidget(enabled);
-            auto* note = new QLabel(QStringLiteral("Declare the property policy and measurement basis. Floor and area facts are edited from each area. "
-                "ANSI Z765-2021 is an opt-in evidence profile for single-family homes; results depend on complete observations and geometry."), &dialog);
+            // A property with no property-level declaration yet starts from the
+            // common residential case so appraisal can be enabled with one Save.
+            // The defaults stay visible and changeable; a value the user sets
+            // back to Undeclared still blocks enabling. Area and floor facts are
+            // never defaulted here; missing facts keep withholding totals.
+            const bool undeclared_property = !policy.is_object() ||
+                (!policy.contains("policy_kind") && !policy.contains("property_kind") && !policy.contains("measurement_basis"));
+            auto* note = new QLabel(undeclared_property
+                ? QStringLiteral("Residential defaults are selected. Change any value that does not match this property. "
+                    "Floor and area facts are recorded on each area with Edit facts.")
+                : QStringLiteral("These declarations apply to every area of this property. "
+                    "Floor and area facts are recorded on each area with Edit facts."), &dialog);
+            note->setObjectName(QStringLiteral("appraisalSetupNote"));
             note->setWordWrap(true);layout->addWidget(note);
-            auto* form = new QFormLayout;layout->addLayout(form);
-            const auto combo = [&](const char* name, const QString& title, const char* key,
+            auto* form = new QFormLayout;form->setRowWrapPolicy(QFormLayout::WrapLongRows);layout->addLayout(form);
+            const auto combo = [&](const char* name, const QString& title, const char* key, const char* fallback,
                 std::initializer_list<std::pair<const char*,const char*>> values) {
                 auto* box = new QComboBox(&dialog);box->setObjectName(QString::fromLatin1(name));
                 box->addItem(QStringLiteral("Undeclared"),QString{});
@@ -46416,17 +46826,18 @@ public:
                     if (value != policy.end() && value->is_string()) {
                         const auto index = box->findData(QString::fromStdString(value->get<std::string>()));
                         if (index >= 0) box->setCurrentIndex(index);
-                        else { const auto token = QString::fromStdString(value->get<std::string>()); box->addItem(QStringLiteral("Unsupported: %1").arg(token), token); box->setCurrentIndex(box->count()-1); }
+                        else { const auto token = QString::fromStdString(value->get<std::string>()); box->addItem(QStringLiteral("Unrecognized value (keep)"), token); box->setCurrentIndex(box->count()-1); box->setToolTip(QStringLiteral("Recorded value: %1").arg(token)); }
                     }
                 }
+                if (undeclared_property) box->setCurrentIndex(std::max(0, box->findData(QString::fromLatin1(fallback))));
                 form->addRow(title,box);return box;
             };
-            auto* kind = combo("appraisalSetupPolicy",QStringLiteral("Policy"),"policy_kind",
+            auto* kind = combo("appraisalSetupPolicy",QStringLiteral("Policy"),"policy_kind","residential_declared",
                 {{"Residential declared facts","residential_declared"},{"Light commercial declared facts","light_commercial_declared"},{"ANSI Z765-2021 evidence profile","ansi_z765_2021"}});
-            auto* property_kind = combo("appraisalSetupPropertyKind",QStringLiteral("Property kind"),"property_kind",
+            auto* property_kind = combo("appraisalSetupPropertyKind",QStringLiteral("Property kind"),"property_kind","detached_single_family",
                 {{"Detached single-family","detached_single_family"},{"Attached single-family","attached_single_family"},
                  {"Manufactured home","manufactured_home"},{"Apartment unit","apartment_unit"},{"Multifamily","multifamily"},{"Light commercial","light_commercial"}});
-            auto* basis = combo("appraisalSetupMeasurementBasis",QStringLiteral("Measurement basis"),"measurement_basis",
+            auto* basis = combo("appraisalSetupMeasurementBasis",QStringLiteral("Measurement basis"),"measurement_basis","exterior",
                 {{"Exterior","exterior"},{"Interior perimeter","interior_perimeter"},{"Plans","plans"},{"Unknown","unknown"}});
             auto* precision = new QSpinBox(&dialog);precision->setObjectName(QStringLiteral("appraisalSetupPrecision"));precision->setRange(0,6);
             unsigned initial_precision = 2;
@@ -46436,33 +46847,45 @@ public:
             try { auto stored = property->properties; stored.erase("appraisal_policy");
                 initial_precision = appraisal_display_profile(stored).decimal_places; } catch (const std::exception&) {}
             unsigned retained_precision = initial_precision;
+            // Setup is the one place that sets appraisal area precision; the
+            // Area display command opens this dialog in Appraisal.
+            precision->setToolTip(QStringLiteral("Applies to GLA, area labels, schedules and reports."));
             precision->setValue(static_cast<int>(initial_precision));form->addRow(QStringLiteral("Area decimal places"),precision);
-            const auto measurement = ansi_measurement_controls(&dialog, *layout, policy, basis);
+            // ANSI evidence that withholds totals stays in view when ANSI is
+            // chosen; the calculation rule and free-text notes are expert
+            // settings at documented defaults inside Advanced.
+            auto* advanced = new AdvancedSection(QStringLiteral("appraisalSetupDialog"), &dialog);
+            const auto measurement = ansi_measurement_controls(&dialog, *layout, policy, basis, advanced->form());
             auto* rule_version = new QComboBox(&dialog);
             rule_version->setObjectName(QStringLiteral("appraisalSetupRuleVersion"));
             rule_version->addItem(QStringLiteral("V2 — countable finished-room area"), 2);
             rule_version->addItem(QStringLiteral("V1 — legacy gross-room interpretation"), 1);
             if (policy.value("policy_kind", json()) == "ansi_z765_2021")
                 rule_version->setCurrentIndex(std::max(0, rule_version->findData(policy.value("version", 1))));
-            form->addRow(QStringLiteral("ANSI calculation rule"), rule_version);
+            advanced->form()->setRowWrapPolicy(QFormLayout::WrapLongRows);
+            advanced->form()->addRow(QStringLiteral("ANSI calculation rule"), rule_version);
             auto* rule_note = new QLabel(QStringLiteral("Changing V1 to V2 recalculates sloped rooms only after you reconfirm each complete-room observation in Edit facts. Cancel keeps the recorded rule. Final ANSI validation remains pending."), &dialog);
-            rule_note->setWordWrap(true); layout->addWidget(rule_note);
+            rule_note->setWordWrap(true); advanced->form()->addRow(rule_note);
+            layout->addWidget(advanced);
+            // A recorded legacy rule is part of the current result; keep it in view.
+            if (rule_version->currentData().toInt() == 1 && policy.value("policy_kind", json()) == "ansi_z765_2021") advanced->reveal();
             const auto update_policy = [&] {
                 const bool ansi = kind->currentData().toString() == QStringLiteral("ansi_z765_2021");
-                form->setRowVisible(rule_version, ansi); rule_note->setVisible(ansi);
+                advanced->setVisible(ansi);
                 measurement.group->setVisible(ansi);
                 // Show the precision that will actually be displayed.
                 if (ansi && precision->isEnabled()) {
                     retained_precision = static_cast<unsigned>(precision->value()); precision->setValue(0);
                 } else if (!ansi && !precision->isEnabled()) precision->setValue(static_cast<int>(retained_precision));
                 precision->setEnabled(!ansi);
-                precision->setToolTip(ansi ? QStringLiteral("ANSI totals use whole square feet; dimensions use tenths of a foot.") : QString{});
+                precision->setToolTip(ansi ? QStringLiteral("ANSI totals use whole square feet; dimensions use tenths of a foot.")
+                                           : QStringLiteral("Applies to GLA, area labels, schedules and reports."));
             };
             QObject::connect(kind, &QComboBox::currentIndexChanged, &dialog, update_policy); update_policy();
-            // Missing declarations remain explicit; opening Setup never infers observed facts.
+            // Opening Setup never infers observed floor or area facts.
             const auto update_enabled = [=](bool value) {
                 kind->setEnabled(value);property_kind->setEnabled(value);basis->setEnabled(value);
-                rule_version->setEnabled(value);
+                rule_version->setEnabled(value);measurement.group->setEnabled(value);measurement.limitations->setEnabled(value);
             };
             QObject::connect(enabled,&QCheckBox::toggled,&dialog,update_enabled);
             auto* error = new QLabel(&dialog);error->setWordWrap(true);layout->addWidget(error);
@@ -46556,7 +46979,22 @@ public:
             }
             updated.properties["calculation_workflow"] = workflow;
             if (appraisal_policy) updated.properties["appraisal_policy"] = *appraisal_policy;
-            if (decimal_places) {
+            if (decimal_places && current == workflow && workflow == "appraisal" &&
+                updated.properties.contains("calculation_profile") && updated.properties.at("calculation_profile").is_object()) {
+                // Appraisal precision (Setup is authoritative): change only the
+                // display decimals and advance the display revision, keeping
+                // fixed rules and any extension metadata exactly as stored.
+                const auto stored = read_appraisal_display_configuration(updated.properties);
+                const auto& configuration = updated.properties.at("calculation_profile");
+                const bool same = configuration.contains("decimal_places") && configuration.at("decimal_places").is_number_unsigned() &&
+                    configuration.at("decimal_places").get<unsigned>() == *decimal_places;
+                if (!same) {
+                    if (stored.version == std::numeric_limits<unsigned>::max())
+                        throw std::invalid_argument("Area display revision cannot advance further.");
+                    updated.properties["calculation_profile"]["decimal_places"] = *decimal_places;
+                    updated.properties["calculation_profile"]["version"] = stored.version + 1;
+                }
+            } else if (decimal_places) {
                 auto profile = read_calculation_profile(updated.properties);
                 profile.decimal_places = *decimal_places;
                 updated.properties["calculation_profile"] = calculation_profile_json(profile);
@@ -46972,7 +47410,8 @@ public:
         else if (page == m_inline_text_library) wanted = QStringLiteral("@labels");
         else if (current == QStringLiteral("@area-classes") || current == QStringLiteral("@labels")) wanted = QString{};
         if (wanted == current) return;
-        const QSignalBlocker blocker(m_symbol_category);
+        // applyLibraryCategory keeps this page and updates the views that
+        // depend on the category (for example the walls and openings tools).
         m_symbol_category->setCurrentIndex(std::max(0, m_symbol_category->findData(wanted)));
     }
 
@@ -47491,8 +47930,8 @@ public:
             : QStringLiteral("Casement swing angle around its jamb."));
         m_opening_draw_width->setText(QString::fromStdString(json(width).dump()) + QStringLiteral(" m"));
         m_corner_draw_second_width->setText(QString::fromStdString(json(width).dump()) + QStringLiteral(" m"));
-        m_opening_draw_height->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("2.1 m"));
-        m_opening_draw_sill->setText(window ? QStringLiteral("0.9 m") : QStringLiteral("0 m"));
+        m_opening_draw_height->setText(metreFieldText(window ? m_preferences.window_height_m : m_preferences.door_height_m));
+        m_opening_draw_sill->setText(window ? metreFieldText(m_preferences.window_sill_m) : QStringLiteral("0 m"));
         auto* opening_form = qobject_cast<QFormLayout*>(m_opening_draw_fields->layout());
         opening_form->setRowVisible(m_corner_draw_second_width, m_pending_opening_kind == QStringLiteral("corner_window"));
         if (auto* label = qobject_cast<QLabel*>(opening_form->labelForField(m_opening_draw_height)))
@@ -47648,7 +48087,7 @@ public:
         const HostedLibraryDragInput& input, Vec2 displayed_point,
         const std::map<std::string,Entity,std::less<>>& fresh_hosts={}) {
         if (!input.source || !std::isfinite(input.corner_pick_radius) || input.corner_pick_radius <= 0.0)
-            throw std::invalid_argument("Corner-window placement needs a captured source and finite pick radius.");
+            throw std::invalid_argument("The corner window cannot be placed in this view or at this zoom level.");
         struct Endpoint {
             Wall wall;
             bool at_start;
@@ -48116,7 +48555,7 @@ public:
             input.plan_frame=site ? std::nullopt : m_plan_opening_frame;
             if (input.plan_frame) {
                 input.architectural_context=organize_project(*input.source).drawing_context(input.layer_id);
-                if (!input.architectural_context) throw std::invalid_argument("The captured opening layer is unavailable.");
+                if (!input.architectural_context) throw std::invalid_argument("The layer for this opening is no longer available.");
             }
             if (site) input.site_frames=m_site_opening_frames;
             input.width=parse_quantity(m_opening_draw_width->text().toStdString(),unit).metres;
@@ -48519,7 +48958,7 @@ public:
         const auto require_creator_source = [&] {
             if (!modalContextUnchanged(expected_context) || m_workspace != expected_workspace ||
                 document_snapshot_digest(authoringSnapshot()) != expected_digest)
-                throw std::invalid_argument("The project or drawing context changed. Reopen Add dimensions.");
+                throw std::invalid_argument("The drawing or active layer changed while Add dimensions was open. Open it again.");
         };
         const auto accept_creator_source = [&] {
             expected_context = captureModalContext();
@@ -48997,6 +49436,68 @@ public:
         }
     }
 
+    // Edit > Preferences. Saved preferences are the startup defaults; a
+    // workspace profile applied later overrides units, grid, snap, overview
+    // and theme for the session. Imperial style, display precision, angle
+    // snap and "reopen last project" are stored but have no consumer yet.
+    [[nodiscard]] const Preferences& preferences() const noexcept { return m_preferences; }
+
+    [[nodiscard]] WorkspaceAutosaveScheduler autosaveScheduler() const {
+        // A new interval takes effect when the next recovery session starts.
+        const auto maximum = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::duration<double, std::ratio<60>>(m_preferences.autosave_interval_minutes));
+        return WorkspaceAutosaveScheduler(std::chrono::seconds(2),
+                                          std::max<std::chrono::milliseconds>(maximum, std::chrono::seconds(2)));
+    }
+
+    [[nodiscard]] static QString metreFieldText(double metres) {
+        return QString::number(metres, 'g', 12) + QStringLiteral(" m");
+    }
+
+    void loadSavedPreferences() {
+        QSettings settings;
+        // Nothing saved yet: the shipped defaults are already in effect.
+        if (!settings.childGroups().contains(QStringLiteral("preferences"))) return;
+        applyPreferences(Preferences::load(settings));
+    }
+
+    void applyPreferences(const Preferences& preferences) {
+        const auto previous = m_preferences;
+        m_preferences = preferences;
+        if (preferences.metric() != m_metric_units) setMetricUnits(preferences.metric());
+        const auto theme = resolve_workspace_theme(preferences.theme, QGuiApplication::styleHints()->colorScheme());
+        if (theme != m_theme) applyTheme(theme);
+        if (m_grid_button) m_grid_button->setChecked(preferences.grid_enabled);
+        if (m_snap_button) m_snap_button->setChecked(preferences.snap_enabled);
+        if (m_overview_button) m_overview_button->setChecked(preferences.overview_map_enabled);
+        if (m_grid_enabled != preferences.grid_enabled) setGrid(preferences.grid_enabled);
+        if (m_snap_enabled != preferences.snap_enabled) setSnap(preferences.snap_enabled);
+        if (m_overview_map_enabled != preferences.overview_map_enabled) setOverviewMap(preferences.overview_map_enabled);
+        // Drawing defaults: only a changed default rewrites its field, so a
+        // value already typed into the drawing panel is otherwise kept.
+        if (m_wall_draw_thickness && preferences.wall_thickness_m != previous.wall_thickness_m)
+            m_wall_draw_thickness->setText(format_length(preferences.wall_thickness_m, m_metric_units));
+        if (m_wall_draw_height && preferences.wall_height_m != previous.wall_height_m)
+            m_wall_draw_height->setText(format_length(preferences.wall_height_m, m_metric_units));
+        if (m_pending_opening_kind.isEmpty() && m_opening_draw_width && m_opening_draw_height &&
+            (preferences.door_width_m != previous.door_width_m || preferences.door_height_m != previous.door_height_m)) {
+            m_opening_draw_width->setText(metreFieldText(preferences.door_width_m));
+            m_opening_draw_height->setText(metreFieldText(preferences.door_height_m));
+        }
+    }
+
+    void showPreferences() {
+        PreferencesDialog dialog(m_preferences, owner);
+        styleDialog(dialog);
+        if (dialog.exec() != QDialog::Accepted) return;
+        const auto chosen = dialog.result();
+        QSettings settings;
+        chosen.save(settings);
+        settings.sync();
+        applyPreferences(chosen);
+        owner->statusBar()->showMessage(QStringLiteral("Preferences saved."), 4000);
+    }
+
     void showShortcutSettings() {
         QDialog dialog(owner);
         styleDialog(dialog);
@@ -49148,7 +49649,7 @@ public:
         QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [&] {
             if (m_selected_id != selected_id || m_document->revision() != revision ||
                 m_document->snapshot().document_id() != document_id) {
-                status->setText(QStringLiteral("The selection or document changed. Reopen the keypad.")); return;
+                status->setText(QStringLiteral("The selection or drawing changed while the keypad was open. Open the keypad again.")); return;
             }
             const auto index = target->currentData().toInt();
             const auto entity = selectedEntity();
@@ -49960,6 +50461,7 @@ public:
         std::vector<Command> commands{
             {QStringLiteral("Open user guide"), [this] { showUserGuide(); }},
             {QStringLiteral("Customize keyboard shortcuts"), [this] { showShortcutSettings(); }},
+            {QStringLiteral("Preferences"), [this] { showPreferences(); }},
             {QStringLiteral("Measurement keypad"), [this] { showMeasurementKeypad(); }},
             {QStringLiteral("Import DISTO reading"), [this] { showDistoImport(); }},
             {QStringLiteral("New project"), [this] { createNewProject(); }},
@@ -50396,7 +50898,7 @@ private:
                     if (authored_wall_profile && authored_wall_profile->elevation) {
                         const auto candidate=replay_wall_profile_entity(source.entities().at(entity->id),*authored_wall_profile);
                         if (candidate.properties.dump()!=properties.dump())
-                            throw std::invalid_argument("The wall elevation differs from its captured typed profile.");
+                            throw std::invalid_argument("The wall elevation no longer matches the wall's profile. Open the elevation again.");
                         SelectionPropertyEditRequest request;
                         request.unchanged_policy=SelectionPropertyUnchangedPolicy::retain;
                         request.selected.push_back({entity->id,SelectionPropertyFamily::wall});
@@ -50435,7 +50937,7 @@ private:
                         }}, source);
                         const auto preview = Document::preview_command(source, command);
                         if (entity_map_digest(preview.entities()) != entity_map_digest(staged))
-                            throw std::invalid_argument("The wall proposal differs from its captured physical and exterior changes.");
+                            throw std::invalid_argument("The wall preview no longer matches the changes shown. Try the wall edit again.");
                         if (!sourceEditAuthorityUnchanged(authority) ||
                             !applyWallProfileCommand(source, preview, command, entity->id, authority)) return false;
                         clearError(); refresh(); return true;
@@ -50587,7 +51089,7 @@ private:
             const auto authority = captureSourceEditAuthority(source);
             if (m_selected_ids.size() != 1 || (m_opening_property_context &&
                 !sourceEditAuthorityUnchanged(*m_opening_property_context)))
-                throw std::invalid_argument("The selected opening changed. Reopen its properties.");
+                throw std::invalid_argument("The opening changed while its properties were open. Open its properties again.");
             const auto found = source.entities().find(m_selected_id.toStdString());
             if (found == source.entities().end() || found->second.type != "opening")
                 throw std::invalid_argument("Select one hosted opening to change its type.");
@@ -50649,13 +51151,13 @@ private:
             const auto authority = captureSourceEditAuthority(source);
             if (!m_opening_property_context || !sourceEditAuthorityUnchanged(*m_opening_property_context) ||
                 m_selected_ids.size() != 1)
-                throw std::invalid_argument("The selected opening changed. Reopen its properties.");
+                throw std::invalid_argument("The opening changed while its properties were open. Open its properties again.");
             const auto found = source.entities().find(m_selected_id.toStdString());
             if (found == source.entities().end() || found->second.type != "opening")
                 throw std::invalid_argument("Select one hosted door or window.");
             std::string old_host, error;
             if (!read_document_wall_id(found->second, old_host, error))
-                throw std::invalid_argument("The opening has no admitted host wall: " + error);
+                throw std::invalid_argument("The opening has no valid host wall: " + error);
             if (target_wall_id.toStdString() == old_host) { clearError(); return true; }
             // Rehosting at an unchanged station uses actual retained quantity
             // authority, never the rounded text currently shown in the form.
@@ -50980,6 +51482,19 @@ private:
             m_project_workspace->epoch() != m_saved_workspace_epoch);
     }
 
+    void rememberPristineProject() {
+        m_pristine_document = m_document;
+        m_pristine_revision = m_document->revision();
+    }
+
+    // A new, never-saved project that still holds only its scaffold. It is
+    // dirty in the document sense (never saved) but has no user changes.
+    bool pristineUntitledProject() const {
+        return m_file_path.empty() && m_pristine_document.lock() == m_document &&
+               m_document->revision() == m_pristine_revision &&
+               (m_recovery_ledger.empty() || m_project_workspace->epoch() == m_saved_workspace_epoch);
+    }
+
     template <typename Mutation>
     void measureDocumentEdit(Mutation&& mutation) {
         auto* canvas = m_workspace == Workspace::measurement
@@ -51143,11 +51658,11 @@ private:
         if (model_copy && model_copy->intent) {
             if (model_copy->source_digest != document_snapshot_digest(source) ||
                 command_to_json(Command{intent}).dump() != command_to_json(Command{*model_copy->intent}).dump())
-                throw std::invalid_argument("The copy no longer matches its admitted source-derived intent.");
+                throw std::invalid_argument("The copy no longer matches the original objects. Copy them again.");
             auto expected = intent;
             registerNewObjectMemberships(source, expected, {}, registry_id);
             if (command_to_json(Command{candidate}).dump() != command_to_json(Command{expected}).dump())
-                throw std::invalid_argument("A copy may add only its admitted geometry, qualified presentation and scope enrollment.");
+                throw std::invalid_argument("The copy would change objects other than the copied ones, so it was not applied.");
             return;
         }
         // Originals can gain only the exact phase/page registrations derived
@@ -51477,7 +51992,7 @@ private:
                 !candidate.contains(copied->second) ||
                 !transforms.emplace(operation.entity_id,
                     architectural_group_assembly_transform(operation.transform)).second)
-                throw std::invalid_argument("A copied annotation requires one captured operation for its actual owner.");
+                throw std::invalid_argument("A copied annotation must be copied together with the object it labels.");
         }
         const auto equivalent = [](const AssemblyTransform& left, const AssemblyTransform& right) {
             const auto coefficients = [](const AssemblyTransform& value) {
@@ -51513,7 +52028,7 @@ private:
             }
             const auto physical = source.entities().find(physical_owner);
             if (physical == source.entities().end() || physical->second.type != "roof_join")
-                throw std::invalid_argument("A copied annotation has no captured physical owner operation.");
+                throw std::invalid_argument("A copied annotation is missing the object it labels. Copy them together.");
             const auto join = parse_roof_join(physical->second.properties, physical_owner);
             std::optional<AssemblyTransform> common;
             for (const auto& member : join.roof_ids) {
@@ -51718,7 +52233,7 @@ private:
         if (source.type!="assembly_model" || original!=left || original!=right ||
             original.properties.dump()!=left.properties.dump() || original.properties.dump()!=right.properties.dump() ||
             original.extensions.dump()!=left.extensions.dump() || original.extensions.dump()!=right.extensions.dump())
-            throw std::invalid_argument("Coordinated transforms changed an actual hosted catalog envelope.");
+            throw std::invalid_argument("This transform would change the size of a placed catalog item, so it was not applied.");
         auto result=accumulated;
         result.properties.at("model")=merge_disjoint_hosted_assembly_models(
             source.properties.at("model"),accumulated.properties.at("model"),incoming.properties.at("model"));
@@ -51733,7 +52248,7 @@ private:
         std::span<const SlabGeometryEditIntent> directional_slab_intents = {}) {
         if (command.expected_revision!=source.revision() || !command.asset_changes.empty() ||
             bodies.size()!=source.entities().size())
-            throw std::invalid_argument("Hosted dimensions require the complete captured ordinary body edit.");
+            throw std::invalid_argument("Dimensions on hosted items need the full edit of their host. Edit the host and its items together.");
         std::vector<std::string> hosts;
         for (const auto& [id,after]:bodies) {
             const auto before=source.entities().find(id);
@@ -51814,7 +52329,7 @@ private:
             ApplyEntityChanges command{source.revision(), {}, {}, message};
             const auto expected=replay_roof_edit_entities(source.entities(),edits);
             if (physical.size()!=source.entities().size() || physical!=expected)
-                throw std::invalid_argument("The roof edit differs from its actual source replay.");
+                throw std::invalid_argument("The roof edit no longer matches the current roof. Try the edit again.");
             const bool transfer=std::any_of(edits.begin(),edits.end(),[](const auto& edit) {
                 return edit.openings && (edit.openings->uses_clone_schema || edit.openings->uses_rotation_schema ||
                     std::any_of(edit.openings->upserts.begin(),edit.openings->upserts.end(),
@@ -51843,7 +52358,7 @@ private:
                             return left.first==right.first && left.second.properties.dump()==right.second.properties.dump() &&
                                 left.second.extensions.dump()==right.second.extensions.dump();
                         }))
-                    throw std::invalid_argument("The skylight edit differs from its typed source replay.");
+                    throw std::invalid_argument("The skylight edit no longer matches the current skylight. Try the edit again.");
                 return typed;
             }
             for (const auto& [id,after]:expected) {
@@ -52656,7 +53171,7 @@ private:
                  original->second.type != "assembly_instance")) continue;
             const auto proposed = candidate.entities().find(proposed_id);
             if (proposed == candidate.entities().end() || proposed->second.type != original->second.type)
-                throw std::invalid_argument("The admitted alternative edit lost its proposed selection owner.");
+                throw std::invalid_argument("The design alternative edit lost track of the selected objects. Try the edit again.");
             result.emplace(original_id, proposed_id);
         }
         const bool hosted=std::any_of(structural_components.begin(),structural_components.end(),[](const auto& component) {
@@ -52680,7 +53195,7 @@ private:
                     const auto& new_id=after.at({component.identities.at(original.first),proposed});
                     const auto [existing,inserted]=result.emplace(old_id,new_id);
                     if (!inserted && existing->second!=new_id)
-                        throw std::invalid_argument("The admitted alternative edit has conflicting component selections.");
+                        throw std::invalid_argument("The design alternative edit selects conflicting components. Try the edit again.");
                 }
             };
             append(structural_components);
@@ -52939,7 +53454,7 @@ private:
                 roof_ids.emplace(original, copied);
             else if (found->second.type == "slab" && selected.contains(original)) slab_ids.emplace(original, copied);
             else if (found->second.type == "stair" || found->second.type == "railing") stair_ids.emplace(original,copied);
-            else throw std::invalid_argument("A supplied mixed-copy identity has no selected family authority.");
+            else throw std::invalid_argument("A pasted object could not be matched to a copied object. Copy and paste again.");
         }
         auto occupied = retainedSlabIdentityNames(source, true);
         for (const auto& [key,copied]:child_identities) {
@@ -53442,7 +53957,7 @@ private:
         if (ordinary_structural && ordinary_other) {
             for (const auto* family : {ordinary_structural, ordinary_other})
                 if (family->expected_revision != source.revision() || !family->asset_changes.empty())
-                    throw std::invalid_argument("A coordinated transform must retain its captured source and shared assets.");
+                    throw std::invalid_argument("The drawing changed during the transform. Your change was not applied. Try it again.");
             const auto candidate = compose_architectural_family_candidates(source.entities(),
                 {Document::preview_command(source, structural_command).entities(),
                  Document::preview_command(source, other_command).entities()});
@@ -53467,7 +53982,7 @@ private:
         const auto captured_phase = [&](const Command& family) {
             const auto* command = std::get_if<ApplyBoundaryConstraintChanges>(&family);
             if (!command || !command->phase_constraint_authoring_completion || command->phase_constraint_authoring_intent.is_null())
-                throw std::invalid_argument("The architectural family lost its actual source authority.");
+                throw std::invalid_argument("The selected objects no longer match the drawing. Select them again.");
             auto child = decode_phase_constraint_authoring_intent(command->phase_constraint_authoring_intent);
             if (child.expected_revision != intent.expected_revision || child.source_snapshot_digest != intent.source_snapshot_digest ||
                 child.source_authoring_digest != intent.source_authoring_digest || child.source_entities_digest != intent.source_entities_digest ||
@@ -53767,7 +54282,7 @@ private:
         const auto replacement = [&](const Command& family, const char* key) {
             const auto* phase = std::get_if<ApplyBoundaryConstraintChanges>(&family);
             if (!phase || !phase->phase_constraint_authoring_completion || phase->phase_constraint_authoring_intent.is_null())
-                throw std::invalid_argument("A proposed family transform lost its actual source authority.");
+                throw std::invalid_argument("The transformed objects no longer match the drawing. Try the transform again.");
             const auto leaf = decode_phase_constraint_authoring_intent(phase->phase_constraint_authoring_intent);
             if (leaf.expected_revision != intent.expected_revision || leaf.source_snapshot_digest != intent.source_snapshot_digest ||
                 leaf.source_entities_digest != intent.source_entities_digest || leaf.source_authoring_digest != intent.source_authoring_digest ||
@@ -53887,7 +54402,7 @@ private:
         const auto authority=captureSourceEditAuthority(source);
         StairDependencyReviewDialog dialog(source,plan,[this,authority] {
             if (!sourceEditAuthorityCurrent(authority))
-                throw std::invalid_argument("The project or drawing context changed. Reopen the stair edit.");
+                throw std::invalid_argument("The drawing or active layer changed while the stair edit was open. Open it again.");
             return authoringSnapshot();
         },owner);
         if (shared) dialog.setDispositionValidator([source,edited](const auto& choices) {
@@ -54279,7 +54794,7 @@ private:
         if (preview.needs_room_review && replacement.room_review_intent.is_null()) {
             const auto authority=captureSourceEditAuthority(source);
             PhysicalWallPhaseRoomReviewDialog dialog(source,intent,m_metric_units,[this,authority,additional_fence] {
-                if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The project or drawing context changed. Reopen the proposed wall review.");
+                if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The drawing or active layer changed during the wall review. Open the wall review again.");
                 if (additional_fence) additional_fence();
                 return authoringSnapshot();
             },owner);
@@ -54304,7 +54819,7 @@ private:
             if (fullSnapshotDigest(source) != authority.source_digest || !sourceEditAuthorityUnchanged(authority) ||
                 authority.selection.size() != 1 || authority.selection.front() != id_from(intent.wall_id) ||
                 hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
-                throw std::invalid_argument("The wall, project or drawing context changed. Reopen its layers.");
+                throw std::invalid_argument("The wall, drawing or active layer changed while its layers were open. Open its layers again.");
         };
         require_current();
         const auto staged = replay_wall_layer_stack_entities(source.entities(), {intent}, false);
@@ -54355,7 +54870,7 @@ private:
         }}, source);
         const auto candidate = Document::preview_command(source, command);
         if (entity_map_digest(candidate.entities()) != entity_map_digest(staged))
-            throw std::invalid_argument("The wall layer proposal differs from its actual physical and exterior changes.");
+            throw std::invalid_argument("The wall layer preview no longer matches the changes shown. Edit the layers again.");
         require_current();
         return applyWallProfileCommand(source, candidate, command, intent.wall_id, authority);
     }
@@ -54401,7 +54916,7 @@ private:
             replacement.registry_id=registry.first;replacement.alternative_id=registry.second;
             if (authored_profile) {
                 if (raw->entity_changes.size() != 1 || authored_profile->wall_id != original.id)
-                    throw std::invalid_argument("The entered wall dimension belongs to a different captured edit.");
+                    throw std::invalid_argument("The entered wall dimension belongs to an earlier edit. Enter it again.");
             }
             const auto profile=capture_wall_profile_edit(original,change.entity,authored_profile);
             if (!profile) continue;
@@ -54490,7 +55005,7 @@ private:
             if (change.kind != EntityChangeKind::upsert || !shared(change.entity.id))
                 throw std::invalid_argument("Edit shared doors and windows separately from other objects. Remove them through the design phase demolition list.");
             if (authored_profile && (raw->entity_changes.size() != 1 || authored_profile->opening_id != change.entity.id))
-                throw std::invalid_argument("The entered opening dimension belongs to a different captured edit.");
+                throw std::invalid_argument("The entered opening dimension belongs to an earlier edit. Enter it again.");
             const auto captured = capture_hosted_opening_profile_edit(
                 source.entities().at(change.entity.id), change.entity, authored_profile);
             if (captured) profiles.push_back(*captured);
@@ -54503,7 +55018,7 @@ private:
                 while (!occupied.insert(proposed).second) proposed = new_id("proposed");
                 return proposed;
             }, true, true, true, true);
-        if (!proposal) throw std::invalid_argument("The shared opening lost its captured design alternative.");
+        if (!proposal) throw std::invalid_argument("The shared opening is no longer in its design alternative.");
         proposal->intent.intent.message = raw->message;
         PhaseWallReplacementIdentityMap proposed_ids;
         return finishAlternativeWallEdit(source, proposal->intent,
@@ -54544,7 +55059,7 @@ private:
         if (handled) *handled = true;
         if (raw->expected_revision != source.revision() || !raw->asset_changes.empty() ||
             raw->entity_changes.size() > 2048)
-            throw std::invalid_argument("Rehosting requires the unchanged captured source and a bounded opening-only edit.");
+            throw std::invalid_argument("To move an opening to another wall, change only the opening and make no other edits at the same time.");
         std::vector<HostedOpeningRehostIntent> intents;
         std::set<std::string, std::less<>> seen;
         for (const auto& change : raw->entity_changes) {
@@ -54562,7 +55077,7 @@ private:
                 throw std::invalid_argument("Rehosting must name complete original and target walls: " + error);
             if (authored && (raw->entity_changes.size() != 1 || authored->opening_id != original->first ||
                 authored->original_wall_id != old_host || authored->target_wall_id != new_host))
-                throw std::invalid_argument("The entered placement belongs to a different captured rehost.");
+                throw std::invalid_argument("The entered position belongs to an earlier move to another wall. Enter it again.");
             auto normalized = change.entity;
             normalized.properties.at("wall_id") = old_host;
             std::optional<HostedOpeningProfileEditIntent> hint;
@@ -54892,7 +55407,7 @@ private:
             if (!sourceEditAuthorityUnchanged(authority) || authority.selection.size() != 1 ||
                 authority.selection.front() != QString::fromStdString(wall_id) ||
                 hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
-                throw std::invalid_argument("The wall profile, project, selection or workspace changed. Reopen the wall editor.");
+                throw std::invalid_argument("The wall profile, drawing, selection or workspace changed while the wall editor was open. Open it again.");
         };
         require_current();
         if (affectedPhysicalWallRooms(source, candidate.entities(), wall_id) != 0) {
@@ -55103,7 +55618,7 @@ private:
         // Called only after a project transition has drained the queue. The
         // document ID can remain stable across reopen, so session state must
         // be reset explicitly rather than inferred from identity alone.
-        m_autosave_scheduler = WorkspaceAutosaveScheduler{};
+        m_autosave_scheduler = autosaveScheduler();
         m_autosave_observed_source.reset();
         m_autosave_document_id.clear();
         ++m_autosave_session;
@@ -55159,19 +55674,17 @@ private:
             path.filename() != std::filesystem::path("recovery-" + archive_id + ".bldproj"))
             return false;
         try {
-            const auto loaded = ProjectStore::load_archive(path, ArchiveRole::recovery_copy);
-            if (!loaded.supported() || !loaded.recovery.decoded ||
-                !loaded.recovery.decoded->recovery_copy)
-                return false;
-            const auto& record = *loaded.recovery.decoded->recovery_copy;
-            if (record.archive_id != archive_id || record.document_id != document_id ||
-                record.owner_token != owner_token)
-                return false;
-            if (loaded.file_sha256 != expected_hash) return false;
-            // Check the bytes again immediately before removal. This does not
-            // claim an adversarial filesystem lock, but it avoids deleting a
-            // replacement that arrived between archive load and cleanup.
-            if (ProjectStore::file_sha256(path) != loaded.file_sha256) return false;
+            // expected_hash is only ever the receipt SHA-256 of this session's
+            // own recovery publication, whose bytes carried exactly this
+            // archive ID, document ID and owner token and were fully validated
+            // before publication. A byte-identical file is therefore that copy;
+            // any changed, foreign or malformed file has a different digest and
+            // is retained. Decoding and replaying the whole archive (five full
+            // history validations) to re-read fields the digest already binds
+            // made every Save wait seconds for a file it was about to delete.
+            // Hash under the read lock immediately before removal; this does not
+            // claim an adversarial filesystem lock, but keeps the window narrow.
+            if (ProjectStore::file_sha256(path) != expected_hash) return false;
             std::error_code remove_error;
             if (!std::filesystem::remove(path, remove_error) || remove_error) return false;
             return true;
@@ -55211,6 +55724,8 @@ private:
         // not queue another old-project checkpoint before publication.
         if (m_pinc_import_active) return;
         if (!m_document->is_editable()) return;
+        // Preferences > Advanced can turn recovery autosave off.
+        if (!m_preferences.autosave_enabled) return;
         try {
             const bool recovery_project = !m_recovery_ledger.empty();
             const auto now = WorkspaceAutosaveScheduler::Clock::now();
@@ -55224,7 +55739,7 @@ private:
                 ++m_autosave_session;
                 for (auto& entry : m_authoring_digests) entry.reset();
                 for (auto& entry:m_snapshot_digests) entry.reset();
-                m_autosave_scheduler = WorkspaceAutosaveScheduler{};
+                m_autosave_scheduler = autosaveScheduler();
                 m_autosave_observed_source.reset();
                 m_autosave_document_id = document_id;
                 // Legacy projects use the document revision as their
@@ -55353,6 +55868,22 @@ private:
         }
         sketch::ScopedPerformanceMeasurement timing(
             m_performance_telemetry, sketch::PerformanceMetric::save);
+        // Show progress before any blocking storage work. Save stays synchronous
+        // on the UI thread by design: it mutates live state (workspace rebase,
+        // saved marker, ownership, autosave watermarks) after acknowledgement and
+        // deliberately never pumps reentrant UI events. Only the status bar is
+        // repainted here, without processing input.
+        const auto file_name = QString::fromStdWString(path.filename().wstring());
+        owner->statusBar()->showMessage(QStringLiteral("Saving %1…").arg(file_name));
+        owner->statusBar()->repaint();
+        QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+        const struct SaveCursorRestore {
+            ~SaveCursorRestore() { QGuiApplication::restoreOverrideCursor(); }
+        } save_cursor_restore;
+        capture_diagnostic_stage("save.begin");
+        struct SaveTrace {
+            ~SaveTrace() { capture_diagnostic_stage("save.end"); }
+        } save_trace;
         try {
             if (current_destination && m_project_ownership && m_project_ownership->active()) {
                 const auto ownership = m_project_ownership->verify_current();
@@ -55444,7 +55975,7 @@ private:
                 document_authoring_source_digest_v2(m_document->snapshot()));
             if (!acknowledgement.acknowledged() || source_document != m_document ||
                 document_snapshot_digest(snapshot) != document_snapshot_digest(m_document->snapshot())) {
-                setError(QStringLiteral("The file was saved, but the current workspace changed and was not marked saved."));
+                setError(QStringLiteral("Saved %1, but the drawing changed during the save, so it is still marked unsaved. Save again to include the latest changes.").arg(file_name));
                 return false;
             }
             auto* published_ownership = destination_ownership
@@ -55477,7 +56008,7 @@ private:
             // The barrier drained pending publications, and this exact source
             // has now been explicitly saved. Start scheduling from that covered
             // source without carrying an earlier transient invalidation.
-            m_autosave_scheduler = WorkspaceAutosaveScheduler{};
+            m_autosave_scheduler = autosaveScheduler();
             m_autosave_observed_source = std::move(saved_source_observation);
             if (refresh_draft_source) m_boundary_source = m_document->snapshot();
             m_file_path = path;
@@ -55492,18 +56023,19 @@ private:
             clearError();
             refresh();
             auto status = hasUnsavedBoundaryDraftChanges()
-                ? QStringLiteral("Saved committed geometry. The unfinished boundary is still unsaved.")
+                ? QStringLiteral("Saved %1 with committed geometry. The unfinished boundary is still unsaved.").arg(file_name)
                 : hasBoundaryDraftChanges()
-                    ? QStringLiteral("Saved revision %1, including the unfinished boundary.").arg(receipt.revision)
-                    : QStringLiteral("Saved revision %1.").arg(receipt.revision);
+                    ? QStringLiteral("Saved %1, including the unfinished boundary.").arg(file_name)
+                    : QStringLiteral("Saved %1").arg(file_name);
             if (!cleanup_ok) {
-                status += QStringLiteral(" Recovery copy retained; cleanup pending.");
+                if (!status.endsWith(QLatin1Char('.'))) status += QLatin1Char('.');
+                status += QStringLiteral(" The previous recovery copy was kept and will be cleaned up later.");
             }
             owner->statusBar()->showMessage(status, 6000);
             return true;
         } catch (const std::exception& error) {
-            setError(QStringLiteral("Save failed; the document remains open: %1")
-                         .arg(QString::fromUtf8(error.what())));
+            setError(QStringLiteral("Could not save %1 — %2. Your work is still open; fix the problem or use Save As to choose another location.")
+                         .arg(file_name, QString::fromUtf8(error.what())));
             return false;
         }
     }
@@ -55580,41 +56112,91 @@ private:
             action->setStatusTip(label);
             return action;
         };
+        // Header (FB-004): readable file commands, Undo/Redo, Export, the
+        // two workspaces and the draw modes in one compact row; units and
+        // view controls follow and the theme control sits at the far right.
+        // Every other command lives in the grouped menu bar built below.
         m_new_action = add_toolbar_action(QStringLiteral("New"), "<path d='M6 3h9l3 3v15H6z'/><path d='M15 3v5h5'/><path d='M9 13h6M12 10v6'/>");
+        m_new_action->setObjectName(QStringLiteral("newProject"));
         m_open_action = add_toolbar_action(QStringLiteral("Open"), "<path d='M3 7h7l2 2h9v11H3z'/><path d='M3 7V5h7l2 2'/>");
-        m_recover_action = add_toolbar_action(QStringLiteral("Recover"), "<path d='M5 8a8 8 0 1 1 0 8'/><path d='M5 4v4h4'/>");
+        m_open_action->setObjectName(QStringLiteral("openProject"));
+        m_open_action->setText(QStringLiteral("Open…"));
+        m_open_action->setIconText(QStringLiteral("Open"));
         m_save_action = add_toolbar_action(QStringLiteral("Save"), "<path d='M5 3h12l3 3v15H5z'/><path d='M8 3v6h9V3M8 21v-7h9v7'/>");
-        m_save_as_action = add_toolbar_action(QStringLiteral("Save as"), "<path d='M5 3h12l3 3v15H5z'/><path d='M8 3v6h9V3M8 21v-7h9v7'/><path d='M15 12h5M17.5 9.5v5'/>");
+        m_save_action->setObjectName(QStringLiteral("saveProject"));
+        // Save as is reached from the Save button's menu and from File.
+        m_save_as_action = new QAction(modern_toolbar_icon(
+            "<path d='M5 3h12l3 3v15H5z'/><path d='M8 3v6h9V3M8 21v-7h9v7'/><path d='M15 12h5M17.5 9.5v5'/>", owner),
+            QStringLiteral("Save as…"), owner);
+        m_save_as_action->setObjectName(QStringLiteral("saveProjectAs"));
+        m_save_as_action->setStatusTip(QStringLiteral("Save the project under a new name"));
+        if (auto* save_button = qobject_cast<QToolButton*>(toolbar->widgetForAction(m_save_action))) {
+            auto* save_menu = new QMenu(save_button);
+            save_menu->setObjectName(QStringLiteral("saveMenu"));
+            save_menu->addAction(m_save_as_action);
+            save_button->setMenu(save_menu);
+            save_button->setPopupMode(QToolButton::MenuButtonPopup);
+        }
+        // Recover opens an autosaved recovery copy: a clock-and-arrow glyph,
+        // distinct from Undo.
+        m_recover_action = add_toolbar_action(QStringLiteral("Recover"),
+            "<path d='M4 12a8 8 0 1 0 2.3-5.6'/><path d='M4 4v4h4'/><path d='M12 8v4l3 2'/>");
+        m_recover_action->setObjectName(QStringLiteral("recoverProject"));
+        m_recover_action->setText(QStringLiteral("Recover…"));
+        m_recover_action->setIconText(QStringLiteral("Recover"));
+        m_recover_action->setToolTip(QStringLiteral("Recover an autosaved copy of a project"));
+        m_recover_action->setStatusTip(QStringLiteral("Recover an autosaved copy of a project"));
         toolbar->addSeparator();
         m_undo_action = add_toolbar_action(QStringLiteral("Undo"), "<path d='M9 7 4 12l5 5'/><path d='M4 12h9a7 7 0 0 1 7 7'/>");
+        m_undo_action->setObjectName(QStringLiteral("undoCommand"));
         m_redo_action = add_toolbar_action(QStringLiteral("Redo"), "<path d='m15 7 5 5-5 5'/><path d='M20 12h-9a7 7 0 0 0-7 7'/>");
+        m_redo_action->setObjectName(QStringLiteral("redoCommand"));
         toolbar->addSeparator();
+        // Export formats are filled in with the File menu below.
+        auto* export_menu = new QMenu(QStringLiteral("Export"), owner);
+        export_menu->setObjectName(QStringLiteral("exportMenu"));
+        auto* export_button = new QToolButton(toolbar);
+        export_button->setObjectName(QStringLiteral("exportMenuButton"));
+        export_button->setText(QStringLiteral("Export"));
+        export_button->setIcon(modern_toolbar_icon("<path d='M12 4v11'/><path d='m7 9 5-5 5 5'/><path d='M5 15v5h14v-5'/>", owner));
+        export_button->setToolTip(QStringLiteral("Export a PDF, DXF, IFC, SVG or image"));
+        export_button->setStatusTip(QStringLiteral("Export a PDF, DXF, IFC, SVG or image"));
+        export_button->setAccessibleName(QStringLiteral("Export"));
+        export_button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        export_button->setPopupMode(QToolButton::InstantPopup);
+        export_button->setMenu(export_menu);
+        toolbar->addWidget(export_button);
+        toolbar->addSeparator();
+        // The two workspaces: Measure (2D measured areas and GLA) and Design
+        // (walls, openings, building model and 3D views).
         m_measurement_action = toolbar->addAction(
             modern_toolbar_icon("<path d='M4 5h16v14H4z'/><path d='M8 9h8M8 13h5'/><path d='M17 17l3 3'/><path d='m17 17 2-2'/>", owner),
-            QStringLiteral("2D"));
-        m_measurement_action->setToolTip(QStringLiteral("Measurement workspace (Ctrl+1)"));
+            QStringLiteral("Measure"));
+        m_measurement_action->setToolTip(QStringLiteral("Measure workspace: 2D measured areas and GLA (Ctrl+1)"));
         m_measurement_action->setObjectName(QStringLiteral("workspace2D"));
-        m_measurement_action->setStatusTip(QStringLiteral("Measurement workspace (Ctrl+1)"));
+        m_measurement_action->setStatusTip(QStringLiteral("Measure workspace: 2D measured areas and GLA (Ctrl+1)"));
         m_architectural_action = toolbar->addAction(
             modern_toolbar_icon("<path d='M4 20V9l8-5 8 5v11'/><path d='M8 20v-6h8v6'/><path d='M10 10h4'/>", owner),
-            QStringLiteral("3D"));
-        m_architectural_action->setToolTip(QStringLiteral("Architectural workspace (Ctrl+2)"));
+            QStringLiteral("Design"));
+        m_architectural_action->setToolTip(QStringLiteral("Design workspace: walls, openings, building model and 3D (Ctrl+2)"));
         m_architectural_action->setObjectName(QStringLiteral("workspace3D"));
-        m_architectural_action->setStatusTip(QStringLiteral("Architectural workspace (Ctrl+2)"));
+        m_architectural_action->setStatusTip(QStringLiteral("Design workspace: walls, openings, building model and 3D (Ctrl+2)"));
         toolbar->addSeparator();
         {
             // Drawing tool group: exactly one creation mode is active. Empty
             // plan clicks create walls (default), measured areas or loose
             // measured lines; selection and panning stay available in each.
-            struct DrawModeButton { DrawingMode mode; const char* id; const char* label; const char* status; const char* glyph; };
+            // The single-letter key works while the plan has focus and no
+            // drawing is in progress (see DrawModeKeyFilter).
+            struct DrawModeButton { DrawingMode mode; const char* id; const char* label; const char* key; const char* status; const char* glyph; };
             const DrawModeButton buttons[] = {
-                {DrawingMode::wall, "drawModeWall", "Wall",
+                {DrawingMode::wall, "drawModeWall", "Wall", "W",
                  "Wall: empty plan clicks draw walls",
                  "<path d='M3 8h18M3 16h18'/><path d='M8 8v8M16 8v8'/>"},
-                {DrawingMode::measurement, "drawModeArea", "Area",
+                {DrawingMode::measurement, "drawModeArea", "Area", "A",
                  "Area: empty plan clicks draw a measured area",
                  "<path d='M4 6l11-2 5 7-4 9H6z'/>"},
-                {DrawingMode::measured_lines, "drawModeMeasuredLines", "Measured lines",
+                {DrawingMode::measured_lines, "drawModeMeasuredLines", "Measured lines", "L",
                  "Measured lines: empty plan clicks draw loose measured lines",
                  "<path d='M4 18 10 8l5 6 5-9'/><path d='M4 21v-3M20 8V5'/>"},
             };
@@ -55627,7 +56209,7 @@ private:
                 action->setObjectName(QString::fromLatin1(button.id));
                 action->setCheckable(true);
                 action->setChecked(button.mode == m_creation_mode);
-                action->setToolTip(label);
+                action->setToolTip(QStringLiteral("%1 (%2)").arg(label, QString::fromLatin1(button.key)));
                 action->setStatusTip(QString::fromLatin1(button.status));
                 draw_modes->addAction(action);
                 if (auto* tool = qobject_cast<QToolButton*>(toolbar->widgetForAction(action))) {
@@ -55643,127 +56225,139 @@ private:
             }
         }
         toolbar->addSeparator();
-        m_palette_action =add_toolbar_action(QStringLiteral("Commands"), "<path d='M5 5h5v5H5zM14 5h5v5h-5zM5 14h5v5H5zM14 14h5v5h-5z'/>");
-        auto* shortcut_settings = add_toolbar_action(QStringLiteral("Shortcuts"), "<rect x='3' y='6' width='18' height='12' rx='2'/><path d='M7 10h2M11 10h2M15 10h2M7 14h10'/>");
-        shortcut_settings->setObjectName(QStringLiteral("keyboardShortcutSettings"));
 
-        // Keep the canvas-facing toolbar focused. Secondary authoring and
-        // presentation commands remain one click away in an overflow menu,
-        // while their QAction identities and shortcuts stay stable.
-        auto* more_menu = new QMenu(owner);
-        auto* architecture_menu = more_menu->addMenu(QStringLiteral("Architecture"));
-        architecture_menu->setObjectName(QStringLiteral("architecturalAuthoringMenu"));
-        const auto authoring_action = [&](const char* id, const QString& label, auto callback) {
-            auto* action = architecture_menu->addAction(label);
+        // Menu bar: commands grouped by task. Rare and expert commands sit in
+        // an "Advanced" submenu inside their own group. QAction identities,
+        // object names and shortcuts stay stable for automation and the
+        // keyboard; the command palette (Help > Command search) lists them too.
+        m_palette_action = new QAction(QStringLiteral("Command search…"), owner);
+        m_palette_action->setObjectName(QStringLiteral("commandSearch"));
+        auto* shortcut_settings = new QAction(QStringLiteral("Keyboard shortcuts…"), owner);
+        shortcut_settings->setObjectName(QStringLiteral("keyboardShortcutSettings"));
+        const auto make_action = [this](const char* id, const QString& label, auto callback) {
+            auto* action = new QAction(label, owner);
             action->setObjectName(QString::fromLatin1(id));
             QObject::connect(action, &QAction::triggered, owner, callback);
+            return action;
         };
-        authoring_action("createWall", QStringLiteral("Wall — draw two points"),
+        auto* create_wall_action = make_action("createWall", QStringLiteral("Wall — draw two points"),
                          [this] { setTool(CanvasTool::wall); });
-        authoring_action("createDoor", QStringLiteral("Door in selected wall…"),
+        auto* create_door_action = make_action("createDoor", QStringLiteral("Door in selected wall…"),
                          [this] { createOpeningFromDialog(QStringLiteral("door")); });
-        authoring_action("createWindow", QStringLiteral("Window in selected wall…"),
+        auto* create_window_action = make_action("createWindow", QStringLiteral("Window in selected wall…"),
                          [this] { createOpeningFromDialog(QStringLiteral("window")); });
-        authoring_action("createCornerWindow", QStringLiteral("Corner window between two selected walls…"),
+        auto* create_corner_window_action = make_action("createCornerWindow", QStringLiteral("Corner window between two selected walls…"),
                          [this] { showCornerWindowEditor(); });
-        authoring_action("createOpening", QStringLiteral("Opening in selected wall…"), [this] {
-            const auto context = captureModalContext();
-            bool accepted = false;
-            const auto kind = QInputDialog::getItem(owner, QStringLiteral("Create opening"),
-                QStringLiteral("Opening kind"), {QStringLiteral("Door"), QStringLiteral("Window")},
-                0, false, &accepted);
-            if (accepted && modalContextUnchanged(context)) createOpeningFromDialog(kind.toLower());
+        auto* create_opening_action = make_action("createOpening", QStringLiteral("Opening in selected wall…"), [this] {
+            // The kind follows the opening tool in use (window tools place a
+            // window); otherwise a door. Door and Window have their own items.
+            const bool window_tool = m_pending_opening_kind == QStringLiteral("window") ||
+                                     m_pending_opening_kind == QStringLiteral("corner_window");
+            createOpeningFromDialog(window_tool ? QStringLiteral("window") : QStringLiteral("door"));
         });
-        authoring_action("createRoom", QStringLiteral("Room from selected boundary…"),
+        auto* create_room_action = make_action("createRoom", QStringLiteral("Room from selected boundary…"),
                          [this] { createRoomVolumeFromDialog(); });
-        authoring_action("createSlab", QStringLiteral("Slab from selected boundary…"),
+        auto* create_slab_action = make_action("createSlab", QStringLiteral("Slab from selected boundary…"),
                          [this] { createSlabFromDialog(QStringLiteral("slab")); });
-        authoring_action("createFloor", QStringLiteral("Floor from selected boundary…"),
+        auto* create_floor_action = make_action("createFloor", QStringLiteral("Floor from selected boundary…"),
                          [this] { createSlabFromDialog(QStringLiteral("floor")); });
+        std::vector<QAction*> building_object_actions;
         for (const auto* kind : {"roof", "stair", "column", "beam"}) {
             const auto type = QString::fromLatin1(kind);
             auto label = type; label[0] = label[0].toUpper();
-            auto* action = architecture_menu->addAction(label + QStringLiteral("…"));
+            auto* action = new QAction(label + QStringLiteral("…"), owner);
             action->setObjectName(QStringLiteral("create") + label);
             QObject::connect(action, &QAction::triggered, owner,
                              [this, type] { showBuildingObjectDialog(false, type); });
+            building_object_actions.push_back(action);
         }
-        architecture_menu->addSeparator();
-        authoring_action("joinWalls", QStringLiteral("Join selected walls"),
+        auto* join_walls_action = make_action("joinWalls", QStringLiteral("Join selected walls"),
                          [this] { (void)joinSelected(ArchitecturalJoinKind::wall); });
-        authoring_action("unjoinWalls", QStringLiteral("Unjoin selected walls"),
+        auto* unjoin_walls_action = make_action("unjoinWalls", QStringLiteral("Unjoin selected walls"),
                          [this] { (void)unjoinSelected(ArchitecturalJoinKind::wall); });
-        authoring_action("joinRoofs", QStringLiteral("Join selected roofs"),
+        auto* join_roofs_action = make_action("joinRoofs", QStringLiteral("Join selected roofs"),
                          [this] { (void)joinSelected(ArchitecturalJoinKind::roof); });
-        authoring_action("unjoinRoofs", QStringLiteral("Unjoin selected roofs"),
+        auto* unjoin_roofs_action = make_action("unjoinRoofs", QStringLiteral("Unjoin selected roofs"),
                          [this] { (void)unjoinSelected(ArchitecturalJoinKind::roof); });
-        authoring_action("manageNamedViews", QStringLiteral("Saved plans, elevations and sections…"),
+        auto* named_views_action = make_action("manageNamedViews", QStringLiteral("Saved plans, elevations and sections…"),
                          [this] { showNamedViews(); });
-        auto* dimension_action = more_menu->addAction(QStringLiteral("Add length, chain, angle or area dimension…"));
-        dimension_action->setObjectName(QStringLiteral("dimensionCreator"));
+        auto* dimension_action = make_action("dimensionCreator", QStringLiteral("Add length, chain, angle or area dimension…"),
+                         [this] { showDimensionCreator(); });
         dimension_action->setToolTip(QStringLiteral(
             "Create an associated length, connected chain, angle or area dimension from boundary geometry"));
-        QObject::connect(dimension_action, &QAction::triggered, owner,
-                         [this] { showDimensionCreator(); });
-        auto* survey_action = more_menu->addAction(QStringLiteral("Survey traverse…"));
-        survey_action->setObjectName(QStringLiteral("surveyTraverse"));
-        QObject::connect(survey_action, &QAction::triggered, owner, [this] { showSurveyCalculator(); });
-        auto* georeferencing_action = more_menu->addAction(QStringLiteral("Pro georeferencing…"));
-        georeferencing_action->setObjectName(QStringLiteral("georeferencingWorkflow"));
-        QObject::connect(georeferencing_action, &QAction::triggered, owner,
+        auto* text_library_action = make_action("textLibrary", QStringLiteral("Text library…"),
+                         [this] { showTextLibrary(); });
+        auto* constraints_action = make_action("constraintEditor", QStringLiteral("Dimensions and constraints…"),
+                         [this] { showConstraintEditor(); });
+        auto* survey_action = make_action("surveyTraverse", QStringLiteral("Survey traverse…"),
+                         [this] { showSurveyCalculator(); });
+        auto* georeferencing_action = make_action("georeferencingWorkflow", QStringLiteral("Pro georeferencing…"),
                          [this] { showGeoreferencing(); });
-        m_disto_action = more_menu->addAction(QStringLiteral("Import DISTO reading…"));
-        m_disto_action->setObjectName(QStringLiteral("distoImport"));
+        m_disto_action = make_action("distoImport", QStringLiteral("Import DISTO reading…"),
+                         [this] { showDistoImport(); });
         m_disto_action->setToolTip(QStringLiteral(
             "Apply a local DISTO adapter reading to the explicitly selected field"));
-        QObject::connect(m_disto_action, &QAction::triggered, owner,
-                         [this] { showDistoImport(); });
-        auto* curved_wall_action = more_menu->addAction(QStringLiteral("Draw curved wall…"));
-        curved_wall_action->setObjectName(QStringLiteral("curvedWall"));
+        auto* curved_wall_action = make_action("curvedWall", QStringLiteral("Draw curved wall…"),
+                         [this] { showCurvedWallDialog(); });
         curved_wall_action->setToolTip(QStringLiteral(
             "Create an analytical circular wall from two endpoints using an angle, arc length, or arc height"));
-        QObject::connect(curved_wall_action, &QAction::triggered, owner,
-                         [this] { showCurvedWallDialog(); });
-        auto* sloped_wall_action = more_menu->addAction(QStringLiteral("Draw sloped wall…"));
-        sloped_wall_action->setObjectName(QStringLiteral("slopedWall"));
+        auto* sloped_wall_action = make_action("slopedWall", QStringLiteral("Draw sloped wall…"),
+                         [this] { setTool(CanvasTool::sloped_wall); });
         sloped_wall_action->setToolTip(QStringLiteral(
             "Create a straight wall with a signed linear rise or fall at its top"));
-        QObject::connect(sloped_wall_action, &QAction::triggered, owner,
-                         [this] { setTool(CanvasTool::sloped_wall); });
-        auto* sketch_pdf_action = more_menu->addAction(QStringLiteral("Export sketch PDF…"));
-        sketch_pdf_action->setObjectName(QStringLiteral("exportSketchPdf"));
-        sketch_pdf_action->setToolTip(QStringLiteral("Export visible drawing content with a tight vector crop for inserting into a report"));
-        QObject::connect(sketch_pdf_action, &QAction::triggered, owner,
+        auto* export_sheet_pdf_action = make_action("exportSheetPdf", QStringLiteral("Export selected sheet PDF…"),
+                         [this] { exportFromDialog(); });
+        auto* sketch_pdf_action = make_action("exportSketchPdf", QStringLiteral("Export sketch PDF…"),
                          [this] { exportSketchFromDialog(); });
-        auto* sketch_guide_action = more_menu->addAction(QStringLiteral("Sketch composition guide"));
+        sketch_pdf_action->setToolTip(QStringLiteral("Export visible drawing content with a tight vector crop for inserting into a report"));
+        auto* sketch_guide_action = new QAction(QStringLiteral("Sketch composition guide"), owner);
         sketch_guide_action->setObjectName(QStringLiteral("sketchCompositionGuide"));
         sketch_guide_action->setCheckable(true);
         sketch_guide_action->setToolTip(QStringLiteral("Show the sketch PDF crop on the canvas; composition only, not an architectural print scale"));
         QObject::connect(sketch_guide_action, &QAction::toggled, owner,
                          [this](bool enabled) { setSketchCompositionGuideEnabled(enabled); });
-        auto* export_image_action = more_menu->addAction(QStringLiteral("Export image…"));
-        export_image_action->setObjectName(QStringLiteral("exportDraftImage"));
-        QObject::connect(export_image_action, &QAction::triggered, owner,
+        auto* export_image_action = make_action("exportDraftImage", QStringLiteral("Export image…"),
                          [this] { exportImageFromDialog(); });
-        auto* export_set_action = more_menu->addAction(QStringLiteral("Export drawing set PDF…"));
-        export_set_action->setObjectName(QStringLiteral("exportDrawingSetPdf"));
-        QObject::connect(export_set_action, &QAction::triggered, owner,
+        auto* export_set_action = make_action("exportDrawingSetPdf", QStringLiteral("Export drawing set PDF…"),
                          [this] { exportDrawingSetFromDialog(); });
-        auto* imported_sources_action = more_menu->addAction(QStringLiteral("Imported sources…"));
-        imported_sources_action->setObjectName(QStringLiteral("importedSources"));
-        imported_sources_action->setToolTip(QStringLiteral("Inspect import notes and export the exact retained original file"));
-        QObject::connect(imported_sources_action, &QAction::triggered, owner,
+        auto* export_dxf_action = make_action("exportDxf", QStringLiteral("Export DXF…"), [this] {
+            const auto selected = QFileDialog::getSaveFileName(
+                owner, QStringLiteral("Export DXF"), {}, QStringLiteral("DXF drawing (*.dxf)"));
+            if (!selected.isEmpty()) exportDxf(selected);
+        });
+        auto* export_ifc_action = make_action("exportIfc", QStringLiteral("Export IFC…"), [this] {
+            const auto selected = QFileDialog::getSaveFileName(
+                owner, QStringLiteral("Export IFC"), {}, QStringLiteral("IFC model (*.ifc)"));
+            if (!selected.isEmpty()) exportIfc(selected);
+        });
+        auto* export_svg_action = make_action("exportSvg", QStringLiteral("Export SVG…"), [this] {
+            const auto selected = QFileDialog::getSaveFileName(
+                owner, QStringLiteral("Export SVG"), {}, QStringLiteral("SVG document (*.svg)"));
+            if (!selected.isEmpty()) exportDraftSvg(selected);
+        });
+        auto* import_dxf_action = make_action("importDxf", QStringLiteral("DXF drawing…"), [this] {
+            const auto selected = QFileDialog::getOpenFileName(
+                owner, QStringLiteral("Import DXF"), {}, QStringLiteral("DXF drawing (*.dxf *.DXF)"));
+            if (!selected.isEmpty()) importDxf(selected, true);
+        });
+        auto* import_ifc_action = make_action("importIfc", QStringLiteral("IFC model…"), [this] {
+            const auto selected = QFileDialog::getOpenFileName(
+                owner, QStringLiteral("Import IFC"), {}, QStringLiteral("IFC model (*.ifc *.IFC)"));
+            if (!selected.isEmpty()) importIfc(selected);
+        });
+        auto* import_pinc_action = make_action("importPinc", QStringLiteral("PincSketch project…"), [this] {
+            const auto selected = QFileDialog::getOpenFileName(
+                owner, QStringLiteral("Import PincSketch project"), {}, QStringLiteral("PincSketch project (*.pinc *.PINC)"));
+            if (!selected.isEmpty()) importPinc(selected, true);
+        });
+        auto* imported_sources_action = make_action("importedSources", QStringLiteral("Imported sources…"),
                          [this] { showImportedSources(); });
-        auto* appraisal_report_action=more_menu->addAction(QStringLiteral("Appraisal area report…"));
-        appraisal_report_action->setObjectName(QStringLiteral("appraisalReport"));
-        QObject::connect(appraisal_report_action,&QAction::triggered,owner,[this]{showAppraisalReport();});
-        auto* print_sheet_action = more_menu->addAction(QStringLiteral("Print selected sheet…"));
-        print_sheet_action->setObjectName(QStringLiteral("printSelectedSheet"));
-        QObject::connect(print_sheet_action, &QAction::triggered, owner,
+        imported_sources_action->setToolTip(QStringLiteral("Inspect import notes and export the exact retained original file"));
+        auto* appraisal_report_action = make_action("appraisalReport", QStringLiteral("Appraisal area report…"),
+                         [this] { showAppraisalReport(); });
+        auto* print_sheet_action = make_action("printSelectedSheet", QStringLiteral("Print selected sheet…"),
                          [this] { showPrintPreview(); });
-        auto* print_set_action = more_menu->addAction(QStringLiteral("Print drawing set…"));
-        print_set_action->setObjectName(QStringLiteral("printDrawingSet"));
-        QObject::connect(print_set_action, &QAction::triggered, owner,
+        auto* print_set_action = make_action("printDrawingSet", QStringLiteral("Print drawing set…"),
                          [this] { showDrawingSetPrintPreview(); });
         m_copy_action = new QAction(QStringLiteral("Copy selection"), owner);
         m_copy_action->setObjectName(QStringLiteral("copySelection"));
@@ -55803,7 +56397,7 @@ private:
         QObject::connect(lift_pen_action, &QAction::triggered, owner, [this] {
             (void)liftDrawingPen();
         });
-        auto* travel_action = more_menu->addAction(QStringLiteral("Jump to corner / typed travel (J)"));
+        auto* travel_action = new QAction(QStringLiteral("Jump to corner / typed travel (J)"), owner);
         travel_action->setObjectName(QStringLiteral("jumpDrawingCorner"));
         travel_action->setToolTip(QStringLiteral("Hover near a structural corner and jump exactly to it. Else type distance + direction to travel without an edge."));
         QObject::connect(travel_action,&QAction::triggered,owner,[this] { (void)jumpDrawingCorner(); });
@@ -55818,35 +56412,6 @@ private:
         auto* bay_return_action = new QAction(QStringLiteral("Complete bay-window return (B)"), owner);
         bay_return_action->setObjectName(QStringLiteral("completeBayWindowReturnAction"));
         bay_return_action->setToolTip(QStringLiteral("After drawing the first diagonal side and front, add the matching return side and continue drawing (B on the canvas)."));
-        more_menu->addAction(m_copy_action);
-        more_menu->addAction(m_cut_action);
-        more_menu->addAction(m_paste_action);
-        more_menu->addAction(m_delete_action);
-        more_menu->addAction(m_upgrade_boundary_identities_action);
-        more_menu->addAction(m_insert_vertex_action);
-        more_menu->addAction(remove_point_action);
-        more_menu->addAction(merge_walls_action);
-        more_menu->addAction(jump_vertex_action);
-        more_menu->addAction(lift_pen_action);
-        more_menu->addAction(align_x_action);
-        more_menu->addAction(align_y_action);
-        auto* directional_menu = more_menu->addMenu(QStringLiteral("Directional alignment"));
-        for (const auto& [name, dx, dy] : std::array{
-                 std::tuple{QStringLiteral("Right"), 1, 0},
-                 std::tuple{QStringLiteral("Left"), -1, 0},
-                 std::tuple{QStringLiteral("Up"), 0, 1},
-                 std::tuple{QStringLiteral("Down"), 0, -1}}) {
-            for (const bool intersect : {false, true}) {
-                auto* action = directional_menu->addAction(intersect
-                    ? QStringLiteral("Intersect %1 (Ctrl+Shift+%1)").arg(name)
-                    : QStringLiteral("Align %1 (Ctrl+%1)").arg(name));
-                QObject::connect(action, &QAction::triggered, owner,
-                    [this, dx, dy, intersect] { proposeDirectionalDrawingAlignment(dx, dy, intersect); });
-            }
-        }
-        more_menu->addAction(auto_close_action);
-        more_menu->addAction(bay_return_action);
-        more_menu->addSeparator();
         m_annotation_action = new QAction(QStringLiteral("Annotations"), owner);
         m_reference_action = new QAction(QStringLiteral("Reference image"), owner);
         m_project_resources_action = new QAction(QStringLiteral("Project resources…"), owner);
@@ -55891,27 +56456,17 @@ private:
         refresh_exterior->setObjectName(QStringLiteral("refreshExteriorMeasurement"));
         auto* replace_exterior = new QAction(QStringLiteral("Replace source walls…"),owner);
         replace_exterior->setObjectName(QStringLiteral("replaceExteriorMeasurementSources"));
-        owner->addAction(measure_exterior);
-        owner->addAction(refresh_exterior);
-        owner->addAction(replace_exterior);
-        more_menu->addAction(measure_exterior);
-        more_menu->addAction(refresh_exterior);
-        more_menu->addAction(replace_exterior);
         QObject::connect(measure_exterior,&QAction::triggered,owner,[this] { showWallMeasurementReview(); });
         QObject::connect(refresh_exterior,&QAction::triggered,owner,[this] { showWallMeasurementReview(true); });
         QObject::connect(replace_exterior,&QAction::triggered,owner,[this] { showWallMeasurementSourceReview(); });
         auto* review_measured=new QAction(QStringLiteral("Review measured sources…"),owner);
         review_measured->setObjectName(QStringLiteral("reviewMeasuredAreaSources"));
-        owner->addAction(review_measured);more_menu->addAction(review_measured);
         QObject::connect(review_measured,&QAction::triggered,owner,[this]{showMeasuredAreaSourceReview();});
         auto* repair_room = new QAction(QStringLiteral("Review rooms from walls…"),owner);
         repair_room->setObjectName(QStringLiteral("repairPhysicalWallRoom"));
-        owner->addAction(repair_room); more_menu->addAction(repair_room);
         QObject::connect(repair_room,&QAction::triggered,owner,[this] { showPhysicalRoomRepair(); });
         m_site_placement_action = new QAction(QStringLiteral("Site placement and coordinate frame…"), owner);
         m_site_placement_action->setObjectName(QStringLiteral("sitePlacement"));
-        owner->addAction(m_site_placement_action);
-        more_menu->addAction(m_site_placement_action);
         QObject::connect(m_site_placement_action, &QAction::triggered, owner, [this] { showSitePlacement(); });
         m_terrain_action = new QAction(QStringLiteral("Create terrain surface…"), owner);
         m_terrain_action->setObjectName(QStringLiteral("createTerrainSurface"));
@@ -55923,6 +56478,33 @@ private:
         m_about_action->setObjectName(QStringLiteral("aboutAction"));
         auto* user_guide_action = new QAction(QStringLiteral("User guide…"), owner);
         user_guide_action->setObjectName(QStringLiteral("userGuide"));
+        auto* add_building_action = make_action("addBuilding", QStringLiteral("Add building…"),
+                         [this] { showOrganizationDialog("building"); });
+        auto* add_floor_action = make_action("addFloor", QStringLiteral("Add floor…"),
+                         [this] { showOrganizationDialog("floor"); });
+        auto* add_layer_action = make_action("addDrawingLayer", QStringLiteral("Add drawing layer…"),
+                         [this] { showOrganizationDialog("layer"); });
+        auto* preferences_action = make_action("preferences", QStringLiteral("Preferences…"),
+                         [this] { showPreferences(); });
+        preferences_action->setShortcut(QKeySequence(QStringLiteral("Ctrl+,")));
+        preferences_action->setStatusTip(QStringLiteral("Units, theme, autosave and drawing defaults"));
+        auto* fit_view_action = make_action("fitViewAction", QStringLiteral("Fit view"), [this] { fitView(); });
+        // Grid, snap and the overview map mirror the status-bar toggles.
+        auto* grid_view_action = new QAction(QStringLiteral("Grid"), owner);
+        grid_view_action->setObjectName(QStringLiteral("viewGrid"));
+        grid_view_action->setCheckable(true);
+        QObject::connect(grid_view_action, &QAction::triggered, owner,
+                         [this](bool enabled) { if (m_grid_button) m_grid_button->setChecked(enabled); else setGrid(enabled); });
+        auto* snap_view_action = new QAction(QStringLiteral("Snap"), owner);
+        snap_view_action->setObjectName(QStringLiteral("viewSnap"));
+        snap_view_action->setCheckable(true);
+        QObject::connect(snap_view_action, &QAction::triggered, owner,
+                         [this](bool enabled) { if (m_snap_button) m_snap_button->setChecked(enabled); else setSnap(enabled); });
+        auto* overview_view_action = new QAction(QStringLiteral("Overview map"), owner);
+        overview_view_action->setObjectName(QStringLiteral("viewOverviewMap"));
+        overview_view_action->setCheckable(true);
+        QObject::connect(overview_view_action, &QAction::triggered, owner,
+                         [this](bool enabled) { if (m_overview_button) m_overview_button->setChecked(enabled); else setOverviewMap(enabled); });
         const std::array<QAction*, 23> secondary_actions{
             m_annotation_action, m_reference_action, m_project_resources_action, m_schedule_action, m_sheet_action,
             m_viewport_action, m_view_action, m_remodel_action,
@@ -55933,19 +56515,217 @@ private:
             m_terrain_action,
             m_about_action,
             user_guide_action};
-        for (auto* action : secondary_actions) {
+        for (auto* action : secondary_actions) owner->addAction(action);
+        for (auto* action : {measure_exterior, refresh_exterior, replace_exterior, review_measured, repair_room,
+                             m_site_placement_action, preferences_action})
             owner->addAction(action);
-            more_menu->addAction(action);
+
+        auto* menu_bar = new QMenuBar(owner);
+        menu_bar->setObjectName(QStringLiteral("mainMenuBar"));
+        menu_bar->setNativeMenuBar(false);
+        owner->setMenuBar(menu_bar);
+        const auto add_menu = [menu_bar](const QString& title, const char* id) {
+            auto* menu = menu_bar->addMenu(title);
+            menu->setObjectName(QString::fromLatin1(id));
+            return menu;
+        };
+        const auto add_submenu = [](QMenu* parent, const QString& title, const char* id) {
+            auto* menu = parent->addMenu(title);
+            menu->setObjectName(QString::fromLatin1(id));
+            return menu;
+        };
+
+        auto* file_menu = add_menu(QStringLiteral("&File"), "fileMenu");
+        file_menu->addAction(m_new_action);
+        file_menu->addAction(m_open_action);
+        file_menu->addAction(m_recover_action);
+        file_menu->addSeparator();
+        file_menu->addAction(m_save_action);
+        file_menu->addAction(m_save_as_action);
+        file_menu->addSeparator();
+        auto* import_menu = add_submenu(file_menu, QStringLiteral("Import"), "importMenu");
+        import_menu->addAction(m_reference_action);
+        import_menu->addAction(import_dxf_action);
+        import_menu->addAction(import_ifc_action);
+        import_menu->addAction(import_pinc_action);
+        export_menu->addAction(export_sheet_pdf_action);
+        export_menu->addAction(sketch_pdf_action);
+        export_menu->addAction(export_set_action);
+        export_menu->addSeparator();
+        export_menu->addAction(export_dxf_action);
+        export_menu->addAction(export_ifc_action);
+        export_menu->addAction(export_svg_action);
+        export_menu->addAction(export_image_action);
+        file_menu->addMenu(export_menu);
+        file_menu->addSeparator();
+        file_menu->addAction(print_sheet_action);
+        file_menu->addAction(print_set_action);
+        file_menu->addSeparator();
+        auto* file_advanced = add_submenu(file_menu, QStringLiteral("Advanced"), "fileAdvancedMenu");
+        file_advanced->addAction(imported_sources_action);
+        file_advanced->addAction(m_disto_action);
+
+        auto* edit_menu = add_menu(QStringLiteral("&Edit"), "editMenu");
+        edit_menu->addAction(m_undo_action);
+        edit_menu->addAction(m_redo_action);
+        edit_menu->addSeparator();
+        edit_menu->addAction(m_cut_action);
+        edit_menu->addAction(m_copy_action);
+        edit_menu->addAction(m_paste_action);
+        edit_menu->addAction(m_delete_action);
+        edit_menu->addSeparator();
+        edit_menu->addAction(m_transform_action);
+        edit_menu->addAction(measurement_keypad_action);
+        edit_menu->addAction(m_insert_vertex_action);
+        edit_menu->addAction(remove_point_action);
+        edit_menu->addAction(merge_walls_action);
+        edit_menu->addAction(m_redefine_action);
+        auto* edit_advanced = add_submenu(edit_menu, QStringLiteral("Advanced"), "editAdvancedMenu");
+        edit_advanced->addAction(m_upgrade_boundary_identities_action);
+        edit_menu->addSeparator();
+        edit_menu->addAction(preferences_action);
+
+        // Draw keeps the established object name for its authoring commands.
+        auto* architecture_menu = add_menu(QStringLiteral("&Draw"), "architecturalAuthoringMenu");
+        for (auto* action : m_drawing_mode_actions)
+            if (action) architecture_menu->addAction(action);
+        architecture_menu->addSeparator();
+        architecture_menu->addAction(create_wall_action);
+        architecture_menu->addAction(curved_wall_action);
+        architecture_menu->addAction(sloped_wall_action);
+        architecture_menu->addSeparator();
+        architecture_menu->addAction(create_door_action);
+        architecture_menu->addAction(create_window_action);
+        architecture_menu->addAction(create_corner_window_action);
+        architecture_menu->addAction(create_opening_action);
+        architecture_menu->addSeparator();
+        architecture_menu->addAction(create_room_action);
+        architecture_menu->addAction(create_slab_action);
+        architecture_menu->addAction(create_floor_action);
+        for (auto* action : building_object_actions) architecture_menu->addAction(action);
+        architecture_menu->addAction(m_terrain_action);
+        architecture_menu->addSeparator();
+        architecture_menu->addAction(join_walls_action);
+        architecture_menu->addAction(unjoin_walls_action);
+        architecture_menu->addAction(join_roofs_action);
+        architecture_menu->addAction(unjoin_roofs_action);
+        architecture_menu->addSeparator();
+        architecture_menu->addAction(m_detect_areas_action);
+        architecture_menu->addAction(measure_exterior);
+        architecture_menu->addAction(repair_room);
+        auto* drawing_aids = add_submenu(architecture_menu, QStringLiteral("Drawing aids"), "drawingAidsMenu");
+        drawing_aids->addAction(lift_pen_action);
+        drawing_aids->addAction(travel_action);
+        drawing_aids->addAction(jump_vertex_action);
+        drawing_aids->addSeparator();
+        drawing_aids->addAction(align_x_action);
+        drawing_aids->addAction(align_y_action);
+        auto* directional_menu = add_submenu(drawing_aids, QStringLiteral("Directional alignment"), "directionalAlignmentMenu");
+        for (const auto& [name, dx, dy] : std::array{
+                 std::tuple{QStringLiteral("Right"), 1, 0},
+                 std::tuple{QStringLiteral("Left"), -1, 0},
+                 std::tuple{QStringLiteral("Up"), 0, 1},
+                 std::tuple{QStringLiteral("Down"), 0, -1}}) {
+            for (const bool intersect : {false, true}) {
+                auto* action = directional_menu->addAction(intersect
+                    ? QStringLiteral("Intersect %1 (Ctrl+Shift+%1)").arg(name)
+                    : QStringLiteral("Align %1 (Ctrl+%1)").arg(name));
+                QObject::connect(action, &QAction::triggered, owner,
+                    [this, dx, dy, intersect] { proposeDirectionalDrawingAlignment(dx, dy, intersect); });
+            }
         }
-        more_menu->addSeparator();
-        auto* more_action = more_menu->addAction(QStringLiteral("Keyboard shortcuts…"));
-        QObject::connect(more_action, &QAction::triggered, owner, [this] { showShortcutSettings(); });
-        QObject::connect(user_guide_action, &QAction::triggered, owner, [this] { showUserGuide(); });
+        drawing_aids->addSeparator();
+        drawing_aids->addAction(auto_close_action);
+        drawing_aids->addAction(bay_return_action);
+        auto* draw_advanced = add_submenu(architecture_menu, QStringLiteral("Advanced"), "drawAdvancedMenu");
+        draw_advanced->addAction(refresh_exterior);
+        draw_advanced->addAction(replace_exterior);
+        draw_advanced->addAction(review_measured);
+
+        auto* annotate_menu = add_menu(QStringLiteral("&Annotate"), "annotateMenu");
+        annotate_menu->addAction(dimension_action);
+        annotate_menu->addAction(m_annotation_action);
+        annotate_menu->addAction(text_library_action);
+        annotate_menu->addSeparator();
+        annotate_menu->addAction(constraints_action);
+
+        auto* theme_menu = new QMenu(QStringLiteral("Theme"), owner);
+        theme_menu->setObjectName(QStringLiteral("themeChoices"));
+        const auto add_theme_action = [this, theme_menu](QString label, const char* id, WorkspaceTheme theme) {
+            auto* action = theme_menu->addAction(std::move(label));
+            action->setObjectName(QString::fromLatin1(id));
+            QObject::connect(action, &QAction::triggered, owner, [this, theme] { applyTheme(theme); });
+        };
+        add_theme_action(QStringLiteral("Light"), "themeLight", WorkspaceTheme::light);
+        add_theme_action(QStringLiteral("Dark"), "themeDark", WorkspaceTheme::dark);
+        add_theme_action(QStringLiteral("High contrast"), "themeHighContrast", WorkspaceTheme::high_contrast);
+
+        auto* view_menu = add_menu(QStringLiteral("&View"), "viewMenu");
+        view_menu->addAction(m_measurement_action);
+        view_menu->addAction(m_architectural_action);
+        view_menu->addSeparator();
+        view_menu->addAction(grid_view_action);
+        view_menu->addAction(snap_view_action);
+        view_menu->addAction(overview_view_action);
+        view_menu->addAction(fit_view_action);
+        view_menu->addSeparator();
+        view_menu->addAction(named_views_action);
+        view_menu->addAction(m_view_action);
+        view_menu->addSeparator();
+        view_menu->addMenu(theme_menu);
+        auto* view_advanced = add_submenu(view_menu, QStringLiteral("Advanced"), "viewAdvancedMenu");
+        view_advanced->addAction(m_workspace_profiles_action);
+        QObject::connect(view_menu, &QMenu::aboutToShow, owner,
+                         [this, grid_view_action, snap_view_action, overview_view_action] {
+            const QSignalBlocker grid(grid_view_action), snap(snap_view_action), overview(overview_view_action);
+            grid_view_action->setChecked(m_grid_enabled);
+            snap_view_action->setChecked(m_snap_enabled);
+            overview_view_action->setChecked(m_overview_map_enabled);
+        });
+
+        auto* output_menu = add_menu(QStringLiteral("&Output"), "outputMenu");
+        output_menu->addAction(m_sheet_action);
+        output_menu->addAction(m_viewport_action);
+        output_menu->addAction(m_schedule_action);
+        output_menu->addAction(appraisal_report_action);
+        output_menu->addSeparator();
+        output_menu->addAction(sketch_guide_action);
+        output_menu->addSeparator();
+        output_menu->addAction(print_sheet_action);
+        output_menu->addAction(print_set_action);
+
+        auto* project_menu = add_menu(QStringLiteral("&Project"), "projectMenu");
+        project_menu->addAction(add_building_action);
+        project_menu->addAction(add_floor_action);
+        project_menu->addAction(add_layer_action);
+        project_menu->addSeparator();
+        project_menu->addAction(m_levels_action);
+        project_menu->addAction(m_remodel_action);
+        project_menu->addAction(m_revisions_action);
+        project_menu->addAction(m_project_resources_action);
+        project_menu->addAction(m_calculation_profile_action);
+        auto* project_advanced = add_submenu(project_menu, QStringLiteral("Advanced"), "projectAdvancedMenu");
+        project_advanced->addAction(m_site_placement_action);
+        project_advanced->addAction(georeferencing_action);
+        project_advanced->addAction(survey_action);
+        project_advanced->addAction(m_reference_grid_action);
+        project_advanced->addAction(m_assembly_action);
+        project_advanced->addAction(m_relationship_action);
+
+        auto* help_menu = add_menu(QStringLiteral("&Help"), "helpMenu");
+        help_menu->addAction(user_guide_action);
+        help_menu->addAction(shortcut_settings);
+        help_menu->addAction(m_palette_action);
+        help_menu->addAction(m_assistance_action);
+        help_menu->addSeparator();
+        help_menu->addAction(m_about_action);
+
         const auto text_editor_focused = [] {
             auto* focused = QApplication::focusWidget();
             return qobject_cast<QLineEdit*>(focused) != nullptr ||
                    qobject_cast<QPlainTextEdit*>(focused) != nullptr;
         };
+        QObject::connect(user_guide_action, &QAction::triggered, owner, [this] { showUserGuide(); });
         QObject::connect(m_copy_action, &QAction::triggered, owner, [this, text_editor_focused] {
             if (!text_editor_focused()) (void)copySelection();
         });
@@ -55972,29 +56752,7 @@ private:
                          [this] { (void)proposeDrawingAlignment(false); });
         QObject::connect(bay_return_action, &QAction::triggered, owner,
                          [this] { (void)completeBayWindowReturn(); });
-        auto* more_button = new QToolButton(toolbar);
-        more_button->setObjectName(QStringLiteral("moreTools"));
-        more_button->setIcon(modern_toolbar_icon("<path d='M5 7h14M5 12h14M5 17h14'/>", owner));
-        more_button->setToolTip(QStringLiteral("Annotations, references, phases, sheets, and view settings"));
-        more_button->setStatusTip(QStringLiteral("Annotations, references, phases, sheets, and view settings"));
-        more_button->setAccessibleName(QStringLiteral("More tools"));
-        more_button->setAccessibleDescription(QStringLiteral(
-            "Open secondary authoring and presentation commands"));
-        more_button->setText(QStringLiteral("Tools"));
-        more_button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-        more_button->setMenu(more_menu);
-        more_button->setPopupMode(QToolButton::InstantPopup);
-        toolbar->addWidget(more_button);
         QObject::connect(shortcut_settings, &QAction::triggered, owner, [this] { showShortcutSettings(); });
-        toolbar->addSeparator();
-        auto* theme_menu = new QMenu(owner);
-        const auto add_theme_action = [this, theme_menu](QString label, WorkspaceTheme theme) {
-            auto* action = theme_menu->addAction(std::move(label));
-            QObject::connect(action, &QAction::triggered, owner, [this, theme] { applyTheme(theme); });
-        };
-        add_theme_action(QStringLiteral("Light"), WorkspaceTheme::light);
-        add_theme_action(QStringLiteral("Dark"), WorkspaceTheme::dark);
-        add_theme_action(QStringLiteral("High contrast"), WorkspaceTheme::high_contrast);
         auto* theme_button = new QToolButton(toolbar);
         theme_button->setObjectName(QStringLiteral("themeMenu"));
         theme_button->setIcon(modern_toolbar_icon(
@@ -56039,7 +56797,7 @@ private:
         m_architecturalViewCombo->setToolTip(QStringLiteral(
             "Select the derived architectural plan, elevation, or horizontal section view"));
         m_architectural_view_control_action = toolbar->addWidget(m_architecturalViewCombo);
-        m_site_plan_action = toolbar->addAction(QStringLiteral("Site Plan"));
+        m_site_plan_action = toolbar->addAction(QStringLiteral("Site plan"));
         m_site_plan_action->setObjectName(QStringLiteral("sitePlan"));
         m_site_plan_action->setCheckable(true);
         m_site_plan_action->setToolTip(QStringLiteral("Show all visible buildings and floors of the active property in their site placement"));
@@ -56052,16 +56810,11 @@ private:
             syncToolControls();
             if (m_workspace == Workspace::architectural) m_architecturalCanvas->fitView();
         });
+        view_menu->insertAction(named_views_action, m_site_plan_action);
         auto* toolbar_spacer = new QWidget(toolbar);
         toolbar_spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         toolbar->addWidget(toolbar_spacer);
         toolbar->addWidget(theme_button);
-        // Keep secondary actions compact so the 2D / 3D selector remains
-        // directly visible even at the minimum supported window width.
-        for (auto* action : {m_recover_action, m_save_as_action, shortcut_settings}) {
-            if (auto* button = qobject_cast<QToolButton*>(toolbar->widgetForAction(action)))
-                button->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        }
 
         auto* workspace_group = new QActionGroup(owner);
         workspace_group->setExclusive(true);
@@ -56643,9 +57396,9 @@ private:
                     m_opening_draw_bay_side_label->hide();
                     m_pending_opening_profile.reset();
                     const bool window = kind == QStringLiteral("Window");
-                    m_opening_draw_width->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("0.9 m"));
-                    m_opening_draw_height->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("2.1 m"));
-                    m_opening_draw_sill->setText(window ? QStringLiteral("0.9 m") : QStringLiteral("0 m"));
+                    m_opening_draw_width->setText(metreFieldText(window ? m_preferences.window_width_m : m_preferences.door_width_m));
+                    m_opening_draw_height->setText(metreFieldText(window ? m_preferences.window_height_m : m_preferences.door_height_m));
+                    m_opening_draw_sill->setText(window ? metreFieldText(m_preferences.window_sill_m) : QStringLiteral("0 m"));
                     auto* form = qobject_cast<QFormLayout*>(m_opening_draw_fields->layout());
                     if (auto* label = qobject_cast<QLabel*>(form->labelForField(m_opening_draw_height))) label->setText(QStringLiteral("Height"));
                     m_opening_draw_height->setAccessibleName(QStringLiteral("Height"));
@@ -56846,6 +57599,7 @@ private:
         symbol_size_row->setContentsMargins(0, 0, 0, 0);
         symbol_size_row->setSpacing(5);
         auto* symbol_size_label = new QLabel(QStringLiteral("Size"), navigator_panel);
+        symbol_size_label->setObjectName(QStringLiteral("annotationSymbolSizeLabel"));
         m_symbol_size = new QComboBox(navigator_panel);
         m_symbol_size->setObjectName(QStringLiteral("annotationSymbolSize"));
         m_symbol_size->setAccessibleName(QStringLiteral("Component size"));
@@ -57143,7 +57897,7 @@ private:
                 if (!m_document->is_editable() || !source || !admitNativeSceneInput(false) ||
                     id != m_selected_id || m_selected_ids.size() != 1 || !m_selected_roof_openings.empty() ||
                     fullSnapshotDigest(*source) != fullSnapshotDigest(authoringSnapshot()))
-                    throw std::invalid_argument("The displayed 3D source or editing context changed before the gesture.");
+                    throw std::invalid_argument("The 3D view or active layer changed before the drag. Drag again.");
                 m_native_gesture_authority = captureSourceEditAuthority(*source);
             };
             m_nativeModelView->onRoofOpeningTransformStarted=[this](std::vector<visualization::NativeRoofOpeningTarget> targets) {
@@ -57182,7 +57936,7 @@ private:
                     if (has_target) {
                         const bool single=m_selected_ids.size()==1;
                         const auto source=m_nativeModelView->gestureSourceSnapshot();
-                        if (!source) throw std::invalid_argument("The captured 3D context source is unavailable.");
+                        if (!source) throw std::invalid_argument("The 3D view changed. Open the menu again.");
                         const auto authority=std::make_shared<SourceEditAuthority>(captureSourceEditAuthority(*source));
                         const auto current=[this,authority] {
                             if (sourceEditAuthorityCurrent(*authority,false)) return true;
@@ -57277,7 +58031,7 @@ private:
             architectural_splitter->setStretchFactor(1, 1);
         } else {
             auto* unavailable = new QLabel(
-                QStringLiteral("Native OCCT 3D is disabled on the offscreen smoke platform."),
+                QStringLiteral("3D rendering is turned off on the offscreen test platform."),
                 architectural_splitter);
             unavailable->setObjectName(QStringLiteral("modelViewUnavailable"));
             unavailable->setAlignment(Qt::AlignCenter);
@@ -58309,7 +59063,7 @@ private:
                 if (m_refreshing || !field->isModified()) return;
                 field->setModified(false);
                 if (!m_opening_property_context || !sourceEditAuthorityUnchanged(*m_opening_property_context)) {
-                    setError(QStringLiteral("The selected opening changed. Reopen its properties before editing placement."));
+                    setError(QStringLiteral("The opening changed while its properties were open. Open its properties again before editing its position."));
                     refreshInspector();
                     return;
                 }
@@ -58440,6 +59194,16 @@ private:
             setError(message);if(m_area_class_palette)m_area_class_palette->setStatus(message);
         });
         if (canvas == m_measurementCanvas) {
+            // Toolbar draw-mode keys: only an idle, editable measurement plan
+            // changes mode; during a drawing the key belongs to the canvas.
+            new DrawModeKeyFilter(canvas, [this](int key) {
+                if (m_workspace != Workspace::measurement || !m_document->is_editable() ||
+                    !m_drawing_mode_combo || !m_drawing_mode_combo->isEnabled() ||
+                    m_linework_drawing || m_boundary_session || m_pending_wall_start ||
+                    !m_pending_opening_kind.isEmpty() || !m_pending_symbol_id.isEmpty()) return false;
+                return setDrawingMode(key == Qt::Key_W ? DrawingMode::wall
+                    : key == Qt::Key_A ? DrawingMode::measurement : DrawingMode::measured_lines);
+            });
             m_drawing_input = new DrawingInputPanel(canvas);
             m_drawing_input->hide();
             m_drawing_input->setInputStarted([this] { captureDrawingInput(); });
@@ -58631,6 +59395,11 @@ private:
         canvas->setLabelDoubleClicked([this,canvas](CanvasLabelPresentationIdentity identity) {
             return showAreaCalloutPlacementEditor(canvas,identity);
         });
+        canvas->setInlineLengthEditRequested(
+            [this,canvas](CanvasLabelPresentationIdentity identity) { return resolveInlineLengthEdit(canvas,identity); },
+            [this,canvas](CanvasLabelPresentationIdentity identity,QString text) {
+                return commitInlineLengthEdit(canvas,identity,text);
+            });
         canvas->setGeneratedLabelSelectionClicked([this,canvas](CanvasLabelPresentationIdentity identity,bool toggle) {
             if (placeArmedCanvasSymbol(canvas)) return;
             (void)selectGeneratedLabel(canvas,identity,toggle);
@@ -58782,7 +59551,7 @@ private:
                 if (m_plan_move_capture) return commitPlanMoveFromCanvas(canvas,ids,delta);
                 if (siteCanvas(canvas)) {
                     if (m_wall_move_site_capture) return commitSiteWallMoveFromCanvas(canvas,ids,delta);
-                    throw std::invalid_argument("The Site move has no admitted preview. Start the drag again.");
+                    throw std::invalid_argument("The Site Plan move preview is not ready. Drag again.");
                 }
                 return moveSelectionBy(ids, delta, canvas);
             } catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); return false; }
@@ -58799,7 +59568,7 @@ private:
                         ? (m_opening_preview_move_error.isEmpty()
                             ? QStringLiteral("The opening could not be previewed. The project was not changed.")
                             : m_opening_preview_move_error)
-                        : QStringLiteral("The opening's project or view changed during the drag. Start again.");
+                        : QStringLiteral("The drawing or view changed while you were dragging the opening. Drag it again.");
                     m_opening_preview_command.reset();
                     m_opening_preview_prepared.reset();
                     setError(QStringLiteral("Move opening: %1").arg(message));refresh();return;
@@ -58922,7 +59691,7 @@ private:
                 if (!capture || ids!=capture->wall_ids || ids.size()<2 || !capture->wall_group_pivot ||
                     pivot.x!=capture->wall_group_pivot->x || pivot.y!=capture->wall_group_pivot->y) {
                     m_ordinary_transform_preview.reset(); m_entity_transform_ready=false;
-                    setError(QStringLiteral("The captured wall-group frame or selection changed. Start the transform again."));
+                    setError(QStringLiteral("The selected walls changed during the transform. Try the transform again."));
                     return std::vector<CanvasEntity>{};
                 }
                 return previewEntityTransformFromCanvas(canvas,capture->id,scale,radians,pivot,serial);
@@ -58938,7 +59707,7 @@ private:
                         !capture->wall_group_pivot || pivot.x!=capture->wall_group_pivot->x ||
                         pivot.y!=capture->wall_group_pivot->y) {
                         m_ordinary_transform_preview.reset(); m_entity_transform_ready=false;
-                        throw std::invalid_argument("The captured wall-group release changed. Start the transform again.");
+                        throw std::invalid_argument("The walls were released away from the preview. Try the transform again.");
                     }
                     return commitOrdinaryGeometryTransformFromCanvas(capture->id,scale,radians);
                 } catch (const std::exception& error) {
@@ -59105,7 +59874,7 @@ private:
                             const auto* active=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
                             if (canvas!=active || !sourceEditAuthorityCurrent(menu_authority,editable) ||
                                 menu_site!=siteCanvas(canvas) || (menu_site && menu_site_generation!=m_site_publication_generation)) {
-                                setError(QStringLiteral("The project, selection or plan changed. Reopen the label menu."));return false;
+                                setError(QStringLiteral("The drawing, selection or plan changed while the label menu was open. Open the menu again."));return false;
                             }
                             return true;
                         } catch (const std::exception& error) {
@@ -59143,7 +59912,7 @@ private:
                         menu_site==siteCanvas(canvas) && (!menu_site || menu_site_generation==m_site_publication_generation) &&
                         !hasPendingPlacementEdit() && !m_text_placement_context && !m_plan_label_context &&
                         !m_armed_area_class && !m_drawing_alignment && !m_drawing_alignment_invalidated) return true;
-                    setError(QStringLiteral("The project, selection or plan changed. Reopen its actions."));
+                    setError(QStringLiteral("The drawing, selection or plan changed while the actions menu was open. Open it again."));
                     return false;
                 };
                 const auto guarded=[this,menu_current](auto action) {
@@ -61378,7 +62147,7 @@ private:
             if (const auto catalog=geometric_assembly_for_child(source,id.toStdString()))
                 return catalog->assembly_catalog_id;
             if (const auto host=assembly_host_for_child(source,id.toStdString())) return *host;
-            throw std::invalid_argument("A Site Plan embedded presentation has no captured assembly owner.");
+            throw std::invalid_argument("A Site Plan item inside an assembly has no owning assembly.");
         };
         for (const auto& item : scene.geometry) {
             const SiteCanvasPresentationFrames::GeometryKey key{item.id,item.presentation_key};
@@ -61402,10 +62171,10 @@ private:
                 embedded_presentations.insert(key);
             } else {
                 if (persisted==source.entities().end())
-                    throw std::invalid_argument("A Site Plan geometry presentation has no captured source owner.");
+                    throw std::invalid_argument("A Site Plan shape has no owning object.");
                 if (!item.presentation_key.isEmpty()) {
                     if (item.type!=QStringLiteral("assembly_instance") || persisted->second.type!="assembly_instance")
-                        throw std::invalid_argument("A Site Plan geometry profile has no captured assembly source.");
+                        throw std::invalid_argument("A Site Plan profile has no owning assembly.");
                 }
                 const auto owner=siteModelPresentationOwner(source,persisted->first);
                 geometry_owners.emplace(key,owner);
@@ -61425,7 +62194,7 @@ private:
                 owners.emplace(id,catalog->assembly_catalog_id);
             } else if (const auto host = assembly_host_for_child(source,id.toStdString())) {
                 owners.emplace(id,*host);
-            } else throw std::invalid_argument("A Site Plan presentation has no captured source owner.");
+            } else throw std::invalid_argument("A Site Plan item has no owning object.");
         }
         std::set<std::string> unique;
         for (const auto& [id,owner] : owners) { (void)id; unique.insert(owner); }
@@ -62075,7 +62844,7 @@ private:
                             const auto row=std::find_if(catalog.instances().begin(),catalog.instances().end(),
                                 [&](const auto& instance) { return instance.id==key.second; });
                             if (row==catalog.instances().end())
-                                throw std::invalid_argument("The selected component is absent from its captured catalog.");
+                                throw std::invalid_argument("The selected component is no longer in its catalog.");
                             if (row->placement) {
                                 const auto& host=row->placement->host_entity_id;
                                 targets.insert(host);
@@ -62106,7 +62875,7 @@ private:
                                 }
                                 const auto row=indexed->second.find(key.second);
                                 if (row==indexed->second.end())
-                                    throw std::invalid_argument("The selected component is absent from its captured catalog.");
+                                    throw std::invalid_argument("The selected component is no longer in its catalog.");
                                 if (row->second->placement) targets.insert(row->second->placement->host_entity_id);
                             }
                         }
@@ -62160,7 +62929,7 @@ private:
                                     phase_coordinated_demolition_complete_component_dimensions(
                                         historical_demolition.coordinated_demolition,historical_demolition));
                                 if (!removal.ready())
-                                    throw std::invalid_argument("The coordinated roof removal no longer has complete source authority.");
+                                    throw std::invalid_argument("The roofs to remove changed. Select them again and remove them.");
                                 targets.insert(removal.removed_entity_ids.begin(),removal.removed_entity_ids.end());
                                 for (const auto& [join,parts]:removal.surviving_join_components) {
                                     (void)parts; targets.insert(join);
@@ -62551,7 +63320,7 @@ private:
                     }
                     const auto frame=input.move_frames.find(id);
                     if (frame==input.move_frames.end() || input.move_annotation_targets.contains(id))
-                        throw std::invalid_argument("A selected room callout has no unambiguous captured Site frame.");
+                        throw std::invalid_argument("A selected room label has more than one possible Site Plan position.");
                     room_placements->push_back({id.toStdString(),site_source_plan_delta(canvas_delta,frame->second)});
                 }
                 if (independent) {
@@ -62578,7 +63347,7 @@ private:
         const auto selected_operation=[&](const QString& id) {
             const auto frame=input.move_frames.find(id);
             if (frame==input.move_frames.end())
-                throw std::invalid_argument("A selected Site object has no captured presentation frame.");
+                throw std::invalid_argument("A selected Site Plan object has no position on the Site Plan.");
             return PlanarTransform{{},0.0,false,false,site_source_plan_delta(canvas_delta,frame->second)};
         };
         QStringList geometry_ids,dimension_ids;
@@ -62831,7 +63600,7 @@ private:
         const auto owner_operation=[&](const std::string& id) {
             const auto frame=owner_frames.find(id);
             if (frame==owner_frames.end())
-                throw std::invalid_argument("A moved dependency has no captured canonical Site frame: "+id);
+                throw std::invalid_argument("A linked object being moved has no Site Plan position: "+id);
             return PlanarTransform{{},0.0,false,false,site_source_plan_delta(canvas_delta,frame->second)};
         };
         std::optional<JointTranslationOffsets> joint_offsets;
@@ -62933,7 +63702,7 @@ private:
             !sourceEditAuthorityContextCurrent(*m_site_publication_authority))
             throw std::invalid_argument("The displayed Site Plan authoring context changed. Refresh the Site Plan before editing.");
         if(!m_pending_symbol_id.isEmpty() && m_site_symbol_frame) {
-            if(m_site_publication_authority->source_digest!=m_site_symbol_digest) throw std::invalid_argument("The Site Plan source changed during component placement. Start again.");
+            if(m_site_publication_authority->source_digest!=m_site_symbol_digest) throw std::invalid_argument("The Site Plan changed while you were placing the component. Place it again.");
             return site_source_plan_point(point,*m_site_symbol_frame);
         }
         if (!m_site_publication_input_frame) throw std::invalid_argument("Choose a complete drawing layer for Site Plan authoring.");
@@ -63157,7 +63926,7 @@ private:
             try {
                 if(!m_symbol_placement_authority || !sourceEditAuthorityCurrent(*m_symbol_placement_authority)) {
                     cancelSymbolPlacement();
-                    setError(QStringLiteral("The component placement context changed. Start again."));
+                    setError(QStringLiteral("The floor, layer or view changed while you were placing the component. Place it again."));
                 }
             } catch(const std::exception& error) {cancelSymbolPlacement();setError(QString::fromUtf8(error.what()));}
         }
@@ -64381,7 +65150,7 @@ private:
         const auto unchanged = [&] {
             if (!modalContextUnchanged(modal_context)) return false;
             if (!m_document->is_editable() || document_snapshot_digest(m_document->snapshot()) != source_digest) {
-                setError(QStringLiteral("The project changed while adding to the hierarchy. Reopen Add to use the current property."));
+                setError(QStringLiteral("The drawing changed while you were adding to the hierarchy. Choose Add again to use the current property."));
                 return false;
             }
             return true;
@@ -64585,7 +65354,7 @@ private:
         if (m_floor_reference_ui_document.lock() != m_document ||
             !m_floor_reference_ui_source || !sameFloorReferenceSource(*m_floor_reference_ui_source, snapshot) || !context ||
             id_from(context->floor_id) != m_floor_reference_ui_floor) {
-            setError(QStringLiteral("The active floor changed. Reopen its reference controls."));
+            setError(QStringLiteral("The active floor changed while its reference controls were open. Open them again."));
             refresh();
             return;
         }
@@ -64658,6 +65427,76 @@ private:
         }
     }
 
+    // "<layer id>\n<kind key>" for a drawing object listed directly beneath a
+    // layer; empty for hierarchy rows and rows owned by anything else.
+    static QString navigatorKindGroupKey(const ProjectOrganization& organization, const OrganizationNode& node) {
+        if (navigator_is_hierarchy_type(node.type) || node.parent_id.empty()) return {};
+        const auto parent = organization.nodes.find(node.parent_id);
+        if (parent == organization.nodes.end() || parent->second.type != "layer") return {};
+        return id_from(node.parent_id) + QLatin1Char('\n') + navigator_kind_key(node.type);
+    }
+
+    // Floors whose visibility a property or building eye controls.
+    static std::vector<std::string> navigatorContainedFloors(const ProjectOrganization& organization,
+                                                             const std::string& container, std::string_view type) {
+        std::vector<std::string> floors;
+        for (const auto& [id, node] : organization.nodes) {
+            if (node.type != "floor") continue;
+            if ((type == "building" && node.context.building_id == container) ||
+                (type == "property" && node.context.property_id == container)) floors.push_back(id);
+        }
+        return floors;
+    }
+
+    // The kind group row for `key` beneath `layer`, created on first use and
+    // kept in label order among the layer's other kind groups.
+    QTreeWidgetItem* navigatorKindGroup(const QString& key, const std::string& type, QTreeWidgetItem* layer) {
+        auto& group = m_navigator_kind_groups[key];
+        if (!group) {
+            group = new QTreeWidgetItem;
+            group->setData(0, navigator_group_role, key);
+            group->setText(0, navigator_kind_label(type));
+            group->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        }
+        if (group->parent() != layer) {
+            if (auto* previous = group->parent()) previous->takeChild(previous->indexOfChild(group));
+            int index = 0;
+            while (index < layer->childCount()) {
+                const auto* sibling = layer->child(index);
+                if (!sibling->data(0, navigator_group_role).toString().isEmpty() &&
+                    QString::localeAwareCompare(sibling->text(0), group->text(0)) > 0) break;
+                ++index;
+            }
+            layer->insertChild(index, group);
+        }
+        return group;
+    }
+
+    // The inline "+" of a building or floor row: add the next level down and
+    // rename in place. The property row keeps its own scoped Add menu.
+    void addNavigatorInlineAdd(QTreeWidgetItem* item, const QString& id, const std::string& type) {
+        auto* add = new QToolButton(m_navigator);
+        add->setText(QStringLiteral("+"));
+        add->setObjectName(QStringLiteral("navigatorAdd"));
+        add->setAccessibleName(type == "building" ? QStringLiteral("Add to building") : QStringLiteral("Add to floor"));
+        add->setToolTip(type == "building" ? QStringLiteral("Add a floor or layer") : QStringLiteral("Add a layer"));
+        add->setAutoRaise(true);
+        add->setFixedSize(24, 24);
+        add->setStyleSheet(QStringLiteral(
+            "QToolButton { font-size:18px; font-weight:600; padding:0; }"
+            "QToolButton::menu-indicator { image:none; width:0; }"));
+        add->setPopupMode(QToolButton::InstantPopup);
+        auto* menu = new QMenu(add);
+        addNavigatorChildActions(*menu, id, type);
+        menu->addSeparator();
+        auto* rename = menu->addAction(type == "building" ? QStringLiteral("Rename building")
+                                                          : QStringLiteral("Rename floor"));
+        rename->setEnabled(m_document->is_editable());
+        QObject::connect(rename, &QAction::triggered, owner, [this, id] { beginNavigatorRename(id); });
+        add->setMenu(menu);
+        m_navigator->setItemWidget(item, 1, add);
+    }
+
     void refreshNavigator() {
         const QSignalBlocker tree_blocker(m_navigator);
         const auto snapshot = authoringSnapshot();
@@ -64679,11 +65518,29 @@ private:
         };
         // Annotation children have separate typed identities. Rebuild those
         // small buckets independently, keeping every model row and its expansion.
+        std::map<QString, bool> annotation_group_expanded;
         for (auto* group : m_navigator_annotation_groups) {
+            annotation_group_expanded[group->data(0, Qt::UserRole).toString()] = group->isExpanded();
             detach(group);
             delete group;
         }
         m_navigator_annotation_groups.clear();
+        // Drawing objects are listed beneath their layer in kind groups
+        // ("Walls", "Areas"...). Groups persist with their rows; a retiring
+        // layer's groups leave the tree first so deleting the layer never
+        // deletes a retained row. Expansion belongs to the tree, so remember
+        // it before any row moves.
+        std::map<QString, bool> kind_group_expanded;
+        for (const auto& [key, group] : m_navigator_kind_groups) {
+            kind_group_expanded[key] = group->treeWidget() == m_navigator && group->isExpanded();
+        }
+        // The entity that owns a row's parent: a kind group stands for its layer.
+        const auto parent_entity = [](const QTreeWidgetItem* parent) {
+            if (!parent) return std::string{};
+            const auto group = parent->data(0, navigator_group_role).toString();
+            return (group.isEmpty() ? parent->data(0, Qt::UserRole).toString()
+                                    : group.section(QLatin1Char('\n'), 0, 0)).toStdString();
+        };
         const auto presented = [&snapshot](const OrganizationNode& node) {
             const auto entity = snapshot.entities().find(node.id);
             if (entity != snapshot.entities().end() && entity->second.type == "opening" &&
@@ -64700,15 +65557,18 @@ private:
         expansion.reserve(m_navigator_items.size());
         for (const auto& [id, item] : m_navigator_items)
             if (!retired.contains(id)) expansion.emplace_back(item, item->isExpanded());
+        for (const auto& [key, group] : m_navigator_kind_groups)
+            if (retired.contains(key.section(QLatin1Char('\n'), 0, 0).toStdString())) detach(group);
         // Detach children first: deleting a retired floor must never delete a
         // retained layer that is being moved to another floor in this same edit.
+        // A row also leaves a kind group that no longer matches its kind.
         for (const auto& [id, item] : m_navigator_items) {
             const auto node = organization.nodes.find(id);
-            if (retired.contains(id) || (item->parent() && retired.contains(
-                    item->parent()->data(0, Qt::UserRole).toString().toStdString())) ||
+            if (retired.contains(id) || (item->parent() && retired.contains(parent_entity(item->parent()))) ||
                 (node != organization.nodes.end() && item->parent() &&
                     item->parent() != m_navigator_unassigned &&
-                    item->parent()->data(0, Qt::UserRole).toString().toStdString() != node->second.parent_id))
+                    (parent_entity(item->parent()) != node->second.parent_id ||
+                     item->parent()->data(0, navigator_group_role).toString() != navigatorKindGroupKey(organization, node->second))))
                 detach(item);
         }
         for (const auto& id : retired) {
@@ -64749,25 +65609,38 @@ private:
             item->setText(1, QString{});
             item->setToolTip(1, QString{});
             const auto name = read_string(snapshot.entities().at(id).properties, "name");
-            QString label = QString::fromStdString(name && !name->empty() ? *name : node.type);
-            if (!name || name->empty()) {
-                label.replace(QLatin1Char('_'), QLatin1Char(' '));
-                if (!label.isEmpty()) label[0] = label[0].toUpper();
-            }
+            const bool named = name && !name->empty();
+            const bool hierarchy = navigator_is_hierarchy_type(node.type);
+            // People-facing names only: the declared name, else the readable
+            // kind ("Floor", "Wall"). Unnamed drawing objects are numbered
+            // within their kind group after attachment.
+            const QString label = named ? QString::fromStdString(*name)
+                : hierarchy ? library_display_name(QString::fromStdString(node.type))
+                            : navigator_object_label(node.type);
+            item->setData(0, navigator_name_role, hierarchy || named ? label : QString{});
             const bool visibility_container = is_visibility_container_type(node.type);
+            // A property or building eye reflects its floors: hidden only when
+            // every floor it contains is hidden.
+            const auto contained_floors = node.type == "building" || node.type == "property"
+                ? navigatorContainedFloors(organization, id, node.type) : std::vector<std::string>{};
             const bool own_hidden = node.type == "floor"
                 ? m_view_filter.hidden_floor_ids.contains(id)
-                : node.type == "layer" && m_view_filter.hidden_layer_ids.contains(id);
+                : node.type == "layer" ? m_view_filter.hidden_layer_ids.contains(id)
+                : !contained_floors.empty() && std::all_of(contained_floors.begin(), contained_floors.end(),
+                      [&](const auto& floor) { return m_view_filter.hidden_floor_ids.contains(floor); });
             const bool hidden_by_floor = node.type == "layer" && !node.context.floor_id.empty() &&
                 m_view_filter.hidden_floor_ids.contains(node.context.floor_id);
             const bool effective_visible = visible_ids.contains(id);
             const bool active_layer = node.type == "layer" && id_from(id) == m_active_layer_id;
             item->setText(0, label);
             item->setData(0, Qt::UserRole, id_from(id));
-            if (node.type != "property" && m_navigator->itemWidget(item, 1))
+            if (node.type != "property" && node.type != "building" && node.type != "floor" &&
+                m_navigator->itemWidget(item, 1))
                 m_navigator->removeItemWidget(item, 1);
             item->setData(0, visibility_type_role, QString::fromStdString(node.type));
-            QString tooltip = id_from(id);
+            QString tooltip = hierarchy ? library_display_name(QString::fromStdString(node.type)) +
+                                              QStringLiteral(" · F2 or double-click to rename")
+                                        : navigator_object_label(node.type);
             for (const auto& issue : node.issues) tooltip += QLatin1Char('\n') + QString::fromStdString(issue);
             if (tracing_context && !node.context.floor_id.empty() &&
                 node.context.floor_id != tracing_context->floor_id)
@@ -64778,7 +65651,9 @@ private:
                 // checked layer therefore remains checked when its floor is
                 // hidden, making the non-recursive behavior explicit.
                 item->setCheckState(0, own_hidden ? Qt::Unchecked : Qt::Checked);
-                tooltip += QStringLiteral("\nSpace toggles this container's view visibility only.");
+                tooltip += node.type == "building" || node.type == "property"
+                    ? QStringLiteral("\nSpace shows or hides all of its floors.")
+                    : QStringLiteral("\nSpace toggles this container's view visibility only.");
                 if (!effective_visible) {
                     const bool outside_focus = !own_hidden && !hidden_by_floor &&
                         (effective_filter.hidden_floor_ids.contains(node.context.floor_id) ||
@@ -64831,6 +65706,8 @@ private:
             auto* item = found->second;
             if (!node.parent_id.empty() && items.contains(node.parent_id)) {
                 auto* parent = items.at(node.parent_id);
+                if (const auto key = navigatorKindGroupKey(organization, node); !key.isEmpty())
+                    parent = navigatorKindGroup(key, node.type, parent);
                 if (item->parent() != parent) {
                     detach(item);
                     parent->addChild(item);
@@ -64857,10 +65734,56 @@ private:
             unassigned = nullptr;
         }
         m_navigator_unassigned = unassigned;
+        // Kind groups: drop empty ones, show each group's count, and number
+        // unnamed objects within their kind ("Wall 1", "Wall 2").
+        const auto count_color = owner->palette().color(QPalette::PlaceholderText);
+        for (auto group_entry = m_navigator_kind_groups.begin(); group_entry != m_navigator_kind_groups.end();) {
+            auto* group = group_entry->second;
+            if (group->childCount() == 0) {
+                detach(group);
+                delete group;
+                group_entry = m_navigator_kind_groups.erase(group_entry);
+                continue;
+            }
+            std::map<QString, int> ordinals;
+            for (int index = 0; index < group->childCount(); ++index) {
+                auto* row = group->child(index);
+                if (!row->data(0, navigator_name_role).toString().isEmpty()) continue;
+                const auto singular = navigator_object_label(
+                    row->data(0, visibility_type_role).toString().toStdString());
+                row->setText(0, QStringLiteral("%1 %2").arg(singular).arg(++ordinals[singular]));
+            }
+            group->setText(1, QString::number(group->childCount()));
+            group->setTextAlignment(1, Qt::AlignCenter);
+            group->setForeground(1, count_color);
+            group->setToolTip(0, QStringLiteral("%1 · %2 on this layer").arg(group->text(0)).arg(group->childCount()));
+            group->setToolTip(1, group->toolTip(0));
+            ++group_entry;
+        }
+        // Hierarchy rows rename in place while the document is editable.
+        for (const auto& [id, item] : items) {
+            const auto type = item->data(0, visibility_type_role).toString().toStdString();
+            if (!navigator_is_hierarchy_type(type)) continue;
+            const bool editable = m_document->is_editable();
+            if (item->flags().testFlag(Qt::ItemIsEditable) != editable)
+                item->setFlags(editable ? item->flags() | Qt::ItemIsEditable : item->flags() & ~Qt::ItemIsEditable);
+        }
         // Expansion belongs to the tree's model indices, which detachment
         // retires even for surviving descendants. Restore only after attachment.
         for (const auto& [item, expanded] : expansion)
             if (item->isExpanded() != expanded) item->setExpanded(expanded);
+        // Kind groups start collapsed and keep the state a person chose.
+        for (const auto& [key, group] : m_navigator_kind_groups) {
+            if (group->treeWidget() != m_navigator) continue;
+            const auto saved = kind_group_expanded.find(key);
+            const bool expanded = saved != kind_group_expanded.end() && saved->second;
+            if (group->isExpanded() != expanded) group->setExpanded(expanded);
+        }
+        for (const auto& [id, node] : organization.nodes) {
+            if ((node.type != "building" && node.type != "floor") || !items.contains(id) ||
+                m_navigator->itemWidget(items.at(id), 1)) continue;
+            addNavigatorInlineAdd(items.at(id), id_from(id), node.type);
+        }
         for (const auto& [id, node] : organization.nodes) {
             if (node.type != "property" || !items.contains(id) ||
                 m_navigator->itemWidget(items.at(id), 1)) continue;
@@ -64910,33 +65833,47 @@ private:
             }
         }
         std::map<std::string, QTreeWidgetItem*, std::less<>> annotation_groups;
+        // Symbols and labels form one kind group per layer. Like the other
+        // kind groups it starts collapsed and keeps the state a person chose.
+        const auto make_annotation_group = [&](const std::string& layer_id) {
+            auto* group = new QTreeWidgetItem({QStringLiteral("Symbols and labels")});
+            items.at(layer_id)->insertChild(0, group);
+            m_navigator_annotation_groups.push_back(group);
+            const auto key = QStringLiteral("layer-annotations:") + id_from(layer_id);
+            group->setData(0, Qt::UserRole, key);
+            const auto saved = annotation_group_expanded.find(key);
+            group->setExpanded(saved != annotation_group_expanded.end() && saved->second);
+            annotation_groups.emplace(layer_id, group);
+            return group;
+        };
         // Keep the active layer's content bucket visible even when it is
         // empty. The hierarchy therefore communicates where a library drop
         // will be stored before the first component is placed.
-        if (!fallback_annotation_layer.empty() && items.contains(fallback_annotation_layer)) {
-            auto* group = new QTreeWidgetItem({QStringLiteral("Symbols & labels")});
-            items.at(fallback_annotation_layer)->insertChild(0, group);
-            m_navigator_annotation_groups.push_back(group);
-            group->setData(0, Qt::UserRole,
-                           QStringLiteral("layer-annotations:") +
-                               id_from(fallback_annotation_layer));
-            group->setExpanded(true);
-            annotation_groups.emplace(fallback_annotation_layer, group);
-        }
+        if (!fallback_annotation_layer.empty() && items.contains(fallback_annotation_layer))
+            (void)make_annotation_group(fallback_annotation_layer);
         const auto group_for = [&](const AnnotationPlacement& placement) -> QTreeWidgetItem* {
             auto layer_id = placement.layer_id;
             if (layer_id.empty() || !items.contains(layer_id)) layer_id = fallback_annotation_layer;
             if (layer_id.empty() || !items.contains(layer_id)) return nullptr;
             if (const auto found = annotation_groups.find(layer_id);
                 found != annotation_groups.end()) return found->second;
-            auto* group = new QTreeWidgetItem({QStringLiteral("Symbols & labels")});
-            items.at(layer_id)->insertChild(0, group);
-            m_navigator_annotation_groups.push_back(group);
-            group->setData(0, Qt::UserRole,
-                           QStringLiteral("layer-annotations:") + id_from(layer_id));
-            group->setExpanded(true);
-            annotation_groups.emplace(layer_id, group);
-            return group;
+            return make_annotation_group(layer_id);
+        };
+        // Placed symbols read as their library names ("AC condenser"), never
+        // as catalog IDs.
+        std::map<std::string, QString, std::less<>> symbol_names;
+        const auto symbol_name = [&](const std::string& symbol_id) {
+            if (const auto known = symbol_names.find(symbol_id); known != symbol_names.end()) return known->second;
+            const auto& catalog = desktop_placeable_symbol_catalog();
+            auto definition = std::find_if(catalog.begin(), catalog.end(),
+                [&](const auto& candidate) { return candidate.id == symbol_id; });
+            if (definition == catalog.end())
+                definition = std::find_if(catalog.begin(), catalog.end(),
+                    [&](const auto& candidate) { return candidate.family == symbol_id; });
+            const auto name = library_display_name(QString::fromStdString(definition == catalog.end()
+                ? symbol_id : definition->name.empty() ? definition->family : definition->name));
+            symbol_names.emplace(symbol_id, name);
+            return name;
         };
         for (const auto& [id, entity] : snapshot.entities()) {
             if (entity.type != kAnnotationEntityType) continue;
@@ -64946,20 +65883,20 @@ private:
                 for (const auto& label : state.labels) {
                     auto* parent = group_for(label.placement);
                     if (!parent) continue;
+                    const auto content = QString::fromStdString(label.content).simplified();
                     auto* child = new QTreeWidgetItem(parent,
-                        {QStringLiteral("Label  •  %1").arg(QString::fromStdString(label.content))});
+                        {content.isEmpty() ? QStringLiteral("Label") : content});
                     child->setData(0, Qt::UserRole, id_from(label.id));
-                    child->setToolTip(0, QString::fromStdString(label.id));
+                    child->setToolTip(0, QStringLiteral("Label"));
                     child->setSelected(id_from(label.id) == m_selected_id);
                     if (id_from(label.id) == m_selected_id) m_navigator->setCurrentItem(child);
                 }
                 for (const auto& symbol : state.symbols) {
                     auto* parent = group_for(symbol.placement);
                     if (!parent) continue;
-                    auto* child = new QTreeWidgetItem(parent,
-                        {QStringLiteral("Symbol  •  %1").arg(QString::fromStdString(symbol.symbol_id))});
+                    auto* child = new QTreeWidgetItem(parent, {symbol_name(symbol.symbol_id)});
                     child->setData(0, Qt::UserRole, id_from(symbol.id));
-                    child->setToolTip(0, QString::fromStdString(symbol.id));
+                    child->setToolTip(0, QStringLiteral("Symbol"));
                     child->setSelected(id_from(symbol.id) == m_selected_id);
                     if (id_from(symbol.id) == m_selected_id) m_navigator->setCurrentItem(child);
                 }
@@ -64967,6 +65904,12 @@ private:
                 // The entity validator reports malformed state in the main
                 // canvas; do not make navigator refresh itself throw.
             }
+        }
+        for (auto* group : m_navigator_annotation_groups) {
+            group->setText(1, QString::number(group->childCount()));
+            group->setTextAlignment(1, Qt::AlignCenter);
+            group->setForeground(1, count_color);
+            group->setToolTip(0, QStringLiteral("Symbols and labels · %1 on this layer").arg(group->childCount()));
         }
         if (const auto previous = items.find(m_navigator_primary_selection.toStdString());
             previous != items.end() && m_navigator_primary_selection != m_selected_id)
@@ -64996,7 +65939,8 @@ private:
             if (!context) continue;
             const auto display = [&](const std::string& entity_id) {
                 const auto& value = organization.nodes.at(entity_id);
-                return QString::fromStdString(value.name.empty() ? value.type : value.name);
+                return value.name.empty() ? library_display_name(QString::fromStdString(value.type))
+                                          : QString::fromStdString(value.name);
             };
             const auto label = display(context->building_id) + QStringLiteral(" / ") +
                 display(context->floor_id) + QStringLiteral(" / ") + display(id);
@@ -65008,8 +65952,8 @@ private:
         m_drawing_layer_combo->setPlaceholderText(QStringLiteral("Choose a drawing layer"));
         if (m_component_library_heading) {
             m_component_library_heading->setText(active_index < 0
-                ? QStringLiteral("Choose a layer / Symbols & labels")
-                : QStringLiteral("%1 / Symbols & labels")
+                ? QStringLiteral("Choose a layer / Symbols and labels")
+                : QStringLiteral("%1 / Symbols and labels")
                       .arg(m_drawing_layer_combo->itemText(active_index)));
         }
         auto context_label = active_index < 0
@@ -65028,7 +65972,7 @@ private:
                 const auto property = propertyEntity();
                 const bool appraisal = property.has_value() &&
                     calculation_workflow_name(property->properties) == "appraisal";
-                m_calculation_profile_action->setText(appraisal ? QStringLiteral("Area display…")
+                m_calculation_profile_action->setText(appraisal ? QStringLiteral("Appraisal setup…")
                                                               : QStringLiteral("Calculation profile…"));
                 m_calculation_profile_action->setEnabled(m_document->is_editable() && property.has_value());
             } catch (const std::exception&) {
@@ -65258,7 +66202,7 @@ private:
         m_include_building_check->setVisible(!appraisal_workflow);
         m_include_living_check->setVisible(!appraisal_workflow);
         m_edit_calculation_profile_button->setVisible(true);
-        m_edit_calculation_profile_button->setText(appraisal_workflow ? QStringLiteral("Area display…")
+        m_edit_calculation_profile_button->setText(appraisal_workflow ? QStringLiteral("Appraisal setup…")
                                                                    : QStringLiteral("Edit calculation profile…"));
         m_include_building_check->setEnabled(editable && !appraisal_workflow);
         m_include_living_check->setEnabled(editable && !appraisal_workflow);
@@ -67171,13 +68115,17 @@ private:
                     static_cast<QWidget*>(m_roof_properties_group), static_cast<QWidget*>(m_building_properties_group)})
                 if (widget) widget->hide();
         }
-        auto title = m_file_path.empty()
+        // "<project>[*] — Vertex": Qt shows the modified marker in place of
+        // [*], and a title ending in the display name is not suffixed again.
+        const auto title = m_file_path.empty()
             ? QStringLiteral("Untitled project")
             : QString::fromStdWString(m_file_path.filename().wstring());
-        if (projectDirty() || hasUnsavedBoundaryDraftChanges()) {
-            title += QStringLiteral(" *");
-        }
-        owner->setWindowTitle(QStringLiteral("Vertex — ") + title);
+        owner->setWindowFilePath(m_file_path.empty() ? QString{}
+            : QString::fromStdWString(m_file_path.wstring()));
+        owner->setWindowTitle(title + QStringLiteral("[*] — Vertex"));
+        owner->setWindowModified((projectDirty() && !pristineUntitledProject()) ||
+                                 hasUnsavedBoundaryDraftChanges());
+        refreshEmptyCanvasHint();
         if (m_measurement_action) {
             QSignalBlocker first(m_measurement_action);
             QSignalBlocker second(m_architectural_action);
@@ -67186,7 +68134,75 @@ private:
         }
     }
 
+    // Status never by color alone: the status-bar Grid, Snap and Map toggles
+    // name their state ("Snap: off") in the tooltip and accessible
+    // description, and show a struck-through glyph while off.
+    void installStatusToggleCues() {
+        struct Cue {
+            QToolButton* button;
+            QString name;
+            QString detail;
+            QIcon on;
+            QIcon off;
+        };
+        const auto slash = QByteArrayLiteral("<path d='M3 21 21 3'/>");
+        const auto icons = [&](const char* glyph) {
+            return std::pair{modern_toolbar_icon(glyph, owner),
+                             toolbar_svg_icon(QByteArray(glyph) + slash, owner)};
+        };
+        const auto grid = icons("<path d='M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z'/>");
+        const auto snap = icons("<path d='M4 4h5v9a3 3 0 0 0 6 0V4h5v9a8 8 0 0 1-16 0z'/><path d='M4 8h5M15 8h5'/>");
+        const auto map = icons("<rect x='4' y='5' width='16' height='14' rx='2'/><path d='m6 16 4-4 3 3 2-2 3 3'/><circle cx='9' cy='9' r='1'/>");
+        const std::array<Cue, 3> cues{{
+            {m_grid_button, QStringLiteral("Grid"), m_grid_button ? m_grid_button->toolTip() : QString{},
+             grid.first, grid.second},
+            {m_snap_button, QStringLiteral("Snap"), m_snap_button ? m_snap_button->toolTip() : QString{},
+             snap.first, snap.second},
+            {m_overview_button, QStringLiteral("Overview map"),
+             m_overview_button ? m_overview_button->toolTip() : QString{}, map.first, map.second}}};
+        std::vector<std::function<void()>> refreshers;
+        for (const auto& cue : cues) {
+            if (!cue.button) continue;
+            const auto apply = [cue](bool checked) {
+                const auto state = QStringLiteral("%1: %2").arg(cue.name,
+                    checked ? QStringLiteral("on") : QStringLiteral("off"));
+                cue.button->setIcon(checked ? cue.on : cue.off);
+                cue.button->setToolTip(state + QStringLiteral("\n") + cue.detail);
+                cue.button->setAccessibleDescription(state);
+            };
+            apply(cue.button->isChecked());
+            QObject::connect(cue.button, &QToolButton::toggled, cue.button, apply);
+            refreshers.push_back([apply, button = QPointer<QToolButton>(cue.button)] {
+                if (button) apply(button->isChecked());
+            });
+        }
+        // Signal-blocked programmatic updates (profiles, restore) call this.
+        m_refresh_status_toggle_cues = [refreshers] { for (const auto& refresh : refreshers) refresh(); };
+    }
+
+    // First-run prompt on an empty drawing. The canvas paints it only while it
+    // has no content and no tool or draft is active; an active command clears it.
+    void refreshEmptyCanvasHint() {
+        const bool busy = m_linework_drawing || m_boundary_session || m_pending_wall_start ||
+            !m_pending_opening_kind.isEmpty() || !m_pending_symbol_id.isEmpty() ||
+            !m_document->is_editable();
+        if (m_measurementCanvas) {
+            m_measurementCanvas->setEmptyDrawingHint(busy ? QString{}
+                : m_creation_mode == DrawingMode::measurement
+                    ? QStringLiteral("Click to place the first area corner")
+                : m_creation_mode == DrawingMode::measured_lines
+                    ? QStringLiteral("Click to place the first measured line point")
+                    : QStringLiteral("Click to place the first wall corner"));
+        }
+        if (m_architecturalCanvas) {
+            m_architecturalCanvas->setEmptyDrawingHint(busy || m_site_plan_active ||
+                    m_architectural_view_kind != BuildingViewKind::plan
+                ? QString{} : QStringLiteral("Click to place the first wall corner"));
+        }
+    }
+
     void refreshCursorLabel(Vec2 point) {
+        refreshEmptyCanvasHint();
         // The release's final cursor update must not immediately erase the
         // result of automatic measurement. Ordinary operation messages remain
         // free to replace this bounded notice.
@@ -67588,7 +68604,12 @@ private:
         setError(message);if(m_area_class_palette)m_area_class_palette->setStatus(message);return false;
     }
 
-    std::optional<QString> chooseBoundaryClassification(const DrawingContext& context, bool allow_exclusions=false) {
+    // ask_when_obvious=false (finishing a drawn area) skips the prompt when the
+    // choice is obvious: the only classification available, or the one the
+    // user chose last in this session. Define First and exclusion choices
+    // always ask, since choosing is the point of those commands.
+    std::optional<QString> chooseBoundaryClassification(const DrawingContext& context, bool allow_exclusions=false,
+                                                        bool ask_when_obvious=true) {
         const auto snapshot = m_document->snapshot();
         const auto property = snapshot.entities().find(context.property_id);
         if (property == snapshot.entities().end()) throw std::invalid_argument("drawing property is missing");
@@ -67611,6 +68632,11 @@ private:
                 (void)role;
                 choices.push_back(label);
             }
+        if (!ask_when_obvious && !allow_exclusions) {
+            if (choices.size() == 1) return choices.front();
+            if (m_boundary_classification_chosen && choices.contains(m_last_boundary_classification))
+                return m_last_boundary_classification;
+        }
         QInputDialog dialog(owner);
         dialog.setObjectName(QStringLiteral("boundaryClassificationDialog"));
         dialog.setWindowTitle(QStringLiteral("Define area"));
@@ -68664,7 +69690,7 @@ private:
                 gesture.rotation_radians!=admitted.rotation_radians || gesture.uniform_scale!=admitted.uniform_scale ||
                 gesture.axis_scale.x!=admitted.axis_scale.x || gesture.axis_scale.y!=admitted.axis_scale.y ||
                 gesture.axis_rotation_radians!=admitted.axis_rotation_radians)
-                throw std::invalid_argument("The skylight group release differs from its admitted preview.");
+                throw std::invalid_argument("The skylights were released away from their preview. Drag them again.");
             if (!ready->result->no_op) publishPreparedCanvasEdit(ready->result->prepared,ready->capture->edit_source);
             auto targets=ready->result->targets;
             for (auto& target:targets) target.source_revision=authoringSnapshot().revision();
@@ -68701,7 +69727,7 @@ private:
         try {
             const auto capture=m_roof_opening_capture;
             if (!roofOpeningCaptureCurrent(capture) || capture->canvas!=canvas || gesture.target!=capture->target)
-                throw std::invalid_argument("The skylight gesture source changed. Start again.");
+                throw std::invalid_argument("The skylight changed during the drag. Drag it again.");
             const auto& original=roofCanvasChild(*capture->source,gesture.target);
             const auto& p=capture->source->entities().at(gesture.target.roof_id.toStdString()).properties;
             const auto yaw=p.at("orientation_rad").get<double>();
@@ -68715,12 +69741,12 @@ private:
                 gesture.frame.reference_across.y!=capture->initial_frame.reference_across.y ||
                 gesture.frame.width_surface_scale!=capture->initial_frame.width_surface_scale ||
                 gesture.frame.depth_surface_scale!=capture->initial_frame.depth_surface_scale)
-                throw std::invalid_argument("Skylight grips need the captured roof face and positive finite dimensions.");
+                throw std::invalid_argument("This skylight cannot be resized: its roof face is missing or its size is invalid.");
             const auto valid_resize_axis=[](double axis) { return axis==0.0 || axis==-1.0 || axis==1.0; };
             if (!valid_resize_axis(gesture.resize_axes.x) || !valid_resize_axis(gesture.resize_axes.y) ||
                 ((gesture.resize_axes.x!=0.0 || gesture.resize_axes.y!=0.0) &&
                  gesture.frame.rotation_radians!=capture->initial_frame.rotation_radians))
-                throw std::invalid_argument("Skylight resizing needs the captured opposite-side anchor.");
+                throw std::invalid_argument("This skylight cannot be resized: its opposite side could not be found.");
             Vec2 delta{gesture.frame.center.x-capture->initial_frame.center.x,gesture.frame.center.y-capture->initial_frame.center.y};
             if (!capture->site_frames.empty()) delta=site_source_plan_delta(delta,capture->site_frames.at(gesture.target.roof_id));
             if (capture->view) {
@@ -68952,13 +69978,13 @@ private:
         const CanvasRoofOpeningTarget& target,const RoofOpeningEditIntent& opening,bool removed) {
         if (m_roof_opening_native_selection &&
             fullSnapshotDigest(*selectedRoofOpeningSource())!=fullSnapshotDigest(*source))
-            throw std::invalid_argument("The displayed skylight changed. Reopen its editor.");
+            throw std::invalid_argument("The skylight changed while its editor was open. Open the editor again.");
         const auto authority=captureSourceEditAuthority(*source);
         (void)roofCanvasChild(*source,target);
         RoofEditIntent edit; edit.roof_id=opening.roof_id; edit.openings=opening; edit.coordinate_world_hosted_geometry=true;
         const auto physical=replay_roof_edit_entities(source->entities(),{edit});
         if (!sourceEditAuthorityUnchanged(authority) || m_selected_roof_opening!=std::optional{target})
-            throw std::invalid_argument("The skylight source or selection changed. Reopen its properties.");
+            throw std::invalid_argument("The skylight or selection changed while its properties were open. Open its properties again.");
         if (physical==source->entities()) { clearError(); return true; }
         const auto command=sourceDerivedRoofMathEditCommand(*source,physical,{edit},removed ? "Delete skylight" : "Edit skylight");
         if (!applyAuthoredCommand(command)) return false;
@@ -68978,12 +70004,12 @@ private:
         const std::vector<CanvasRoofOpeningTarget>& targets,const std::vector<RoofEditIntent>& edits,bool removed) {
         if (targets.empty() || targets!=m_selected_roof_openings ||
             fullSnapshotDigest(*selectedRoofOpeningCohortSource())!=fullSnapshotDigest(*source))
-            throw std::invalid_argument("The skylight source or selection changed. Reopen its editor.");
+            throw std::invalid_argument("The skylight or selection changed while its editor was open. Open the editor again.");
         const auto authority=captureSourceEditAuthority(*source);
         const auto native=m_roof_opening_native_selection;
         const auto physical=replay_roof_edit_entities(source->entities(),edits);
         if (!sourceEditAuthorityUnchanged(authority))
-            throw std::invalid_argument("The project or selected skylights changed. Reopen Properties.");
+            throw std::invalid_argument("The drawing or selected skylights changed while Properties was open. Open Properties again.");
         if (physical==source->entities()) { clearError(); return true; }
         const auto command=sourceDerivedRoofMathEditCommand(*source,physical,edits,
             removed ? "Delete skylights" : "Edit skylights");
@@ -69040,7 +70066,7 @@ private:
             QObject::connect(buttons->button(QDialogButtonBox::Apply),&QPushButton::clicked,&dialog,[&] {
                 try {
                     if (!sourceEditAuthorityCurrent(authority) || targets!=m_selected_roof_openings)
-                        throw std::invalid_argument("The project or selected skylights changed. Reopen Properties.");
+                        throw std::invalid_argument("The drawing or selected skylights changed while Properties was open. Open Properties again.");
                     const auto unit=m_metric_units ? Unit::metre : Unit::foot;
                     RoofOpeningGroupProperties request;
                     for (const auto& target:targets)
@@ -69085,7 +70111,7 @@ private:
                 auto* remove=menu.addAction(QStringLiteral("Delete selected group"));
                 for (auto* action:{properties,cut,duplicate,remove}) action->setEnabled(source.is_editable());
                 const auto action=menu.exec(global_position);
-                if (!sourceEditAuthorityCurrent(authority,false)) throw std::invalid_argument("The complete group changed. Reopen its menu.");
+                if (!sourceEditAuthorityCurrent(authority,false)) throw std::invalid_argument("The selected group changed while its menu was open. Open the menu again.");
                 if (action==properties) showSelectionPropertiesEditor();
                 else if (action==copy) (void)copyMixedClipboardSelection(false);
                 else if (action==cut) (void)copyMixedClipboardSelection(true);
@@ -69109,13 +70135,13 @@ private:
             for (auto* action:{properties,cut,duplicate,remove}) action->setEnabled(source->is_editable());
             const auto action=menu.exec(global_position);
             if (!sourceEditAuthorityCurrent(authority,false) || m_selected_roof_openings!=captured) {
-                setError(QStringLiteral("The skylight source or selection changed. Reopen its menu.")); return;
+                setError(QStringLiteral("The skylight or selection changed while its menu was open. Open the menu again.")); return;
             }
             // A native publication can become pending without changing the
             // authoring digest. Require the same successful displayed source.
             if (m_roof_opening_native_selection &&
                 fullSnapshotDigest(*selectedRoofOpeningCohortSource(false))!=fullSnapshotDigest(*source))
-                throw std::invalid_argument("The displayed skylight changed. Reopen its menu.");
+                throw std::invalid_argument("The skylight changed while its menu was open. Open the menu again.");
             if (action==properties) showRoofOpeningQuickProperties();
             else if (action==copy) (void)copyRoofOpeningSelection(false);
             else if (action==cut) (void)copyRoofOpeningSelection(true);
@@ -69186,7 +70212,7 @@ private:
             QObject::connect(buttons->button(QDialogButtonBox::Apply),&QPushButton::clicked,&dialog,[&] {
                 try {
                     if (!sourceEditAuthorityCurrent(authority) || m_selected_roof_opening!=std::optional{target})
-                        throw std::invalid_argument("The project or selected skylight changed. Reopen Properties.");
+                        throw std::invalid_argument("The drawing or selected skylight changed while Properties was open. Open Properties again.");
                     const auto unit=m_metric_units ? Unit::metre : Unit::foot;
                     RoofOpeningEditIntent intent; intent.roof_id=target.roof_id.toStdString(); intent.uses_skylight_schema=true;
                     intent.uses_rotation_schema=rotation_schema || rotation_changed;
@@ -69225,7 +70251,7 @@ private:
         try {
             requirePlanOpeningPlacementCurrent();
             if (m_pending_roof_opening_group_clones.size()<2)
-                throw std::invalid_argument("The copied skylight group changed. Paste again.");
+                throw std::invalid_argument("The copied skylights are no longer available. Copy and paste them again.");
             const auto source=m_plan_opening_source;
             const auto context=requireDrawingContext(*source);
             if (!context || !context->complete()) throw std::invalid_argument("Choose a complete drawing layer.");
@@ -69391,7 +70417,7 @@ private:
             row.width=RoofOpeningQuantityInput{width,unit}; row.depth=RoofOpeningQuantityInput{depth,unit}; row.skylight=profile;
             if (m_pending_roof_opening_clone) {
                 if (!m_pending_roof_opening_clone_row)
-                    throw std::invalid_argument("The copied skylight placement state changed. Paste again.");
+                    throw std::invalid_argument("The skylight paste lost its position. Paste again.");
                 row.clone_source=m_pending_roof_opening_clone;
                 row.skylight=m_pending_roof_opening_clone_row->at("skylight");
                 if (m_pending_roof_opening_clone->roof.properties.at("version")==4) {
@@ -69478,7 +70504,7 @@ private:
             input.plan_frame = site ? std::nullopt : m_plan_opening_frame;
             input.architectural_context = organize_project(*input.source).drawing_context(input.layer_id);
             if (!input.architectural_context || !input.architectural_context->complete())
-                throw std::invalid_argument("The captured corner-window layer is unavailable.");
+                throw std::invalid_argument("The layer for this corner window is no longer available.");
             if (site) input.site_frames = m_site_opening_frames;
             input.corner_window = true; input.corner_pick_radius = 18.0/canvas->viewScale();
             input.fit_corner_profile = !m_pending_corner_window_clone;
@@ -69654,7 +70680,7 @@ private:
             }
             const auto snapshot = site ? *m_site_opening_source : *m_plan_opening_source;
             const auto active_context=architectural ? organize_project(snapshot).drawing_context(m_active_layer_id.toStdString()) : std::optional<DrawingContext>{};
-            if (architectural && !active_context) throw std::invalid_argument("The captured opening layer is unavailable.");
+            if (architectural && !active_context) throw std::invalid_argument("The layer for this opening is no longer available.");
             const auto placement=visibleOpeningHostAt(snapshot,canvas->entities(),point,displayed_point,width,
                 m_active_layer_id.toStdString(),active_context,site ? &m_site_opening_frames : nullptr,
                 canvas->placementLengthIncrementMetres());
@@ -69804,7 +70830,7 @@ private:
         if (endpoint != m_wall_drawing_endpoints.end()) return endpoint->second;
         const auto model = unproject_plan_point(point,*m_wall_drawing_frame);
         if (!std::isfinite(model.x) || !std::isfinite(model.y))
-            throw std::invalid_argument("The wall point could not be resolved in the captured plan frame.");
+            throw std::invalid_argument("The wall point could not be located in this plan view.");
         return model;
     }
 
@@ -69982,16 +71008,17 @@ private:
             if (m_tool == CanvasTool::sloped_wall) {
                 const auto source = authoringSnapshot();
                 const auto authority = captureSourceEditAuthority(source);
-                bool accepted = false;
-                const auto rise = QInputDialog::getText(
-                    owner, QStringLiteral("Create sloped wall"),
-                    QStringLiteral("Signed top rise from start to end:"), QLineEdit::Normal,
-                    m_metric_units ? QStringLiteral("0.3 m") : QStringLiteral("1 ft"),
-                    &accepted);
-                if (!accepted) {
+                std::vector<CompactFormField> rise_fields{
+                    {QStringLiteral("slopedWallRise"), QStringLiteral("Top rise, start to end"),
+                     units::length_input_text(m_metric_units ? 0.3 : units::metres_per_foot, m_metric_units)}};
+                if (!runCompactForm(owner, QStringLiteral("slopedWallRiseForm"),
+                                    QStringLiteral("Create sloped wall"), QStringLiteral("Create wall"),
+                                    rise_fields,
+                                    QStringLiteral("Use a negative rise to slope the top down toward the end."))) {
                     clearPreview();
                     return;
                 }
+                const auto rise = rise_fields.front().value;
                 if (!sourceEditAuthorityCurrent(authority)) {
                     setError(QStringLiteral("The sloped wall source or drawing context changed. Press Esc and start again."));
                     return;
@@ -70127,7 +71154,7 @@ private:
             if (!m_boundary_session->accepted_chains().back().classified) {
                 const auto modal_context = captureModalContext();
                 const auto original_state = m_boundary_session->view();
-                const auto classification = chooseBoundaryClassification(*m_boundary_context);
+                const auto classification = chooseBoundaryClassification(*m_boundary_context, false, false);
                 if (!classification) return;
                 if (!modalContextUnchanged(modal_context) || !m_boundary_session ||
                     !(m_boundary_session->view() == original_state)) return;
@@ -70135,6 +71162,7 @@ private:
                 classified.classify_last_chain(classification->toStdString());
                 if (!install_candidate(std::move(classified))) return;
                 m_last_boundary_classification = *classification;
+                m_boundary_classification_chosen = true;
             }
             if (commit_message.trimmed().isEmpty()) {
                 commit_message = exact_auto_close ? QStringLiteral("Auto close boundary")
@@ -70770,7 +71798,7 @@ private:
                 m_wall_chain_owner_ids != chain_owners ||
                 (m_wall_draw_thickness && m_wall_draw_thickness->text() != thickness_text) ||
                 (m_wall_draw_height && m_wall_draw_height->text() != height_text)) {
-                setError(QStringLiteral("The project or wall drawing context changed. Reopen precise input."));
+                setError(QStringLiteral("The drawing or wall layer changed while precise input was open. Open it again."));
                 return;
             }
             const auto candidate = dialog.candidate();
@@ -71047,7 +72075,7 @@ private:
             m_architecturalCanvas->setWallPreview(std::nullopt);
             return;
         }
-        double thickness = 0.14;
+        double thickness = m_preferences.wall_thickness_m;
         try {
             const auto unit = m_metric_units ? Unit::metre : Unit::foot;
             const auto parsed = parse_quantity(m_wall_draw_thickness->text().toStdString(), unit).metres;
@@ -71301,7 +72329,7 @@ private:
     bool sourceEditAuthorityUnchanged(const SourceEditAuthority& authority) {
         if (!modalContextUnchanged(authority.context)) return false;
         if (!sourceEditAuthorityCurrent(authority)) {
-            setError(QStringLiteral("The project, workspace, selection or view changed. Reopen the editor to review the current source."));
+            setError(QStringLiteral("The drawing, workspace, selection or view changed while the editor was open. Open it again to see the current version."));
             return false;
         }
         return true;
@@ -71637,7 +72665,7 @@ private:
                                 if (!read_document_wall(entity,{},wall,diagnostic)) throw std::invalid_argument(diagnostic);
                                 const auto placement=capture.ordinary_frames.find(id);
                                 if (placement==capture.ordinary_frames.end())
-                                    throw std::invalid_argument("The wall lost its captured source frame.");
+                                    throw std::invalid_argument("The wall's position could not be found in this view.");
                                 const auto delta=site_transform_delta({0.0,0.0,gesture.translation_world_m[2]},placement->second.inverse);
                                 if (delta.x!=0.0 || delta.y!=0.0)
                                     throw std::invalid_argument("The wall frame does not support pure vertical movement.");
@@ -71650,7 +72678,7 @@ private:
                                 if (!read_document_slab(entity,slab,diagnostic)) throw std::invalid_argument(diagnostic);
                                 const auto placement=capture.ordinary_frames.find(id);
                                 if (placement==capture.ordinary_frames.end())
-                                    throw std::invalid_argument("The floor slab lost its captured source frame.");
+                                    throw std::invalid_argument("The floor slab's position could not be found in this view.");
                                 const auto delta=site_transform_delta({0.0,0.0,gesture.translation_world_m[2]},placement->second.inverse);
                                 if (delta.x!=0.0 || delta.y!=0.0)
                                     throw std::invalid_argument("The floor slab frame does not support pure vertical movement.");
@@ -71777,8 +72805,8 @@ private:
                     *request.result->candidate,request.result->targets,request.result->visible_ids,wall_correspondence)) m_ready_native_roof_opening_preview.reset();
             } else {
                 QString message=request.capture->ordinary.isEmpty() ?
-                    QStringLiteral("The skylights do not fit this 3D proposal.") :
-                    QStringLiteral("The complete selection does not fit this 3D proposal.");
+                    QStringLiteral("The skylights do not fit this 3D change.") :
+                    QStringLiteral("The selection does not fit this 3D change.");
                 try { if (completion.error) std::rethrow_exception(completion.error); }
                 catch (const Standard_Failure& error) { if (error.GetMessageString()) message=QString::fromUtf8(error.GetMessageString()); }
                 catch (const std::exception& error) { message=QString::fromUtf8(error.what()); }
@@ -71896,7 +72924,7 @@ private:
             if (gesture_source->entities().contains(id.toStdString()))
                 frame = resolve_site_presentation(*gesture_source, id.toStdString()).forward;
             else if (!geometric_assembly_for_child(*gesture_source, id.toStdString()))
-                throw std::invalid_argument("The captured 3D target is unavailable.");
+                throw std::invalid_argument("The object picked in 3D is no longer available. Pick it again.");
             // Embedded catalog profiles have explicit world roots; the typed
             // embedded adapter owns child lookup and atomic catalog completion.
             const auto local = conjugate_site_edit(world, frame);
@@ -71974,13 +73002,13 @@ private:
                 m_selected_id != context.selected_id || m_active_layer_id != context.layer_id ||
                 modelPhaseRegistryId() != context.phase_registry_id ||
                 m_metric_units != context.metric_units || context.generated_label_selection!=m_selected_generated_labels) {
-                setError(QStringLiteral("The project, selection, drawing layer, design set or units changed while the dialog was open. Reopen the tool to use the current context."));
+                setError(QStringLiteral("The drawing, selection, layer, design set or units changed while the dialog was open. Open the tool again to use the current settings."));
                 return false;
             }
             const auto current=authoringSnapshot();
             const auto sheet_owner_id = selectedSheetOwnerId(current);
             if (sheet_owner_id != context.sheet_owner_id) {
-                setError(QStringLiteral("The selected sheet set changed while the dialog was open. Reopen the tool to use the current sheet set."));
+                setError(QStringLiteral("The selected sheet set changed while the dialog was open. Open the tool again to use the current sheet set."));
                 return false;
             }
             // Save markers do not change the authored source. Shared immutable
@@ -71990,12 +73018,12 @@ private:
                 current.read_only_reason()!=context.source->read_only_reason() ||
                 (!current.shares_authoring_source_with(*context.source) &&
                  document_authoring_source_digest_v2(current)!=document_authoring_source_digest_v2(*context.source))) {
-                setError(QStringLiteral("The editing source changed while the tool was open. Reopen it to review the current project."));
+                setError(QStringLiteral("The drawing changed while the tool was open. Open it again to see the current project."));
                 return false;
             }
             return true;
         } catch (const std::exception&) {
-            setError(QStringLiteral("The editing source is unavailable. Reopen the tool after restoring the current project."));
+            setError(QStringLiteral("The project is not available for editing right now. Open the tool again once it is."));
             return false;
         }
     }
@@ -72328,12 +73356,12 @@ public:
                         throw std::invalid_argument("A Site annotation alias conflicts with a saved model owner.");
                     const auto owner=source.entities().find(captured->second.owner_entity_id);
                     if (owner==source.entities().end() || owner->second.type!=kAnnotationEntityType)
-                        throw std::invalid_argument("The selected Site annotation lost its captured source owner.");
+                        throw std::invalid_argument("The selected Site Plan annotation is no longer linked to its object.");
                     const auto state=decode_annotation_entity(owner->second);
                     const auto& child=captured->second.child_id;
                     const auto matches=std::count_if(state.symbols.begin(),state.symbols.end(),[&](const auto& symbol){return symbol.id==child;})+
                         std::count_if(state.labels.begin(),state.labels.end(),[&](const auto& label){return label.id==child;});
-                    if (matches!=1) throw std::invalid_argument("The selected Site annotation lost its unique captured child.");
+                    if (matches!=1) throw std::invalid_argument("The selected Site Plan annotation item could not be found.");
                     return captured->second;
                 }
             }
@@ -72429,7 +73457,7 @@ public:
             intent.source_authoring_digest != document_authoring_source_digest_v2(source) ||
             intent.source_entities_digest != entity_map_digest(source.entities()) ||
             intent.source_saved_revision != source.saved_revision_optional())
-            throw std::invalid_argument("The coordinated room proposal belongs to a different project source.");
+            throw std::invalid_argument("The room changes were prepared for an earlier version of the drawing. Try the edit again.");
         std::set<std::string, std::less<>> selected_roots;
         for (const auto& id : selection) {
             if (annotation_child_exists(source, id.toStdString()) || embeddedAssemblyChild(source, id.toStdString()))
@@ -72461,7 +73489,7 @@ public:
         std::set<std::string> changed_owners;
         for (const auto& [id, entity] : candidate)
             if (entity.type=="wall" && (!source.entities().contains(id) || source.entities().at(id).type!="wall"))
-                throw std::invalid_argument("The wall proposal cannot create a physical source wall during room review.");
+                throw std::invalid_argument("New walls cannot be created during the room review.");
         for (const auto& [id, entity] : source.entities()) {
             if (entity.type != "wall") continue;
             const auto proposed = candidate.find(id);
@@ -72470,7 +73498,7 @@ public:
                 continue;
             }
             if (proposed == candidate.end() || proposed->second.type != "wall")
-                throw std::invalid_argument("The wall proposal changed a retained physical source identity.");
+                throw std::invalid_argument("The wall edit replaced an existing wall, which the room review does not allow.");
             if (entity == proposed->second && entity.properties.dump()==proposed->second.properties.dump() &&
                 entity.extensions.dump()==proposed->second.extensions.dump()) continue;
             // Thickness, height, layers and retained source evidence can alter
@@ -72556,9 +73584,9 @@ public:
         const QStringList& independent_selection={},
         const std::vector<PhysicalWallRoomDimensionPlacement>& room_placements={}) {
         if (!room_placements.empty() && (!independent_selection.isEmpty() || !retained_geometry_proof.is_null()))
-            throw std::invalid_argument("Selected room callout placement cannot be combined with removal authority.");
+            throw std::invalid_argument("Room labels cannot be moved and removed in the same edit.");
         if (fullSnapshotDigest(source) != authority.source_digest)
-            throw std::invalid_argument("The wall proposal does not belong to the captured original project.");
+            throw std::invalid_argument("The wall changes were prepared for an earlier version of the drawing. Try the edit again.");
         if (!independent_selection.isEmpty()) {
             if (independent_selection.size()>1000)
                 throw std::invalid_argument("The independent drawing selection exceeds the supported removal inventory.");
@@ -72567,7 +73595,7 @@ public:
             for (const auto& id:independent_selection)
                 if (!authority.ordinary_selection.contains(id) || !seen.insert(id).second ||
                     !captureIndependentDrawingRemoval(source,id,selected_drawing))
-                    throw std::invalid_argument("The wall review has no actual independent drawing selection authority.");
+                    throw std::invalid_argument("The wall review has no selected walls on this drawing.");
             canonicalIndependentDrawingRemoval(selected_drawing);
             (void)replay_drawing_selection_removal(source.entities(),selected_drawing,source.uses_active_phase_constraints());
         }
@@ -72651,7 +73679,7 @@ public:
         const auto current_source = [&] {
             if (!sourceEditAuthorityUnchanged(authority) || !selection_matches ||
                 hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
-                throw std::invalid_argument("The wall proposal, project, selection or workspace changed. Reopen the wall editor.");
+                throw std::invalid_argument("The wall preview, drawing, selection or workspace changed while the wall editor was open. Open it again.");
             if (additional_fence) additional_fence();
             return authoringSnapshot();
         };
@@ -72660,7 +73688,7 @@ public:
         // by the room dialog. Never rebuild the already accepted wall intent.
         if (((deletion || grouped_geometry) && fullSnapshotDigest(derived) != fullSnapshotDigest(candidate)) ||
             entity_map_digest(derived.entities()) != entity_map_digest(candidate.entities()) || derived.assets() != candidate.assets())
-            throw std::invalid_argument("The room review geometry differs from the admitted wall proposal.");
+            throw std::invalid_argument("The room review no longer matches the wall preview. Try the wall edit again.");
         PhaseWallReplacementIdentityMap proposed_ids;
         const auto replacement=reviewAlternativeWallEdit(geometry_command,proposed_ids,false);
         if (!replacement) return std::nullopt;
@@ -72681,7 +73709,7 @@ public:
         }
         const auto groups = affectedPhysicalWallRoomGroups(source, derived.entities(), selected_wall_id, deletion);
         if (groups.size() > 32)
-            throw std::invalid_argument("The wall proposal exceeds the supported batch of 32 room review contexts and planes.");
+            throw std::invalid_argument("This wall edit affects rooms on more than 32 floors or heights. Edit fewer walls at once.");
         if (deletion && groups.empty())
             throw std::invalid_argument("The wall deletion has no affected retained room context to review.");
         std::vector<std::vector<PhysicalWallRoomDimensionPlacement>> grouped_placements(groups.size());
@@ -72743,11 +73771,11 @@ public:
             configure_dialog(*dialog, groups.empty() ? nullptr : &groups.front(), 0);
             if (dialog->exec() != QDialog::Accepted) return std::nullopt;
             if (!dialog->acceptedCommand() || fullSnapshotDigest(current_source()) != authority.source_digest)
-                throw std::invalid_argument("The complete wall and room review source changed. Reopen the editor.");
+                throw std::invalid_argument("The drawing changed during the wall and room review. Open the editor again.");
             const auto intent = decode_physical_wall_room_review_intent(dialog->acceptedCommand()->room_review_intent);
             if ((!groups.empty() && !intent_matches(intent, groups.front())) ||
                 (groups.empty() && (intent.context_plane_selection || intent.selected_wall_id != seed)))
-                throw std::invalid_argument("The room review changed its captured physical wall source.");
+                throw std::invalid_argument("The walls changed during the room review. Try the wall edit again.");
             (void)Document::preview_command(source, *dialog->acceptedCommand());
             (void)current_source();
             return *dialog->acceptedCommand();
@@ -72780,7 +73808,7 @@ public:
             const auto room_command = *dialog->acceptedCommand();
             if (command_to_json(Command{room_command}).at("version") != (deletion ? 29 : 18) ||
                 !intent_matches(decode_physical_wall_room_review_intent(room_command.room_review_intent), group))
-                throw std::invalid_argument("The staged room review changed its captured source or room-only command.");
+                throw std::invalid_argument("The room review changed before it was applied. Review the rooms again.");
             stage = Document::preview_command(captured_stage, Command{room_command});
             room_commands.push_back(room_command);
             (void)current_source();
@@ -72799,7 +73827,7 @@ public:
         const std::vector<json>& phase_reviews={}) {
         if (prepared.source_snapshot_digest()!=authority.source_digest ||
             fullSnapshotDigest(source)!=authority.source_digest)
-            throw std::invalid_argument("The Properties proposal does not belong to the captured project.");
+            throw std::invalid_argument("The Properties changes were prepared for an earlier version of the drawing. Open Properties again.");
         std::vector<json> reviews;
         const auto current_source=[&] { fence();return source; };
         for (const auto& requirement:prepared.required_room_reviews()) {
@@ -72827,7 +73855,7 @@ public:
         const DocumentSnapshot& source,const MixedSelectionPropertyEditPreparation& prepared,
         const SourceEditAuthority& authority,QWidget* parent,const std::function<void()>& fence) {
         if (prepared.source_snapshot_digest()!=authority.source_digest || fullSnapshotDigest(source)!=authority.source_digest)
-            throw std::invalid_argument("The alternative Properties proposal lost its captured source.");
+            throw std::invalid_argument("The design alternative changed while Properties was open. Open Properties again.");
         std::vector<json> reviews;
         std::set<std::string,std::less<>> deferred;
         for (const auto& preview:prepared.phase_wall_previews())
@@ -73100,7 +74128,7 @@ public:
         std::vector<PhaseSelectionPropertyIdentityAllocation> allocations;
         for (const auto& cohort:inventory.replacements()) {
             if (cohort.lane!=PhaseSelectionPropertyLane::walls && cohort.lane!=PhaseSelectionPropertyLane::slabs)
-                throw std::invalid_argument("The wall elevation proposal has an unrelated replacement family.");
+                throw std::invalid_argument("The wall elevation change would replace unrelated objects, so it was not applied.");
             PhaseSelectionPropertyIdentityAllocation allocation;
             allocation.lane=cohort.lane;allocation.registry_id=cohort.registry_id;allocation.alternative_id=cohort.alternative_id;
             const auto fresh=[&](const char* kind) {
@@ -73187,7 +74215,7 @@ public:
         };
         for (auto& id:selection) id=remap(id);
         for (auto& member:order) {
-            if (member.child) throw std::invalid_argument("Wall elevation cannot carry roof-child selection authority.");
+            if (member.child) throw std::invalid_argument("Skylights or roof openings cannot be selected while editing wall elevation.");
             member.ordinary_id=remap(member.ordinary_id);
         }
         fence();
@@ -73276,15 +74304,15 @@ public:
             const auto fence=[&] {
                 if (!sourceEditAuthorityUnchanged(authority) || hasPendingPlacementEdit() || m_boundary_session ||
                     m_text_placement_context || m_plan_label_context || m_armed_area_class)
-                    throw std::invalid_argument("The project, selection or workspace changed. Reopen Properties.");
+                    throw std::invalid_argument("The drawing, selection or workspace changed while Properties was open. Open Properties again.");
                 if (!children.empty() && fullSnapshotDigest(*selectedRoofOpeningCohortSource(false))!=authority.source_digest)
-                    throw std::invalid_argument("The displayed selected source changed. Reopen Properties.");
+                    throw std::invalid_argument("The selected objects changed while Properties was open. Open Properties again.");
                 if (native && (!admitNativeSceneInput(false) || m_nativeModelView->publishedSnapshot()!=source))
-                    throw std::invalid_argument("The displayed 3D source changed. Reopen Properties.");
+                    throw std::invalid_argument("The 3D view changed while Properties was open. Open Properties again.");
                 if (site) {
                     requireSitePublicationCurrent();
                     if (site_generation!=m_site_publication_generation || annotation_targets!=m_site_annotation_targets)
-                        throw std::invalid_argument("The selected Site presentations changed. Reopen Properties.");
+                        throw std::invalid_argument("The selected Site Plan items changed while Properties was open. Open Properties again.");
                 }
             };
             fence();
@@ -73652,17 +74680,17 @@ public:
         const std::function<void()>& additional_fence={}) {
         if (prepared.source_snapshot_digest()!=authority.source_digest ||
             fullSnapshotDigest(source)!=authority.source_digest)
-            throw std::invalid_argument("The room proposal does not belong to the captured project.");
+            throw std::invalid_argument("The room transform was prepared for an earlier version of the drawing. Try it again.");
         for (const auto& root:prepared.request().roots)
             if (!authority.ordinary_selection.contains(QString::fromStdString(root.root_id)))
-                throw std::invalid_argument("The room proposal lost its explicit selected geometry source.");
+                throw std::invalid_argument("The room transform lost its selected geometry. Select it and try again.");
         const auto current_source=[&] {
             if (!sourceEditAuthorityUnchanged(authority) || hasPendingPlacementEdit() ||
                 m_text_placement_context || m_plan_label_context || m_armed_area_class)
-                throw std::invalid_argument("The project, selection or workspace changed. Reopen the transform.");
+                throw std::invalid_argument("The drawing, selection or workspace changed while the transform was open. Open it again.");
             if (additional_fence) additional_fence();
             if (fullSnapshotDigest(authoringSnapshot())!=authority.source_digest)
-                throw std::invalid_argument("The captured project changed during room review.");
+                throw std::invalid_argument("The drawing changed during the room review. Try the transform again.");
         };
         current_source();
         const auto& requirements=prepared.required_room_reviews();
@@ -73692,7 +74720,7 @@ public:
             auto intent=decode_physical_wall_room_review_intent(command.room_review_intent);
             if (!intent.context_plane_selection || !intent.selected_wall_id.empty() ||
                 intent.context!=requirement.context || intent.effective_elevation_m!=requirement.effective_elevation_m)
-                throw std::invalid_argument("The room review changed its captured context or plane.");
+                throw std::invalid_argument("The room review changed floor or height. Try the transform again.");
             // The dialog admits a detached stage, while the complete command
             // binds the unchanged displayed original. Retain its exact stage
             // entity digest and decisions; only original snapshot metadata is
@@ -73994,7 +75022,7 @@ public:
             const auto leaf=sourceDerivedRoofMathEditCommand(*source,physical,roof_edits,message,nullptr,true,true);
             const auto* typed=std::get_if<ApplyBoundaryConstraintChanges>(&leaf);
             if (!typed || !typed->phase_constraint_authoring_completion)
-                throw std::invalid_argument("The complete skylight transform has no typed source authority.");
+                throw std::invalid_argument("The skylights could not be transformed because their roof data could not be read.");
             roof_authoring=typed->phase_constraint_authoring_intent;
         }
         auto prepared=prepare_mixed_selection_edit(*source,request,roof_authoring,roster,message,roof_identity_requests);
@@ -74179,7 +75207,7 @@ public:
                 site ? site->label_footprints : capture.label_footprints,
                 site ? site->component_bounds : capture.component_bounds,capture.view,capture.viewport.font,site,
                 site ? nullptr : &capture.components);
-            if (!physical) throw std::invalid_argument("The complete mixed geometry could not be projected in the captured view.");
+            if (!physical) throw std::invalid_argument("The selected objects could not be drawn in this view.");
             auto geometry=capture.retained;auto labels=capture.labels;auto references=capture.references;
             const auto merge_geometry=[&](const std::vector<CanvasEntity>& proposed) {
                 for (const auto& item:proposed) {
@@ -74220,7 +75248,7 @@ public:
                     const auto alias=std::find_if(site->move_annotation_targets.begin(),site->move_annotation_targets.end(),
                         [&](const auto& value){return value.second==target && capture.ordinary.contains(value.first);});
                     if (alias==site->move_annotation_targets.end())
-                        throw std::invalid_argument("The selected annotation lost its captured Site owner.");
+                        throw std::invalid_argument("The selected annotation is no longer linked to its Site Plan object.");
                     const auto after=decode_annotation_entity(snapshot.entities().at(target.owner_entity_id));
                     // Symbol paths already use their complete local candidate
                     // placement in the physical projector, before label layout.
@@ -74253,7 +75281,7 @@ public:
                     const auto original=std::find_if(site->move_references.begin(),site->move_references.end(),[&](const auto& value){return value.id==id;});
                     const auto retained=std::find_if(references.begin(),references.end(),[&](const auto& value){return value.id==id;});
                     if (original==site->move_references.end() || retained==references.end())
-                        throw std::invalid_argument("The selected reference lost its captured Site presentation.");
+                        throw std::invalid_argument("The selected reference is no longer shown on the Site Plan.");
                     const auto& properties=snapshot.entities().at(id.toStdString()).properties;
                     auto proposed=*original;
                     proposed.position=read_point(properties.at("position_m")).value();
@@ -74265,7 +75293,7 @@ public:
                 const auto fresh=std::find_if(scene.references.begin(),scene.references.end(),[&](const auto& value){return value.id==id;});
                 const auto original=std::find_if(references.begin(),references.end(),[&](const auto& value){return value.id==id;});
                 if (fresh==scene.references.end() || original==references.end())
-                    throw std::invalid_argument("A selected reference lost its captured view presentation.");
+                    throw std::invalid_argument("A selected reference is no longer shown in this view.");
                 original->position=fresh->position;original->scale=fresh->scale;original->rotation_degrees=fresh->rotation_degrees;
             }
             std::vector<CanvasRoofOpeningControls> controls;
@@ -74441,14 +75469,14 @@ public:
                     m_text_placement_context || m_plan_label_context || canvas->font()!=font ||
                     canvas->logicalDpiX()!=dpi_x || canvas->logicalDpiY()!=dpi_y ||
                     canvas->selectedEntityPresentations()!=presentations || canvas->selectedLabelPresentations()!=selected_labels)
-                    throw std::invalid_argument("The project, selected presentations or workspace changed. Reopen Transform.");
+                    throw std::invalid_argument("The drawing, selected items or workspace changed while Transform was open. Open Transform again.");
                 const auto displayed=selectedRoofOpeningCohortSource(false);
                 if (fullSnapshotDigest(*displayed)!=authority.source_digest)
-                    throw std::invalid_argument("The displayed selected source changed. Reopen Transform.");
+                    throw std::invalid_argument("The selected objects changed while Transform was open. Open Transform again.");
                 if (site) {
                     requireSitePublicationCurrent();
                     if (site_generation!=m_site_publication_generation)
-                        throw std::invalid_argument("The Site presentation changed. Reopen Transform.");
+                        throw std::invalid_argument("The Site Plan changed while Transform was open. Open Transform again.");
                 }
             };
             const auto overlay_world_point=[&](Vec2 point) { return frame ? unproject_plan_point(point,*frame) : point; };
@@ -74494,7 +75522,7 @@ public:
                     }
                     found=true;
                 }
-                if (!found) throw std::invalid_argument("A selected object has no visible canonical presentation: "+id.toStdString());
+                if (!found) throw std::invalid_argument("A selected object is not shown in this view: "+id.toStdString());
             }
             for (const auto& child:children) {
                 const auto path=child_path(*source,child); extents.insert(extents.end(),path.begin(),path.end());
@@ -74673,6 +75701,149 @@ public:
         } catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); }
     }
 
+    // ---- Inline length editing on canvas length labels --------------------
+    // A wall's derived length label, a measured stroke's edge label or a
+    // placed segment/wall-axis dimension edits its owner's length through
+    // the same ConstraintDialog intent/preview/commit pipeline as
+    // showConstraintEditor (connected-object movement on by default, one
+    // undoable revision). Other labels keep the ordinary double-click.
+    struct InlineLengthTarget {
+        std::string owner_id;
+        std::string segment_id; // Measured-stroke edge; empty for a wall.
+        double metres{};
+    };
+
+    std::optional<InlineLengthTarget> inlineLengthTarget(PlanCanvas* canvas,
+        const CanvasLabelPresentationIdentity& identity, const DocumentSnapshot& source) const {
+        const auto* active=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+        if (!canvas || canvas!=active || !m_document->is_editable() || hasPendingPlacementEdit() ||
+            m_text_placement_context || m_plan_label_context || m_armed_area_class || m_boundary_session ||
+            m_linework_drawing || m_pending_wall_start || !m_pending_symbol_id.isEmpty())
+            return std::nullopt;
+        const auto label=canvas->labelPresentation(identity);
+        if (!label) return std::nullopt;
+        const auto& entities=source.entities();
+        const auto measured_edge=[&](const Entity& stroke,const std::string& segment_id) -> std::optional<InlineLengthTarget> {
+            if (stroke.type!="measurement_linework" || segment_id.empty()) return std::nullopt;
+            const auto decoded=decode_measurement_linework_model(stroke.properties.at("model"));
+            if (!decoded.supported()) return std::nullopt;
+            for (const auto& edge : replay_measurement_linework(*decoded.model).edges)
+                if (edge.segment_id==segment_id) return InlineLengthTarget{stroke.id,segment_id,segment_length(edge.segment)};
+            return std::nullopt;
+        };
+        try {
+            const auto found=entities.find(identity.id.toStdString());
+            if (found==entities.end()) return std::nullopt;
+            std::optional<InlineLengthTarget> target;
+            if (identity.selection_type==QStringLiteral("dimension")) {
+                if (found->second.type!="dimension") return std::nullopt;
+                const auto decoded=decode_boundary_dimension_entity(found->second);
+                if (!decoded.dimension) return std::nullopt;
+                const auto& dimension=*decoded.dimension;
+                const auto owner_entity=entities.find(dimension.boundary_id);
+                if (owner_entity==entities.end()) return std::nullopt;
+                if (dimension.kind==BoundaryDimensionKind::wall_axis_length && owner_entity->second.type=="wall") {
+                    const auto baseline=read_required_segment(owner_entity->second.properties,"baseline");
+                    if (baseline) target=InlineLengthTarget{owner_entity->first,{},segment_length(*baseline)};
+                } else if (dimension.kind==BoundaryDimensionKind::segment_length && dimension.segment_chain_ids.empty()) {
+                    target=measured_edge(owner_entity->second,dimension.segment_id);
+                }
+            } else if (label->automatic_linear_placement) {
+                const auto& entity=found->second;
+                static const QString edge_prefix=QStringLiteral("measurement_edge:");
+                if (entity.type=="wall" && identity.callout_role.isEmpty()) {
+                    const auto baseline=read_required_segment(entity.properties,"baseline");
+                    if (baseline) target=InlineLengthTarget{entity.id,{},segment_length(*baseline)};
+                } else if (identity.callout_role.startsWith(edge_prefix)) {
+                    target=measured_edge(entity,identity.callout_role.mid(edge_prefix.size()).toStdString());
+                }
+            }
+            if (!target || !std::isfinite(target->metres) || !(target->metres>0.0)) return std::nullopt;
+            const auto owner_entity=entities.find(target->owner_id);
+            if (owner_entity==entities.end() || !ConstraintDialog::supportsEntity(owner_entity->second)) return std::nullopt;
+            return target;
+        } catch (const std::exception&) {
+            return std::nullopt;
+        }
+    }
+
+    std::optional<QString> resolveInlineLengthEdit(PlanCanvas* canvas, const CanvasLabelPresentationIdentity& identity) {
+        const auto target=inlineLengthTarget(canvas,identity,authoringSnapshot());
+        if (!target) return std::nullopt;
+        // The edited object becomes the selection so its dimension draws in
+        // draw-selection and Properties shows the same object.
+        if (m_selected_ids.size()!=1 || m_selected_id!=identity.id) (void)selectEntity(identity.id);
+        return units::length_input_text(target->metres,m_metric_units);
+    }
+
+    QString commitInlineLengthEdit(PlanCanvas* canvas, const CanvasLabelPresentationIdentity& identity, const QString& text) {
+        const auto example=m_metric_units ? QStringLiteral("3.81 m") : QStringLiteral("12' 6\"");
+        const auto changed=QStringLiteral("The drawing changed while you were typing. Press Esc and edit the length again.");
+        try {
+            const auto source=authoringSnapshot();
+            const auto target=inlineLengthTarget(canvas,identity,source);
+            if (!target) return changed;
+            const auto expression=text.trimmed();
+            double metres=0.0;
+            try {
+                if (expression.isEmpty()) throw std::invalid_argument("empty");
+                metres=parse_quantity(expression.toStdString(),m_metric_units ? Unit::metre : Unit::foot).metres;
+            } catch (const std::exception&) {
+                return QStringLiteral("Not a length. Type a value like %1.").arg(example);
+            }
+            if (!std::isfinite(metres) || !(metres>1e-7))
+                return QStringLiteral("Length must be greater than zero. Type a value like %1.").arg(example);
+            const auto authority=captureSourceEditAuthority(source);
+            ConstraintDialog dialog(source,QString::fromStdString(target->owner_id),m_metric_units,owner);
+            dialog.setCurrentSource([this,authority] {
+                if (!sourceEditAuthorityCurrent(authority))
+                    throw std::invalid_argument("The drawing changed while you were typing. Press Esc and edit the length again.");
+                return authoringSnapshot();
+            });
+            if (!target->segment_id.empty()) {
+                auto* segment=dialog.findChild<QComboBox*>(QStringLiteral("constraintStrokeSegment"));
+                const auto index=segment ? segment->findData(QString::fromStdString(target->segment_id)) : -1;
+                if (index<0) return changed;
+                segment->setCurrentIndex(index);
+            }
+            dialog.setLengthExpression(expression);
+            if (!dialog.previewEdit() || !dialog.submit()) {
+                const auto error=dialog.lastError().trimmed();
+                return error.isEmpty()
+                    ? QStringLiteral("This length conflicts with connected geometry. Try another value or use Properties.")
+                    : error;
+            }
+            const auto failed=[this] {
+                const auto error=lastError().trimmed();
+                clearError();
+                refreshInspector();
+                return error.isEmpty() ? QStringLiteral("The length could not be applied. Try another value.") : error;
+            };
+            if (!sourceEditAuthorityUnchanged(authority)) return changed;
+            if (const auto replacement=dialog.acceptedCommand()) {
+                if (!applyAuthoredCommand(Command{*replacement})) return failed();
+            } else if (const auto preview=dialog.acceptedPreview()) {
+                requireAcceptedConstraintPreview(*preview);
+                std::optional<DocumentSnapshot> candidate;
+                const auto command=constraint_authoring_verified_command(source,*preview,&candidate);
+                if (!candidate) return QStringLiteral("The new length has no valid geometry. Try another value.");
+                if (affectedPhysicalWallRooms(source,candidate->entities(),target->owner_id)!=0) {
+                    const auto reviewed=reviewPhysicalWallRoomsAfterGeometry(source,*candidate,command,
+                        target->owner_id,authority,owner);
+                    if (!reviewed) { refreshInspector(); return {}; } // Review declined: no change.
+                    applyDocumentCommand(*reviewed);
+                } else if (!applyConstraintPreview(*preview)) {
+                    return failed();
+                }
+            }
+            clearError();
+            refresh();
+            return {};
+        } catch (const std::exception& error) {
+            return QString::fromUtf8(error.what());
+        }
+    }
+
     void showConstraintEditor(const QString& initial_length = {}) {
         const auto entity = selectedEntity();
         if (!entity || !ConstraintDialog::supportsEntity(*entity) ||
@@ -74688,7 +75859,7 @@ public:
             const auto authority = captureSourceEditAuthority(source);
             ConstraintDialog dialog(source, m_selected_id, m_metric_units, owner);
             dialog.setCurrentSource([this,authority] {
-                if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The selected object or drawing context changed. Reopen its dimensions.");
+                if (!sourceEditAuthorityCurrent(authority)) throw std::invalid_argument("The selected object or active layer changed while its dimensions were open. Open its dimensions again.");
                 return authoringSnapshot();
             });
             styleDialog(dialog);
@@ -74702,11 +75873,11 @@ public:
             const auto preview = dialog.acceptedPreview();
             if (!preview) { clearError(); refreshInspector(); return; }
             if (hasPendingPlacementEdit() || m_text_placement_context || m_plan_label_context || m_armed_area_class)
-                throw std::invalid_argument("The drawing or placement context changed. Reopen the constraint editor.");
+                throw std::invalid_argument("The drawing or placement changed while the constraint editor was open. Open it again.");
             requireAcceptedConstraintPreview(*preview);
             std::optional<DocumentSnapshot> candidate;
             const auto command = constraint_authoring_verified_command(source, *preview, &candidate);
-            if (!candidate) throw std::invalid_argument("The accepted constraint proposal has no admitted geometry.");
+            if (!candidate) throw std::invalid_argument("The constraint change produced no geometry. Check the values and try again.");
             if (affectedPhysicalWallRooms(source, candidate->entities(), entity->id) != 0) {
                 const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(source, *candidate, command,
                     entity->id, authority, &dialog);
@@ -74781,7 +75952,7 @@ public:
                 candidate.reset();buttons->button(QDialogButtonBox::Apply)->setEnabled(false);dimensions->setRowCount(0);
                 preview->setEntities({scene(original_geometry,"before",QColor(148,163,184))});preview->fitView();
                 try {
-                    if (!modalContextUnchanged(context)) throw std::invalid_argument("The project or editing context changed. Reopen this editor.");
+                    if (!modalContextUnchanged(context)) throw std::invalid_argument("The drawing or active layer changed while this editor was open. Open it again.");
                     BoundaryGeometryEdit edit;edit.boundary_id=selected->id;
                     std::optional<Quantity> authored;
                     if (operation->currentData().toString()=="length") {
@@ -74841,7 +76012,7 @@ public:
             QObject::connect(fixed,&QComboBox::currentIndexChanged,&dialog,[&]{update();});QObject::connect(connected,&QCheckBox::toggled,&dialog,[&]{update();});
             QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
             QObject::connect(buttons->button(QDialogButtonBox::Apply),&QPushButton::clicked,&dialog,[&] {
-                if (!candidate || !modalContextUnchanged(context)) {candidate.reset();buttons->button(QDialogButtonBox::Apply)->setEnabled(false);status->setText(QStringLiteral("The project changed. Reopen this editor."));return;}
+                if (!candidate || !modalContextUnchanged(context)) {candidate.reset();buttons->button(QDialogButtonBox::Apply)->setEnabled(false);status->setText(QStringLiteral("The drawing changed while this editor was open. Open it again."));return;}
                 try {applyDocumentCommand(*candidate);clearError();refresh();dialog.accept();}
                 catch (const std::exception& error) {status->setText(QString::fromUtf8(error.what()));}
             });
@@ -75040,7 +76211,7 @@ public:
             const auto context_unchanged = [&] {
                 if (!modalContextUnchanged(context)) return false;
                 if (m_workspace != workspace) {
-                    setError(QStringLiteral("The workspace changed while the dialog was open. Reopen the tool to use the current context."));
+                    setError(QStringLiteral("The workspace changed while the dialog was open. Open the tool again to use the current workspace."));
                     return false;
                 }
                 return true;
@@ -75272,9 +76443,15 @@ public:
                         const auto dimension_name = dimension.kind == BoundaryDimensionKind::area ? QStringLiteral("Area measurement") :
                             dimension.kind == BoundaryDimensionKind::angle ? QStringLiteral("Angle measurement") :
                             QStringLiteral("Edge %1 measurement").arg(std::distance(boundary.segments.begin(), target_edge) + 1);
+                        // One system per readout: ANSI dimension values are
+                        // imperial tenths of a foot, so their anchor is too.
+                        const auto anchor_text = [&](Vec2 point) {
+                            return ansi ? QStringLiteral("(%1, %2)").arg(units::ansi_length_text(point.x),
+                                units::ansi_length_text(point.y)) : point_text(point);
+                        };
                         add_row(dimension_name,
-                            before_text + QStringLiteral("  @ ") + point_text(before.text_position),
-                            after_text + QStringLiteral("  @ ") + point_text(dimension.text_position));
+                            before_text + QStringLiteral("  @ ") + anchor_text(before.text_position),
+                            after_text + QStringLiteral("  @ ") + anchor_text(dimension.text_position));
                         if (dimension.presentation && !dimension.presentation->visible) continue;
                         const bool same_position = before.text_position.x == dimension.text_position.x &&
                             before.text_position.y == dimension.text_position.y;
@@ -75376,10 +76553,10 @@ public:
                     const auto current = authoringSnapshot();
                     if (current.document_id() != source.document_id() || current.revision() != source.revision() ||
                         current.entities() != source.entities() || !current.is_editable())
-                        throw std::invalid_argument("The source changed. Reopen the geometry editor.");
+                        throw std::invalid_argument("The drawing changed while the geometry editor was open. Open it again.");
                     const auto verified = Document::preview_command(current, *candidate);
                     if (verified.entities() != candidate_snapshot->entities())
-                        throw std::invalid_argument("The proposed geometry changed. Reopen the geometry editor.");
+                        throw std::invalid_argument("The geometry preview changed while the geometry editor was open. Open it again.");
                     applyDocumentCommand(*candidate);
                     clearError();
                     refresh();
@@ -75421,7 +76598,7 @@ public:
                 HorizontalProfileDialog dialog(*context.source, selected->id, context.metric_units,
                     [this, context, authority] {
                         if (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(authority))
-                            throw std::invalid_argument("The project or drawing context changed. Reopen the horizontal assembly editor.");
+                            throw std::invalid_argument("The drawing or active layer changed while the slab assembly editor was open. Open it again.");
                         return authoringSnapshot();
                     }, owner);
                 styleDialog(dialog);
@@ -75459,7 +76636,7 @@ public:
                 HorizontalLayerStackDialog dialog(*context.source, selected->id, context.metric_units,
                     [this, context, authority] {
                         if (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(authority))
-                            throw std::invalid_argument("The project or drawing context changed. Reopen the layer stack.");
+                            throw std::invalid_argument("The drawing or active layer changed while the layer stack was open. Open it again.");
                         return authoringSnapshot();
                     }, [&layer_names, source = *context.source] {
                         if (!layer_names) layer_names = retainedSlabIdentityNames(source);
@@ -75491,7 +76668,7 @@ public:
                 WallLayerStackDialog dialog(*context.source, selected->id, context.metric_units,
                     [this, context, authority] {
                         if (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(authority))
-                            throw std::invalid_argument("The project or drawing context changed. Reopen the wall layers.");
+                            throw std::invalid_argument("The drawing or active layer changed while the wall layers were open. Open them again.");
                         return authoringSnapshot();
                     }, [this, context, authority, &reserved] {
                         if (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(authority))
@@ -75520,7 +76697,7 @@ public:
             WallProfileDialog dialog(*context.source, selected->id, context.metric_units,
                 [this, context, authority] {
                     if (!modalContextUnchanged(context) || !sourceEditAuthorityCurrent(authority))
-                        throw std::invalid_argument("The project or drawing context changed. Reopen the wall profile.");
+                        throw std::invalid_argument("The drawing or active layer changed while the wall profile was open. Open it again.");
                     return authoringSnapshot();
                 }, owner);
             styleDialog(dialog);
@@ -75562,7 +76739,7 @@ private:
 
         const auto context = captureModalContext();
         if (!context.source) {
-            setError(QStringLiteral("The editing source is unavailable. Reopen the curved wall editor."));
+            setError(QStringLiteral("The drawing is not available for editing. Open the curved wall editor again."));
             return;
         }
         const auto& source = *context.source;
@@ -75937,7 +77114,7 @@ private:
             try {
                 if (stale || !sourceEditAuthorityUnchanged(authority)) {
                     stale = true;
-                    throw std::invalid_argument("The editing source or context changed. Reopen the curved wall editor.");
+                    throw std::invalid_argument("The drawing or active layer changed while the curved wall editor was open. Open it again.");
                 }
                 const auto [first, second] = read_coordinates();
                 auto candidate = *selected;
@@ -76032,7 +77209,7 @@ private:
                 try {
                     if (!sourceEditAuthorityUnchanged(authority)) {
                         stale = true;
-                        throw std::invalid_argument("The editing source or context changed. Reopen the curved wall editor.");
+                        throw std::invalid_argument("The drawing or active layer changed while the curved wall editor was open. Open it again.");
                     }
                     if (!result.preview)
                         throw std::invalid_argument(result.error.empty()
@@ -76065,7 +77242,7 @@ private:
             no_model_change = false;
             apply_button->setEnabled(false);
             if (preview_canvas) preview_canvas->setWalls(original_drawing);
-            status->setText(QStringLiteral("The editing source or context changed. Reopen the curved wall editor."));
+            status->setText(QStringLiteral("The drawing or active layer changed while the curved wall editor was open. Open it again."));
             status->setStyleSheet(QStringLiteral("color:#b42318;"));
         };
         QTimer source_watch(&dialog);
@@ -76083,7 +77260,7 @@ private:
                 throw std::invalid_argument("Wait for a valid curve preview in a resolved room context before reviewing rooms.");
             if (!sourceEditAuthorityUnchanged(authority)) {
                 invalidate_source();
-                throw std::invalid_argument("The editing source or context changed. Reopen the curved wall editor.");
+                throw std::invalid_argument("The drawing or active layer changed while the curved wall editor was open. Open it again.");
             }
             requireAcceptedConstraintPreview(*retained_preview);
             const auto generation = input_generation;
@@ -76093,16 +77270,16 @@ private:
             std::optional<DocumentSnapshot> curve_candidate;
             const auto curve_command = constraint_authoring_verified_command(source, *retained_preview, &curve_candidate);
             if (!curve_candidate)
-                throw std::invalid_argument("The accepted curve has no admitted geometry snapshot.");
+                throw std::invalid_argument("The curve change produced no geometry. Check the values and try again.");
             const auto curve_fence = [&] {
                 if (!sourceEditAuthorityUnchanged(authority)) {
                     invalidate_source();
-                    throw std::invalid_argument("The editing source or context changed. Reopen the curved wall editor.");
+                    throw std::invalid_argument("The drawing or active layer changed while the curved wall editor was open. Open it again.");
                 }
                 if (stale || generation != input_generation || !retained_preview ||
                     hasPendingPlacementEdit() ||
                     m_boundary_session || m_linework_drawing || m_pending_wall_start)
-                    throw std::invalid_argument("The curve proposal, project or workspace changed. Reopen the curved wall editor.");
+                    throw std::invalid_argument("The curve preview, drawing or workspace changed while the curved wall editor was open. Open it again.");
             };
             const auto reviewed = reviewPhysicalWallRoomsAfterGeometry(source, *curve_candidate, curve_command,
                 selected->id, authority, &dialog, curve_fence);
@@ -76130,7 +77307,7 @@ private:
                              try {
                                  if (stale || !sourceEditAuthorityUnchanged(authority)) {
                                      invalidate_source();
-                                     throw std::invalid_argument("The editing source or context changed. Reopen the curved wall editor.");
+                                     throw std::invalid_argument("The drawing or active layer changed while the curved wall editor was open. Open it again.");
                                  }
                                  if (editing) {
                                      if (retained_preview) {
@@ -76280,7 +77457,7 @@ private:
             QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
                 try {
                     if (!modalContextUnchanged(context) || !assemblyDraftSourceUnchanged(source, workspace))
-                        throw std::invalid_argument("The joined roof source changed. Reopen the editor.");
+                        throw std::invalid_argument("The joined roofs changed while the editor was open. Open it again.");
                     auto join = prior;
                     join.roof_ids.clear();
                     for (int row=0; row<members->count(); ++row)
@@ -76339,7 +77516,7 @@ private:
         if (!modalContextUnchanged(context)) return;
         if (selection != m_selected_ids || workspace != m_workspace ||
             source_digest != document_snapshot_digest(m_document->snapshot())) {
-            setError(QStringLiteral("The object source or workspace changed. Reopen the editor."));
+            setError(QStringLiteral("The object or workspace changed while the editor was open. Open it again."));
             return;
         }
         if (const auto candidate = dialog.candidate()) {
@@ -76791,7 +77968,7 @@ private:
             QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
                 try {
                     if (!modalContextUnchanged(context) || !sourceEditAuthorityUnchanged(authority))
-                        throw std::invalid_argument("The project, selected walls or view changed. Reopen the corner-window editor.");
+                        throw std::invalid_argument("The drawing, selected walls or view changed while the corner-window editor was open. Open it again.");
                     auto edited = corner;
                     auto values = original;
                     for (std::size_t index = 0; index < fields.size(); ++index)
@@ -76887,36 +78064,97 @@ private:
             setError(QStringLiteral("Select a closed boundary before creating a horizontal assembly."));
             return;
         }
-        bool accepted = false;
+        // One form: kind (only when the command did not name it), thickness and
+        // elevation, all prefilled in drawing units so Enter creates a slab.
         QString element_kind = requested_kind.trimmed().toLower();
-        if (element_kind.isEmpty()) {
-            const auto selected = QInputDialog::getItem(
-                owner, QStringLiteral("Create horizontal assembly"),
-                QStringLiteral("Element kind:"),
-                {QStringLiteral("Slab"), QStringLiteral("Floor"),
-                 QStringLiteral("Ceiling"), QStringLiteral("Foundation")},
-                0, false, &accepted);
-            if (!accepted) return;
-            element_kind = selected.trimmed().toLower();
-        }
-        const auto kind_label = element_kind.left(1).toUpper() + element_kind.mid(1);
-        const auto thickness = QInputDialog::getText(
-            owner, QStringLiteral("Create %1").arg(kind_label), QStringLiteral("Thickness:"),
-            QLineEdit::Normal, m_metric_units ? QStringLiteral("0.15 m")
-                                               : QStringLiteral("6 in"),
-            &accepted);
-        if (!accepted) {
+        const bool choose_kind = element_kind.isEmpty();
+        const auto kind_label = choose_kind ? QStringLiteral("horizontal assembly")
+                                            : element_kind;
+        std::vector<CompactFormField> fields;
+        if (choose_kind)
+            fields.push_back({QStringLiteral("horizontalAssemblyKind"), QStringLiteral("Kind"),
+                              QStringLiteral("Slab"),
+                              {QStringLiteral("Slab"), QStringLiteral("Floor"),
+                               QStringLiteral("Ceiling"), QStringLiteral("Foundation")}});
+        fields.push_back({QStringLiteral("horizontalAssemblyThickness"), QStringLiteral("Thickness"),
+                          units::length_input_text(m_metric_units ? 0.15 : 6.0 * units::metres_per_inch,
+                                                   m_metric_units)});
+        fields.push_back({QStringLiteral("horizontalAssemblyElevation"), QStringLiteral("Elevation"),
+                          units::length_input_text(0.0, m_metric_units)});
+        if (!runCompactForm(owner, QStringLiteral("horizontalAssemblyForm"),
+                            QStringLiteral("Create %1").arg(kind_label), QStringLiteral("Create"), fields))
             return;
-        }
-        const auto elevation = QInputDialog::getText(
-            owner, QStringLiteral("Create %1").arg(kind_label), QStringLiteral("Elevation:"), QLineEdit::Normal,
-            m_metric_units ? QStringLiteral("0 m") : QStringLiteral("0 in"), &accepted);
-        if (!accepted) {
-            return;
-        }
+        if (choose_kind) element_kind = fields.front().value.trimmed().toLower();
+        const auto& thickness = fields[fields.size() - 2].value;
+        const auto& elevation = fields.back().value;
         if (!modalContextUnchanged(context)) return;
         (void)createSurfaceFromSelectedBoundary(element_kind, thickness, elevation,
                                                  context.revision);
+    }
+
+    // A compact form row: a text field, or a fixed picker when choices is set.
+    struct CompactFormField {
+        QString name;          // editor objectName
+        QString label;         // sentence-case row label
+        QString value;         // default on entry, accepted value on return
+        QStringList choices{}; // non-empty: fixed picker instead of a text field
+    };
+
+    // One small form in place of a chain of single-value prompts. Every row
+    // starts at a sensible default so Enter accepts it. Returns false when the
+    // form is cancelled; on acceptance each field's value holds the entry.
+    bool runCompactForm(QWidget* parent, const QString& object_name, const QString& title,
+                        const QString& accept_text, std::vector<CompactFormField>& fields,
+                        const QString& note = {}) {
+        QDialog dialog(parent ? parent : owner);
+        styleDialog(dialog);
+        dialog.setObjectName(object_name);
+        dialog.setWindowTitle(title);
+        dialog.setModal(true);
+        auto* layout = new QVBoxLayout(&dialog);
+        if (!note.isEmpty()) {
+            auto* hint = new QLabel(note, &dialog);
+            hint->setWordWrap(true);
+            layout->addWidget(hint);
+        }
+        auto* form = new QFormLayout();
+        std::vector<QWidget*> editors;
+        for (const auto& field : fields) {
+            if (!field.choices.isEmpty()) {
+                auto* combo = new QComboBox(&dialog);
+                combo->addItems(field.choices);
+                const auto index = combo->findText(field.value, Qt::MatchFixedString);
+                combo->setCurrentIndex(index >= 0 ? index : 0);
+                combo->setObjectName(field.name);
+                form->addRow(field.label, combo);
+                editors.push_back(combo);
+            } else {
+                auto* edit = new QLineEdit(field.value, &dialog);
+                edit->setObjectName(field.name);
+                form->addRow(field.label, edit);
+                editors.push_back(edit);
+            }
+        }
+        layout->addLayout(form);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        buttons->setObjectName(object_name + QStringLiteral("Buttons"));
+        buttons->button(QDialogButtonBox::Ok)->setText(accept_text);
+        buttons->button(QDialogButtonBox::Ok)->setDefault(true);
+        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        layout->addWidget(buttons);
+        if (!editors.empty()) {
+            editors.front()->setFocus();
+            if (auto* edit = qobject_cast<QLineEdit*>(editors.front())) edit->selectAll();
+        }
+        if (dialog.exec() != QDialog::Accepted) return false;
+        for (std::size_t index = 0; index < fields.size(); ++index) {
+            if (auto* combo = qobject_cast<QComboBox*>(editors[index]))
+                fields[index].value = combo->currentText();
+            else if (auto* edit = qobject_cast<QLineEdit*>(editors[index]))
+                fields[index].value = edit->text();
+        }
+        return true;
     }
 
 public:
@@ -76932,19 +78170,57 @@ public:
             setError(QStringLiteral("The selected boundary has no usable terrain vertices."));
             return;
         }
-        QStringList defaults;
-        defaults.reserve(static_cast<qsizetype>(segments.size()));
+        // One elevation applies to every vertex (default 0); individual vertex
+        // elevations are an expert override in the collapsed Advanced section.
+        QDialog dialog(owner);
+        styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("terrainSurfaceForm"));
+        dialog.setWindowTitle(QStringLiteral("Create terrain surface"));
+        dialog.setModal(true);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* form = new QFormLayout();
+        auto* shared = new QLineEdit(units::length_input_text(0.0, m_metric_units), &dialog);
+        shared->setObjectName(QStringLiteral("terrainElevation"));
+        form->addRow(QStringLiteral("Elevation"), shared);
+        layout->addLayout(form);
+        auto* advanced = new AdvancedSection(QStringLiteral("terrainSurfaceForm"), &dialog,
+                                             QStringLiteral("Elevation per vertex"));
+        std::vector<QLineEdit*> vertex_fields;
+        vertex_fields.reserve(segments.size());
         for (std::size_t index = 0; index < segments.size(); ++index) {
-            (void)index;
-            defaults.push_back(m_metric_units ? QStringLiteral("0 m") : QStringLiteral("0 ft"));
+            auto* field = new QLineEdit(advanced->body());
+            field->setObjectName(QStringLiteral("terrainVertexElevation:%1").arg(static_cast<qulonglong>(index)));
+            field->setPlaceholderText(QStringLiteral("Same as elevation"));
+            advanced->form()->addRow(QStringLiteral("Vertex %1").arg(static_cast<qulonglong>(index + 1)), field);
+            vertex_fields.push_back(field);
         }
-        bool accepted = false;
-        const auto elevations = QInputDialog::getText(
-            owner, QStringLiteral("Create terrain surface"),
-            QStringLiteral("Vertex elevations (comma-separated):"), QLineEdit::Normal,
-            defaults.join(QStringLiteral(", ")), &accepted);
-        if (!accepted || !modalContextUnchanged(context)) return;
-        (void)createTerrainSurfaceFromSelectedBoundary(elevations, context.revision);
+        if (segments.size() > 8) {
+            auto* scroll = new QScrollArea(&dialog);
+            scroll->setWidgetResizable(true);
+            scroll->setFrameShape(QFrame::NoFrame);
+            scroll->setWidget(advanced);
+            scroll->setMinimumHeight(220);
+            layout->addWidget(scroll, 1);
+        } else {
+            layout->addWidget(advanced);
+        }
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        buttons->setObjectName(QStringLiteral("terrainSurfaceFormButtons"));
+        buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Create terrain"));
+        buttons->button(QDialogButtonBox::Ok)->setDefault(true);
+        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        layout->addWidget(buttons);
+        shared->setFocus();
+        shared->selectAll();
+        if (dialog.exec() != QDialog::Accepted || !modalContextUnchanged(context)) return;
+        QStringList values;
+        values.reserve(static_cast<qsizetype>(vertex_fields.size()));
+        for (const auto* field : vertex_fields) {
+            const auto text = field->text().trimmed();
+            values.push_back(text.isEmpty() ? shared->text().trimmed() : text);
+        }
+        (void)createTerrainSurfaceFromSelectedBoundary(values.join(QStringLiteral(", ")), context.revision);
     }
 
 private:
@@ -77175,6 +78451,12 @@ private:
     WorkspaceAutosaveScheduler::TimePoint m_autosave_retry_after{};
     QTimer* m_save_timer{};
     std::filesystem::path m_file_path;
+    // The scaffold-only state of an untitled project (document and revision
+    // right after ensure_project_scaffold). It is never shown as modified.
+    std::weak_ptr<const Document> m_pristine_document;
+    QPointer<QObject> m_canvas_focus_return;
+    std::function<void()> m_refresh_status_toggle_cues;
+    Revision m_pristine_revision{};
     std::string m_file_sha256;
     std::optional<ProjectResourceCatalog> m_project_resource_catalog;
     QStringList m_project_resource_names;
@@ -77187,6 +78469,8 @@ private:
     bool m_grid_enabled{true};
     bool m_snap_enabled{true};
     bool m_overview_map_enabled{true};
+    // Startup defaults from Edit > Preferences (QSettings "preferences/").
+    Preferences m_preferences{Preferences::defaults()};
     bool m_refreshing{false};
     ProjectViewFilter m_view_filter;
     QString m_active_layer_id;
@@ -77362,6 +78646,9 @@ private:
     std::map<std::string, AssistanceSourceBinding, std::less<>> m_assistance_sources;
     std::optional<GeneratedLabelMoveCapture> m_generated_label_move;
     QString m_last_boundary_classification{QStringLiteral("measurement")};
+    // Set once a drawn area has been classified in this window; later drawn
+    // areas reuse that classification instead of prompting again.
+    bool m_boundary_classification_chosen{false};
     AreaClassPalette* m_area_class_palette{};
     std::optional<QString> m_armed_area_class;
     std::weak_ptr<Document> m_area_class_document;

@@ -132,7 +132,9 @@ inline QString metric_length(double metres, bool allow_approximate) {
     const auto ticks = static_cast<std::int64_t>(millimetres);
     auto number = QString::number(ticks / 1000);
     if (const auto fraction = ticks % 1000)
-        number += QLatin1Char('.') + trim_decimal_zeros(
+        // Trim the whole "N.fff" text: trim_decimal_zeros only trims text
+        // that contains the decimal point (2.500 -> 2.5, 0.950 -> 0.95).
+        number = trim_decimal_zeros(number + QLatin1Char('.') +
             QStringLiteral("%1").arg(fraction, 3, 10, QLatin1Char('0')));
     const auto sign = metres < 0.0 && ticks > 0 ? QStringLiteral("-") : QString{};
     const auto prefix = allow_approximate && ticks == 0 && metres != 0.0

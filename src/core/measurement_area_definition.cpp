@@ -169,7 +169,7 @@ DetectedMeasurementAreas detect_measurement_areas(const DocumentSnapshot& source
 
 MeasurementAreaDefinition prepare_measurement_area_definition(const DocumentSnapshot& source,
     std::string_view stroke_id,const std::vector<MeasurementAreaChoice>& choices) {
-    if(!source.is_editable())invalid("The captured project is read-only.");
+    if(!source.is_editable())invalid("This project is read-only.");
     const auto detection=detect_measurement_areas(source,stroke_id);
     if(choices.size()!=detection.graph.faces.size())invalid("Review every detected outline before applying.");
     const bool appraisal=appraisal_workflow(source.entities().at(detection.context.property_id));

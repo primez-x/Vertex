@@ -507,7 +507,7 @@ void landing_guard_full_controller_lifecycle() {
         const auto before = window.document().snapshot();
         modal(window, "createBuildingObject", [&](BuildingObjectDialog& dialog) {
             form(dialog, "railing", "stair_landing_railing");
-            choose(control<QComboBox>(dialog, "buildingObjectStairHost"), "legacy");
+            choose(control<QComboBox>(dialog, "buildingObjectLandingStairHost"), "legacy");
             control<QComboBox>(dialog, "buildingObjectStairHostLanding").setCurrentIndex(static_cast<int>(role));
             field(dialog, "buildingObjectPostSpacing", "800 mm");
             control<QPushButton>(dialog, "buildingObjectRailingPreview").click();
@@ -649,7 +649,8 @@ void authored_stair_host_context_lifecycle() {
             const auto before = window.document().snapshot(); before_last = before;
             modal(window, "createBuildingObject", [&](BuildingObjectDialog& dialog) {
                 form(dialog, "railing", role == 0 ? "stair_flight_railing" : "stair_landing_railing");
-                choose(control<QComboBox>(dialog, "buildingObjectStairHost"), QString::fromStdString(host_id));
+                choose(control<QComboBox>(dialog, role == 0 ? "buildingObjectStairHost" : "buildingObjectLandingStairHost"),
+                       QString::fromStdString(host_id));
                 field(dialog, "buildingObjectPostSpacing", "500 mm");
                 control<QPushButton>(dialog, "buildingObjectSubmit").click();
                 require(dialog.result() == QDialog::Accepted, "authored stair flight and landing rail creator must submit");

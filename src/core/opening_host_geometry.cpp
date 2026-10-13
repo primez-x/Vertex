@@ -88,7 +88,7 @@ TopoDS_Shape make_document_opening_host_shape(
     const auto work=layers*cuts*wall_factory_count;
     if (cumulative_native_work) {
         if (*cumulative_native_work>native_limit || work>native_limit-*cumulative_native_work)
-            throw std::invalid_argument("Opening host copies exceed the cumulative native geometry budget.");
+            throw std::invalid_argument("Too many opening copies to build at once. Copy fewer openings.");
         *cumulative_native_work+=work;
     }
     (void)make_wall(wall);

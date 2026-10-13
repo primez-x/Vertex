@@ -276,7 +276,10 @@ void stale_physical_calculation_is_withheld() {
     const auto rooms=window.detectRoomBoundariesFromExistingWalls("office");
     require(rooms.size()==1 && window.selectEntity(rooms.front()),"detect actual clear physical room");
     const auto id=rooms.front();name_area(window,id,"Office");
-    require(window.separateSelectedAreaCallouts() && callout(canvas(window),id,"area_calculation").text.contains("10.64"),
+    // Clear 3.8 m x 2.8 m = 10.64 m² (centerline would be 12 m²); a physical
+    // room readout uses the design-system metric area: one decimal, "m²".
+    require(window.separateSelectedAreaCallouts() &&
+        callout(canvas(window),id,"area_calculation").text==QStringLiteral(u"10.6 m²"),
         "physical calculation comes from current clear geometry");
     auto source=document->snapshot();auto changed=source.entities().at("right");changed.properties["thickness_m"]=.4;
     document->apply(ApplyEntityChanges{source.revision(),{EntityChange::upsert(changed)}, {},"Change physical room source"});

@@ -22,6 +22,7 @@
 #include <QPdfSelection>
 #include <QPdfWriter>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QStandardPaths>
 #include <QStringList>
 #include <QTabWidget>
@@ -140,11 +141,11 @@ void sheet_summary_preserves_per_row_policy_and_status() {
     };
     for(const bool metric:{true,false}) {
         const auto content=render(metric,false);
-        require(content.contains(QStringLiteral("ANSI primary dwelling GLA 1076 ft²")),
+        require(content.contains(QStringLiteral("ANSI primary dwelling GLA 1,076 sf")),
             "ANSI sheet row must use canonical whole square feet in either workspace unit mode");
-        require(content.contains(metric?QStringLiteral("Legacy category 100.0 m²"):QStringLiteral("Legacy category 1076.4 ft²")),
+        require(content.contains(metric?QStringLiteral("Legacy category 100.0 m²"):QStringLiteral("Legacy category 1,076.4 sf")),
             "mixed legacy sheet row must retain its own workspace units and precision");
-        require(content.contains(metric?QStringLiteral("Malformed policy diagnostic 100.0 m²"):QStringLiteral("Malformed policy diagnostic 1076.4 ft²")),
+        require(content.contains(metric?QStringLiteral("Malformed policy diagnostic 100.0 m²"):QStringLiteral("Malformed policy diagnostic 1,076.4 sf")),
             "nontext policy cells must not be interpreted as ANSI");
         require(content.contains("Unqualified: totals withheld") && content.contains("not ANSI approval / certification"),
             "sheet status must preserve withheld totals and avoid approval implication");
@@ -194,6 +195,11 @@ void ansi_report_html_pdf_canonical_units_and_evidence() {
     auto& rooms=child<QTableWidget>(editor,"appraisalReportingRooms");
     require(rooms.rowCount()==1 && rooms.item(0,0)->text()=="bedroom-explicit",
         "Reporting editor exposes persisted typed room declarations");
+    require(rooms.isColumnHidden(0) && rooms.verticalHeaderItem(0) && rooms.verticalHeaderItem(0)->text()=="Room 1",
+        "Reporting keeps stable room identifiers hidden and shows a readable room label");
+    auto* fields_scroll=editor.findChild<QScrollArea*>(QStringLiteral("appraisalReportingFieldsScroll"));
+    require(fields_scroll && fields_scroll->horizontalScrollBarPolicy()==Qt::ScrollBarAlwaysOff,
+        "Reporting fields wrap instead of scrolling sideways");
     contract.setCurrentIndex(contract.findData(static_cast<int>(sketch::AppraisalReportingContract::legacy_uad_2_6)));
     bool applied=false;
     editor.setApplyRequested([&](const sketch::AppraisalReportingChanges& changes,QString&){
@@ -236,15 +242,15 @@ void ansi_report_html_pdf_canonical_units_and_evidence() {
             "Hidden duplicate room membership and hidden malformed declarations cannot block a visible editor save");
     }
     require(html.contains("MEASUREMENT SUMMARY") &&
-        html.contains("Gross boundary area</td><td align='right'>100 sq ft") &&
-        !html.contains("Gross boundary area</td><td align='right'>100.00 sq ft") &&
-        html.contains("Rectangle components") && html.contains("100.00 sq ft") &&
+        html.contains("Gross boundary area</td><td align='right'>100 sf") &&
+        !html.contains("Gross boundary area</td><td align='right'>100.00 sf") &&
+        html.contains("Rectangle components") && html.contains("100.00 sf") &&
         html.contains("40.0 ft") && html.contains("10.0 ft") && html.contains("Supplemental metric diagnostic"),
         "ANSI HTML uses canonical areas and tenth-foot dimensions with clearly supplemental metric display");
     require(html.contains("Interior inspected") && html.contains("Direct measurement") && html.contains("Inch") &&
         html.contains("Year-round suitable") && html.contains("Finish matches dwelling") && html.contains("Primary") &&
         html.contains("Recorded minimum ceiling height") && html.contains("8 ft") &&
-        html.contains("Rounded minimum ceiling height") && html.contains("8 ft 0 in (nearest inch)") &&
+        html.contains("Rounded minimum ceiling height") && html.contains("8' 0&quot; (nearest inch)") &&
         html.contains("normative",Qt::CaseInsensitive) && html.contains("&lt;verified&gt;"),
         "ANSI HTML exposes source declarations and truthful escaped validation limitations");
     QTemporaryDir directory;require(directory.isValid(),"ANSI PDF fixture directory");QString error;
@@ -253,7 +259,7 @@ void ansi_report_html_pdf_canonical_units_and_evidence() {
     const auto contents=pdf_text(path);
     require(contents.contains("UAD 3.6 reporting") && contents.contains("bedroom-explicit"),
         "Reopened PDF retains the same form projection and declared room evidence");
-    require(contents.contains("MEASUREMENT SUMMARY") && contents.contains("100 sq ft") && contents.contains("40.0 ft") &&
+    require(contents.contains("MEASUREMENT SUMMARY") && contents.contains("100 sf") && contents.contains("40.0 ft") &&
         contents.contains("Interior inspected") && contents.contains("Direct measurement") && contents.contains("All rooms inspected <verified>.") &&
         contents.contains("normative",Qt::CaseInsensitive),"actual reopened PDF retains canonical measurements and declarations");
 }
@@ -328,7 +334,7 @@ void display_precision_unqualified_diagnostics_and_invalid_trace() {
     require(pdf_text(diagnostic_path).contains("totals withheld") && pdf_text(diagnostic_path).contains("factor_not_unity"),"diagnostic PDF must retain qualification reason");
     window.setMetricUnits(false);
     report_action(window,[&](auto& dialog){const auto& parent=row(child<QTreeWidget>(dialog,"appraisalReportAreas"),ids.parent);
-        require(parent.text(4)=="861.1 sq ft" && parent.text(6)=="430.6 sq ft" &&
+        require(parent.text(4)=="861.1 sf" && parent.text(6)=="430.6 sf" &&
             child<QTextBrowser>(dialog,"appraisalReportSummary").toPlainText().contains("Display precision 1"),"actual report must use active units and configured precision on physical/adjusted amounts");});
     const auto source=window.document().snapshot();auto parent=source.entities().at(ids.parent.toStdString());parent.properties["wall_measurement_source"]={{"version",99}};
     bool refused=false;
@@ -495,7 +501,7 @@ void paginated_pdf_escaping_and_atomic_destination_failures() {
     const auto path=directory.filePath("complete-report.pdf");require(window.exportAppraisalReportPdf(path,"property-1",before.revision()),"complete audit must export to real paginated PDF");
     QPdfDocument pdf;require(pdf.load(path)==QPdfDocument::Error::None && pdf.pageCount()>1,"twenty boundary audit must paginate instead of clipping after page one");
     const auto text=pdf_text(path,true);for(const auto& id:source_ids)require(text.contains(id),"every source ID including final area must survive exported pagination");
-    require(text.contains("foreign-marker") && text.contains("All measured categories total") && text.contains("1796.00 m²"),"complete PDF must retain escaped names and qualified property total");
+    require(text.contains("foreign-marker") && text.contains("All measured categories total") && text.contains("1,796.00 m²"),"complete PDF must retain escaped names and qualified property total");
     const auto captures=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");if(!captures.isEmpty()) {
         require(QDir().mkpath(captures),"create actual report capture directory");
         QFile retained_pdf(QDir(captures).filePath("appraisal-report-complete.pdf"));const auto actual=bytes(path);
@@ -537,8 +543,9 @@ void individual_unit_renderer_escapes_identifiers_and_withholds_unavailable_fiel
     QTextDocument rendered;rendered.setHtml(html);const auto plain=rendered.toPlainText();
     require(!html.contains("<script>") && !html.contains("<img src=") &&
         plain.contains(QString::fromStdString(unit.living_unit.identifier)) && plain.contains("Kitchen") && plain.contains("Level 1") &&
-        plain.contains("2 bedrooms; 1 full / 0 half bathrooms") && plain.contains("boundary-source") &&
-        !plain.contains("technical-unit-hidden"),"Named unit and level fields escape appraiser text, retain provenance and keep technical unit IDs out of labels");
+        plain.contains("2 bedrooms; 1 full / 0 half bathrooms") && !plain.contains("boundary-source") &&
+        !plain.contains("floor-source") && !plain.contains("technical-unit-hidden"),
+        "Named unit and level fields escape appraiser text and keep technical unit, floor and boundary IDs out of the report body (the provenance appendix lists them)");
     projection.living_units.front().room_counts_available=false;projection.living_units.front().area_fields_available=false;
     rendered.setHtml(sketch::desktop::appraisal_form_projection_html(report,true));
     require(rendered.toPlainText().contains("Withheld") && !rendered.toPlainText().contains("2 bedrooms") &&

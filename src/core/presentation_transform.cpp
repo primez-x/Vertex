@@ -88,7 +88,7 @@ void upgrade_callout_schema(Entity& entity, const AnnotationState& state, int ve
 
 Boundary callout_boundary(const Entity& entity) {
     require(can_recognize_boundary_entity_type(entity.type) || entity.type == "room",
-            "An area callout requires a closed boundary or native room owner.");
+            "An area label must belong to a closed outline or a room.");
     if (can_recognize_boundary_entity_type(entity.type)) {
         const auto version = inspect_boundary_entity_version(entity);
         require(version.format != BoundaryEntityFormat::unsupported_version,
