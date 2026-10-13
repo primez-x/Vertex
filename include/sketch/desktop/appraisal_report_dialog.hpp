@@ -4,6 +4,7 @@
 #include "sketch/schedule_model.hpp"
 #include <QDialog>
 #include <QString>
+#include <QStringList>
 #include <functional>
 #include <memory>
 #include <string>
@@ -36,6 +37,11 @@ struct AppraisalIssuePresentation {
     const DocumentSnapshot& source, const std::string& issue);
 // Plain-language fact-then-fix text for one validator or qualification message.
 [[nodiscard]] QString appraisal_issue_message(const DocumentSnapshot& source, std::string_view message);
+// Compact area summary in appraisal terms for title blocks: "GLA<TAB>1,842 sf"
+// first, then each other measured category with a nonzero total. When totals
+// are withheld the GLA row says so and note explains why in one sentence.
+[[nodiscard]] QStringList appraisal_area_summary_lines(const AppraisalDocumentReport& report,
+    bool metric, QString* note = nullptr);
 // The rounding basis every displayed total follows, for labels and tooltips.
 [[nodiscard]] QString appraisal_rounding_basis(const AppraisalDocumentReport& report, bool metric);
 

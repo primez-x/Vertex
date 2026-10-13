@@ -6781,8 +6781,8 @@ void test_survey_calculator(const QString& capture_directory) {
     require(!floor_area.isEmpty() && window.selectEntity(survey_id), "select parcel surrounding a living area");
     auto* building_total = window.findChild<QLabel*>("calculationBuildingTotal");
     auto* living_total = window.findChild<QLabel*>("calculationLivingTotal");
-    require(building_total && living_total && building_total->text().contains("100.00 m²") &&
-                living_total->text().contains("100.00 m²"),
+    require(building_total && living_total && building_total->text().contains("100.0 m²") &&
+                living_total->text().contains("100.0 m²"),
             "parcel enclosing a building must not block calculations or inflate building/living totals");
     const auto source_revision = window.document().revision();
     QTimer::singleShot(0, &window, [&] {
@@ -8042,11 +8042,11 @@ void test_calculation_deduction_workflow() {
                 stored.properties.at("deduction_ids").at(0) == hole_id.toStdString(),
             "accepted deductions should persist as explicit entity references");
     require(deduction_list->count() == 1 &&
-                deduction_list->item(0)->text().contains(QStringLiteral("4.00 m²")),
+                deduction_list->item(0)->text().contains(QStringLiteral("4.0 m²")),
             "calculation inspector should show the applied deduction trace");
     auto* net = window.findChild<QLabel*>(QStringLiteral("calculationNetArea"));
     auto* calculation_status = window.findChild<QLabel*>(QStringLiteral("calculationStatus"));
-    require(net && calculation_status && net->text().contains(QStringLiteral("96.00 m²")),
+    require(net && calculation_status && net->text().contains(QStringLiteral("96.0 m²")),
             "net area should subtract the contained deduction exactly once");
     require(window.undoCommand(), "deduction edit should be undoable");
     require(!window.document().snapshot().entities().at(outer_id.toStdString()).properties.contains("deduction_ids") &&
@@ -8068,7 +8068,7 @@ void test_calculation_deduction_workflow() {
     require(window.selectEntity(outer_id),
             "calculation phase fixture should refresh the selected boundary");
     require(!calculation_status->text().contains(QStringLiteral("blocked"), Qt::CaseInsensitive) &&
-                net->text().contains(QStringLiteral("96.00 m²")),
+                net->text().contains(QStringLiteral("96.0 m²")),
             "baseline phase should retain the selected deduction total");
     require(window.selectRemodelingAlternative(QStringLiteral("demolish-hole")),
             "calculation phase selection should use the typed document command");
@@ -8079,7 +8079,7 @@ void test_calculation_deduction_workflow() {
     const auto phase_undo = window.undoCommand();
     require(phase_undo && window.selectedEntityId() == outer_id &&
                 !calculation_status->text().contains(QStringLiteral("blocked"), Qt::CaseInsensitive) &&
-                net->text().contains(QStringLiteral("96.00 m²")),
+                net->text().contains(QStringLiteral("96.0 m²")),
             "undoing a phase selection should restore the baseline calculation");
 }
 
@@ -8263,7 +8263,7 @@ void test_market_scoped_architectural_workflow() {
         const auto png = directory.filePath(stem + QStringLiteral(".png"));
         require(window.saveProjectAs(project) && window.exportDraftPdf(pdf) &&
                     window.exportDraftSvg(svg) && window.exportDraftImage(png),
-                "market fixture must save and export its coordinated deliverables");
+                ("market fixture must save and export its coordinated deliverables: " + window.lastError().toStdString()));
         const auto project_hash = ProjectStore::file_sha256(
             std::filesystem::path(project.toStdWString()));
         require(std::filesystem::file_size(project.toStdWString()) > 0 &&
@@ -8342,7 +8342,7 @@ void test_pdf_export_atomicity() {
         window.document().revision(), {sketch::EntityChange::upsert(valid_sheet)}, {},
         "restore valid sheet output"});
     require(window.exportDraftPdf(path) && read(path) != original,
-            "successful export must atomically replace the previous PDF");
+            "successful export must atomically replace the previous PDF: " + window.lastError().toStdString());
     {
         QPdfDocument pdf;
         require(pdf.load(path) == QPdfDocument::Error::None && pdf.pageCount() == 1,
@@ -8597,7 +8597,7 @@ void test_coordinated_view_output_identity() {
             "exercise independently coordinated viewport output"});
         require(window.selectEntity(horizontal), "refresh view output fixture");
         const auto path = directory.filePath(name + QStringLiteral(".pdf"));
-        require(window.exportDraftPdf(path), "coordinated viewport PDF must export");
+        require(window.exportDraftPdf(path), "coordinated viewport PDF must export: " + window.lastError().toStdString());
         QPdfDocument pdf;
         require(pdf.load(path) == QPdfDocument::Error::None, "coordinated viewport PDF must load");
         const auto image = pdf.render(0, QSize(1680, 1188));
@@ -8675,7 +8675,7 @@ void test_coordinated_view_output_identity() {
         const auto dimension_text = text_for(labelled_dimension);
         const auto path = directory.filePath(QStringLiteral("labels-%1-%2.pdf")
             .arg(direction_z).arg(shifted));
-        require(label_window.exportDraftPdf(path), "saved-plan labels must export");
+        require(label_window.exportDraftPdf(path), "saved-plan labels must export: " + label_window.lastError().toStdString());
         QPdfDocument pdf;
         require(pdf.load(path) == QPdfDocument::Error::None, "saved-plan label PDF must load");
         const auto exported_text = pdf.getAllText(0).text().simplified();
@@ -9982,9 +9982,9 @@ int main(int argc, char** argv) {
             "calculation inspector labels should be available for a selected boundary");
     require(!calculation_status->text().contains(QStringLiteral("blocked"), Qt::CaseInsensitive),
             "a classified boundary should have an active calculation profile rule");
-    require(base_area->text().contains(QStringLiteral("64.58")) &&
-                net_area->text().contains(QStringLiteral("64.58")) &&
-                factored_area->text().contains(QStringLiteral("64.58")),
+    require(base_area->text().contains(QStringLiteral("64.6 sf")) &&
+                net_area->text().contains(QStringLiteral("64.6 sf")) &&
+                factored_area->text().contains(QStringLiteral("64.6 sf")),
             "selected boundary should show base, net, and factored area in default imperial units");
     require(!perimeter_value->text().isEmpty() && perimeter_value->text() != QStringLiteral("—"),
             "selected boundary should show its perimeter");
@@ -10003,7 +10003,7 @@ int main(int argc, char** argv) {
                 factor_entity->second.properties.at("factor_denominator").get<std::int64_t>() == 4 &&
                 std::abs(factor_entity->second.properties.at("factor").get<double>() - 0.75) < 1e-12,
             "factor edit should preserve the expression, rational components, and numeric value");
-    require(factored_area->text().contains(QStringLiteral("48.44")),
+    require(factored_area->text().contains(QStringLiteral("48.4 sf")),
             "factored area should apply the exact rational factor");
     require(window.undoCommand(), "factor edit should be undoable");
     const auto factor_undo_snapshot = window.document().snapshot();
@@ -10024,7 +10024,7 @@ int main(int argc, char** argv) {
     require(window.editSelectedClassification(QStringLiteral("unassigned")),
             "boundary classification should be editable through the shared command path");
     require(calculation_status->text().contains(QStringLiteral("blocked"), Qt::CaseInsensitive) &&
-                calculation_status->text().contains(QStringLiteral("no calculation profile rule"),
+                calculation_status->text().contains(QStringLiteral("area rules do not cover"),
                                                      Qt::CaseInsensitive),
             "unknown classification should visibly block totals");
     const auto profile_before_snapshot = window.document().snapshot();

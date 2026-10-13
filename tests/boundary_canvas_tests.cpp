@@ -585,6 +585,17 @@ void test_drawing_length_guides_and_non_drawing_placements() {
     move({station.x,station.y+0.02});
     require(live && std::hypot(live->x-station.x,live->y-station.y)<1e-10,
             "exact host station projection must take priority over the new drawing length magnet");
+    // A node aligned with another corner (an external guide) keeps that
+    // corner's coordinate exactly, and its free coordinate still follows the
+    // drawing increment from this segment's start like every other node.
+    CanvasEntity corner{QStringLiteral("corner"),QStringLiteral("wall"),{}};
+    const Vec2 corner_point{origin.x+0.4,origin.y+2.0};
+    corner.snap_points={corner_point};
+    canvas.setEntities({corner});
+    move({corner_point.x+0.004,origin.y+1.01});
+    require(live && live->x==corner_point.x &&
+                std::abs(live->y-(origin.y+13*0.0762))<1e-10,
+            "external alignment guide must still quantize the free coordinate from the segment start");
     canvas.setRawPointInput(true);
     const Vec2 raw{1.1234567,1.9876543};
     move(raw);

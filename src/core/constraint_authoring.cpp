@@ -1877,6 +1877,39 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(Source snapshot,con
                     add_fixed(binding, position);
                 }
             }
+            // Keep connected walls square. A straight wall meeting the moved
+            // end at a right angle translates with that end instead of
+            // pivoting, so a rectangular room stays rectangular: its far wall
+            // moves and the parallel wall opposite changes length instead.
+            if (resize.move_connected_walls && old.sweep_radians == 0.0 && target.sweep_radians == 0.0) {
+                const bool moving_end = resize.anchored_endpoint == WallResizeAnchor::start;
+                const auto moved_from = moving_end ? old.end : old.start;
+                const auto moved_to = moving_end ? target.end : target.start;
+                const Vec2 delta{moved_to.x - moved_from.x, moved_to.y - moved_from.y};
+                const auto edited_length = std::hypot(old.end.x - old.start.x, old.end.y - old.start.y);
+                if (std::hypot(delta.x, delta.y) > constraint_linear_tolerance_metres) {
+                    for (const auto& [id, position] : positions) {
+                        const auto& binding = point_bindings.at(id);
+                        if (binding.owner_id == resize.wall_id || !resize_component.contains(binding.owner_id) ||
+                            !binding.segment_id.empty() || !old_baselines.contains(binding.owner_id) ||
+                            !points_near(position, moved_from, constraint_linear_tolerance_metres) ||
+                            snapshot.entities().at(binding.owner_id).extensions.contains("physical_wall_room"))
+                            continue;
+                        const auto other = old_baselines.at(binding.owner_id);
+                        if (other.sweep_radians != 0.0) continue;
+                        const auto other_length = std::hypot(other.end.x - other.start.x, other.end.y - other.start.y);
+                        if (!(other_length > default_geometry_tolerance_metres)) continue;
+                        const auto dot = (old.end.x - old.start.x) * (other.end.x - other.start.x) +
+                                         (old.end.y - old.start.y) * (other.end.y - other.start.y);
+                        if (std::abs(dot) > 1e-6 * edited_length * other_length) continue;  // not orthogonal
+                        const WallEndpointBinding far{binding.owner_id,
+                            binding.role == WallEndpointRole::start ? WallEndpointRole::end : WallEndpointRole::start};
+                        const auto far_from = endpoint_position(other, far.role);
+                        add_fixed(binding, moved_to);
+                        add_fixed(far, {far_from.x + delta.x, far_from.y + delta.y});
+                    }
+                }
+            }
         } else if (!selected_stroke_edits.empty()) {
             std::set<std::string,std::less<>> movable_component;
             for (const auto& [owner_id, edit] : selected_stroke_edits) {

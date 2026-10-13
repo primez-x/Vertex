@@ -188,9 +188,9 @@ std::size_t curved_edge_count(const sketch::Entity& entity) {
     }));
 }
 
-// Profile-rounded appraisal totals keep the profile's two decimals.
+// Profile-rounded appraisal totals use the profile's default one decimal.
 QString metric_area_text(double area) {
-    return QStringLiteral("%1 m²").arg(area, 0, 'f', 2);
+    return QStringLiteral("%1 m²").arg(area, 0, 'f', 1);
 }
 
 // Wall-measurement review readout: displayed area, one decimal.
@@ -517,7 +517,7 @@ void curved_d_exterior_measurement_stays_analytic_through_refresh_and_output() {
     require(pdf.load(pdf_path) == QPdfDocument::Error::None && pdf.pageCount() > 0,
             "the curved exterior PDF opens as a real plan page");
     const auto text = pdf.getAllText(0).text();
-    require(text.contains(QString::number(refreshed_area, 'f', 2)) &&
+    require(text.contains(QString::number(refreshed_area, 'f', 1)) &&
                 text.contains(sketch::desktop::PlanCanvas::drawingLengthText(refreshed_arc_length, true)),
             "the PDF prints exact analytical exterior area and curved-edge physical dimension");
 }
@@ -717,7 +717,7 @@ void mixed_wall_shell_move_refreshes_unselected_appraisal_area(bool metric, bool
     auto* qualified=window.findChild<QLabel*>("appraisalQualification");
     auto* total=window.findChild<QLabel*>("appraisalGlaTotal");
     const auto net=(analytical_area(owner_after)-.16)/(metric ? 1.0 : .3048*.3048);
-    require(qualified && qualified->text().startsWith("Qualified") && total && total->text().contains(QString::number(net,'f',2)),
+    require(qualified && qualified->text().startsWith("Qualified") && total && total->text().contains(QString::number(net,'f',1)),
         "visible appraisal total remains qualified in the active unit system");
     require(window.undoCommand() && window.document().snapshot().entities()==before.entities() && window.redoCommand() &&
         window.document().snapshot().entities()==after.entities(),"one Undo and Redo restores the complete mixed edit");
@@ -799,7 +799,7 @@ void authored_wall_thickness_updates_its_existing_appraisal_area(bool metric, bo
     const auto deduction_area=analytical_area(after.entities().at(deduction_id.toStdString()));
     const auto area=(analytical_area(owner_after)-deduction_area)/(metric ? 1.0 : 0.3048*0.3048);
     require(qualification && qualification->text().startsWith(QStringLiteral("Qualified")) &&
-                total && total->text().contains(QString::number(area,'f',2)),
+                total && total->text().contains(QString::number(area,'f',1)),
             "the visible qualified appraisal total updates automatically in the active unit system");
     capture(window,QStringLiteral("live-wall-thickness-%1-%2")
         .arg(metric ? "metric" : "imperial",curved ? "curved" : "straight"));
@@ -932,11 +932,11 @@ void selected_wall_loop_creates_and_refreshes_one_exterior_appraisal_area() {
     const auto garage_area = polygon_area(sketch::decode_identified_boundary_entity(
         window.document().snapshot().entities().at(garage_id.toStdString())));
     const auto net_area = initial_area - garage_area;
-    require(gla->text().contains(QString::number(net_area, 'f', 2)) &&
+    require(gla->text().contains(QString::number(net_area, 'f', 1)) &&
                 gla->text().contains(QStringLiteral("m²")),
             "the appraisal label shows exterior area net of the retained garage deduction in metric units");
     window.setMetricUnits(false);
-    require(gla->text().contains(QString::number(net_area / (0.3048*0.3048),'f',2)) &&
+    require(gla->text().contains(QString::number(net_area / (0.3048*0.3048),'f',1)) &&
                 gla->text().contains(QStringLiteral(" sf")),
             "the same wall-derived net appraisal area calculates automatically in square feet");
     window.setMetricUnits(true);
@@ -1011,7 +1011,7 @@ void selected_wall_loop_creates_and_refreshes_one_exterior_appraisal_area() {
     require(std::abs(refreshed_area - initial_area) > 0.01,
             "refresh rebuilds exterior geometry from the edited wall thickness");
     require(qualification->text().startsWith(QStringLiteral("Qualified")) &&
-                gla->text().contains(QString::number(refreshed_area - garage_area, 'f', 2)),
+                gla->text().contains(QString::number(refreshed_area - garage_area, 'f', 1)),
             "refresh restores qualified net appraisal totals from the current exterior geometry");
     capture(window,QStringLiteral("refreshed-exterior-appraisal-area"));
     const auto dimensions_after = dimensions_for(refreshed, boundary_id.toStdString());
@@ -1060,7 +1060,7 @@ void selected_wall_loop_creates_and_refreshes_one_exterior_appraisal_area() {
     require(pdf.load(pdf_path) == QPdfDocument::Error::None && pdf.pageCount() > 0,
             "the exterior measurement PDF opens as a real plan page");
     const auto text = pdf.getAllText(0).text();
-    require(text.contains(QString::number(refreshed_area - garage_area,'f',2)),
+    require(text.contains(QString::number(refreshed_area - garage_area,'f',1)),
             "the PDF retains the current net appraisal area");
     // Plan dimension labels use the drawing-length format (millimetre precision with
     // trailing zeros trimmed, e.g. "4.19 m"). The matched edge must be a physical exterior
@@ -1155,7 +1155,7 @@ void an_unsplit_partition_selects_its_exterior_shell() {
     require(window.editSelectedAppraisalFacts(appraisal_declarations()), "the shell accepts residential declarations");
     window.setMetricUnits(false);
     auto* gla = window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"));
-    require(gla && gla->text().contains(QString::number(exterior_area/(0.3048*0.3048),'f',2)) &&
+    require(gla && gla->text().contains(QString::number(exterior_area/(0.3048*0.3048),'f',1)) &&
                 gla->text().contains(QStringLiteral(" sf")), "appraisal square-foot totals use the full exterior footprint");
     for (qsizetype i = 0; i < perimeter.size(); ++i)
         require(window.selectEntity(perimeter[i],i != 0), "select explicit shell candidates");

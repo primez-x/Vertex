@@ -220,6 +220,39 @@ void test_select_all_and_duplicate() {
     require(window.selectEntity(QString{}), "clear selection");
     require(!window.duplicateSelection() && !window.lastError().isEmpty(), "duplicate needs a selection");
 }
+// File > Export: sketch and appraisal report first; sheet output says why it
+// is unavailable when no drawing sheet exists.
+void test_export_menu() {
+    desktop::MainWindow window;
+    auto* export_menu = window.findChild<QMenu*>(QStringLiteral("exportMenu"));
+    auto* sheet = window.findChild<QAction*>(QStringLiteral("exportSheetPdf"));
+    auto* sketch_pdf = window.findChild<QAction*>(QStringLiteral("exportSketchPdf"));
+    auto* report = window.findChild<QAction*>(QStringLiteral("exportAppraisalReportPdf"));
+    require(export_menu && sheet && sketch_pdf && report, "Export menu has sketch, report and sheet actions");
+    const auto actions = export_menu->actions();
+    require(actions.indexOf(sketch_pdf) == 0 && actions.indexOf(report) == 1 && actions.contains(sheet),
+            "Export lists Export sketch PDF, then Appraisal report PDF");
+    QMetaObject::invokeMethod(export_menu, "aboutToShow");
+    require(sheet->isEnabled() && report->isEnabled(),
+            "the default project has a drawing sheet and a property to report on");
+
+    // A project without drawing sheets (for example an imported sketch).
+    QTemporaryDir directory;
+    auto document = std::make_shared<Document>(Document::create({
+        {"p", "property", {{"name", "No sheets"}}, false},
+        {"b", "building", {{"property_id", "p"}}, false},
+        {"f", "floor", {{"building_id", "b"}}, false},
+        {"l", "layer", {{"floor_id", "f"}, {"name", "Plan"}}, false}}));
+    desktop::MainWindow bare(document, nullptr, directory.filePath(QStringLiteral("text-library.json")));
+    auto* bare_menu = bare.findChild<QMenu*>(QStringLiteral("exportMenu"));
+    auto* bare_sheet = bare.findChild<QAction*>(QStringLiteral("exportSheetPdf"));
+    auto* bare_set = bare.findChild<QAction*>(QStringLiteral("exportDrawingSetPdf"));
+    require(bare_menu && bare_sheet && bare_set, "Export menu exists without sheets");
+    QMetaObject::invokeMethod(bare_menu, "aboutToShow");
+    require(!bare_sheet->isEnabled() && bare_sheet->toolTip().contains(QStringLiteral("No drawing sheets")) &&
+                !bare_set->isEnabled(),
+            "sheet output is disabled with a reason when no sheet exists");
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -238,6 +271,7 @@ int main(int argc, char** argv) {
         require(font >= 0, "bundled Inter font required");
         app.setFont(QFont(QFontDatabase::applicationFontFamilies(font).front(), 10));
         test_menu_entries();
+        test_export_menu();
         test_recent_projects(files);
         test_reopen_last_project(files);
         test_select_all_and_duplicate();

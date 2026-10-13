@@ -244,7 +244,7 @@ void qualified_units_refresh_and_callbacks() {
     auto entities=fixture();auto document=sketch::Document::create(entities);
     panel.setDocument(document.snapshot(),"p",false);
     require(panel.report() && panel.report()->qualified,"qualified report without canvas selection");
-    require(label(panel,"appraisalDetailsGla")=="100.00 sf","prominent authoritative GLA");
+    require(label(panel,"appraisalDetailsGla")=="100.0 sf","prominent authoritative GLA");
     require(label(panel,"appraisalDetailsStandards").contains("ANSI review not verified"),"truthful residential standards status");
     panel.setSelectedBoundary("a");
     require(label(panel,"appraisalDetailsTrace").contains("40' 0&quot;") &&
@@ -261,19 +261,43 @@ void qualified_units_refresh_and_callbacks() {
     auto* item=tree->currentItem();located.clear();tree->itemActivated(item,0);
     require(located=="a","row activation locates source boundary");
     panel.setDocument(document.snapshot(),"p",true);
-    require(label(panel,"appraisalDetailsGla")=="9.29 m²" && label(panel,"appraisalDetailsTrace").contains("12.192 m"),"metric refresh retains physical values");
+    require(label(panel,"appraisalDetailsGla")=="9.3 m²" && label(panel,"appraisalDetailsTrace").contains("12.192 m"),"metric refresh retains physical values");
     entities.back().properties["boundary"]=square(0,0,6.096);document=sketch::Document::create(entities);
     panel.setDocument(document.snapshot(),"p",false);
-    require(label(panel,"appraisalDetailsGla")=="400.00 sf","new snapshot replaces stale header even same revision");
+    require(label(panel,"appraisalDetailsGla")=="400.0 sf","new snapshot replaces stale header even same revision");
     panel.setDocument(document.snapshot(),"missing",false);
     require(!panel.report() && panel.selectedBoundaryId().isEmpty() && !button(panel,"appraisalDetailsLocate")->isEnabled(),"missing property clears previous report and actions");
     require(!label(panel,"appraisalDetailsGla").contains("400"),"no stale total after context failure");
+}
+// Facts recorded from the area type read as such and stay editable; a fact
+// the user changed is shown plainly.
+void facts_from_classification_are_marked() {
+    AppraisalDetailsPanel panel;
+    auto entities=fixture();
+    entities[2].properties["appraisal_fact_defaults"]={{"version",1},{"source","classification"},{"facts",{{"grade","above"}}}};
+    entities.back().properties["appraisal_fact_defaults"]={{"version",1},{"source","classification"},
+        {"classification","above_grade_finished"},{"facts",{{"finish","finished"},{"access","noncontinuous"}}}};
+    auto document=sketch::Document::create(entities);
+    panel.setDocument(document.snapshot(),"p",false);
+    panel.setSelectedBoundary("a");
+    const auto trace=label(panel,"appraisalDetailsTrace");
+    require(panel.report() && panel.report()->qualified && panel.report()->calculation &&
+        std::abs(panel.report()->calculation->property.gla().total.square_metres-3.048*3.048)<1e-12,
+        "facts recorded from the area type keep the exact qualified GLA");
+    require(trace.contains("From classification · edit facts") &&
+        trace.contains("Above · from classification") && trace.contains("Finished · from classification"),
+        "Details must mark facts recorded from the area type");
+    require(trace.contains("Direct interior") && !trace.contains("Direct interior · from classification"),
+        "a fact whose value differs from the recorded default is the user's own");
+    entities[2].properties.erase("appraisal_fact_defaults");entities.back().properties.erase("appraisal_fact_defaults");
+    document=sketch::Document::create(entities);panel.setDocument(document.snapshot(),"p",false);panel.setSelectedBoundary("a");
+    require(!label(panel,"appraisalDetailsTrace").contains("from classification"),"declared facts without defaults are not marked");
 }
 void undeclared_and_invalid_measurements() {
     AppraisalDetailsPanel panel;auto entities=fixture();entities.front().properties.erase("calculation_workflow");
     auto document=sketch::Document::create(entities);panel.setDocument(document.snapshot(),"p",false);
     require(panel.report() && !panel.report()->qualified && label(panel,"appraisalDetailsGla")=="Totals unavailable", "undeclared property never shows numeric totals");
-    require(label(panel,"appraisalDetailsStatus").contains("Setup"),"new/manual workflow gives actionable setup guidance");
+    require(label(panel,"appraisalDetailsStatus").contains("Appraisal setup"),"new/manual workflow gives actionable setup guidance");
     entities=fixture();entities.back().properties["appraisal_facts"].erase("finish");
     document=sketch::Document::create(entities);panel.setDocument(document.snapshot(),"p",false);panel.setSelectedBoundary("a");
     require(!panel.report()->qualified && label(panel,"appraisalDetailsTrace").contains("Diagnostic") &&
@@ -294,15 +318,15 @@ void categories_floors_deductions_and_phase() {
     entities.push_back(entity("f2","floor",{{"name","Basement"},{"building_id","b"},{"appraisal_facts",{{"grade","below"}}}}));
     auto basement=fixture().back();basement.id="basement";basement.properties["floor_id"]="f2";basement.properties["boundary"]=square(0,0,3);entities.push_back(basement);
     auto document=sketch::Document::create(entities);panel.setDocument(document.snapshot(),"p",true);panel.setSelectedBoundary("a");
-    require(panel.report()->qualified && label(panel,"appraisalDetailsGla")=="10.00 m²","union deductions and other categories never inflate GLA");
+    require(panel.report()->qualified && label(panel,"appraisalDetailsGla")=="10.0 m²","union deductions and other categories never inflate GLA");
     const auto totals=label(panel,"appraisalDetailsTotals");
-    require(totals.contains("Garage") && totals.contains("4.00 m²") && totals.contains("Basement · finished") && totals.contains("9.00 m²"),"separate garage and basement (below-grade) totals in appraisal terms");
+    require(totals.contains("Garage") && totals.contains("4.0 m²") && totals.contains("Basement · finished") && totals.contains("9.0 m²"),"separate garage and basement (below-grade) totals in appraisal terms");
     const auto trace=label(panel,"appraisalDetailsTrace");
-    require(trace.contains("Requested: 4.00 m²") && trace.contains("Applied: 2.00 m²") && trace.contains("Physical net"),"overlap deduction trace exposes requested and marginal applied values");
+    require(trace.contains("Requested: 4.0 m²") && trace.contains("Applied: 2.0 m²") && trace.contains("Physical net"),"overlap deduction trace exposes requested and marginal applied values");
     std::set<std::string,std::less<>> visible;for(const auto& entry:entities)if(entry.id!="basement")visible.insert(entry.id);
     panel.setDocument(document.snapshot(),"p",true,&visible);
     require(panel.report()->qualified && panel.report()->boundaries.size()==4 &&
-        label(panel,"appraisalDetailsGla")=="10.00 m²","semantic phase scope applied to authoritative report");
+        label(panel,"appraisalDetailsGla")=="10.0 m²","semantic phase scope applied to authoritative report");
     panel.setDocument(document.snapshot(),"p",true);
     require(panel.report()->boundaries.size()==5,"ordinary refresh restores all boundaries independent of workspace visibility");
     entities.front().properties["appraisal_policy"]["policy_kind"]="light_commercial_declared";
@@ -405,12 +429,12 @@ void native_main_window_details() {
     const auto area=window.createBoundary(shape);require(!area.isEmpty(),"native fixture can author an area after Setup");
     const auto declaration=QStringLiteral(R"({"appraisal_policy":{"policy_kind":"residential_declared","version":1,"property_kind":"detached_single_family","measurement_basis":"exterior"},"grade":"above","appraisal_facts":{"finish":"finished","access":"direct_interior","ceiling_eligibility":"standard","area_use":"dwelling","boundary_role":"measured_area"}})");
     require(window.editSelectedAppraisalFacts(declaration),"existing facts command declares the native area");
-    require(label(panel,"appraisalDetailsGla")=="100.00 m²" && panel.selectedBoundaryId()==area,
+    require(label(panel,"appraisalDetailsGla")=="100.0 m²" && panel.selectedBoundaryId()==area,
         "document edits refresh GLA and canvas area selection synchronizes Details");
     require(window.selectEntity({}),"clear canvas selection");
     panel.setSelectedBoundary(area);
     window.setMetricUnits(false);
-    require(label(panel,"appraisalDetailsGla")=="1,076.39 sf" && panel.selectedBoundaryId()==area && window.selectedEntityId().isEmpty(),
+    require(label(panel,"appraisalDetailsGla")=="1,076.4 sf" && panel.selectedBoundaryId()==area && window.selectedEntityId().isEmpty(),
         "unit refresh preserves an independently chosen Details row");
     window.setMetricUnits(true);
     const auto before_hide=label(panel,"appraisalDetailsGla");
@@ -508,7 +532,7 @@ void signed_curve_arithmetic_is_shared_with_printed_report() {
         const bool concave=boundary.size()==4;
         const QString chord=concave?"16.00 m²":"-0.50 m²";
         const QString adjustment=concave?"-2.28 m²":"2.86 m²";
-        const QString gross=concave?"13.72 m²":"2.36 m²";
+        const QString gross=concave?"13.7 m²":"2.4 m²";
         for(const auto& content:{trace,html}) {
             require(content.contains("Signed chord contribution") && content.contains(chord) &&
                 content.contains("Analytical curve adjustment") && content.contains(adjustment) &&
@@ -608,7 +632,7 @@ void native_stale_context_withholds_actions_and_totals() {
     auto source=document->snapshot();auto changed=source.entities().at("a");changed.properties["boundary"]=square(0,0,6.096);
     document->apply(sketch::ApplyEntityChanges{source.revision(),{sketch::EntityChange::upsert(changed)},{},"external area edit"});
     button(panel,"appraisalDetailsLocate")->click();
-    require(window.selectedEntityId().isEmpty() && !window.lastError().isEmpty() && label(panel,"appraisalDetailsGla")=="37.16 m²",
+    require(window.selectedEntityId().isEmpty() && !window.lastError().isEmpty() && label(panel,"appraisalDetailsGla")=="37.2 m²",
         "stale locate rejects selection and rebuilds authoritative edited GLA");
     source=document->snapshot();
     bool refused=false;
@@ -618,7 +642,7 @@ void native_stale_context_withholds_actions_and_totals() {
     require(refused && document->revision()==source.revision() && document->snapshot().entities()==source.entities(),
         "malformed semantic phase cannot enter the authoritative document");
     button(panel,"appraisalDetailsLocate")->click();
-    require(panel.report() && panel.report()->qualified && label(panel,"appraisalDetailsGla")=="37.16 m²" &&
+    require(panel.report() && panel.report()->qualified && label(panel,"appraisalDetailsGla")=="37.2 m²" &&
         window.selectedEntityId()=="a", "rejected semantic corruption leaves current Details totals and action intact");
 }
 
@@ -639,7 +663,7 @@ void withheld_gla_names_issues_and_report_uses_appraisal_terms() {
         QString edited;panel.setFactsRequested([&](const QString& id,sketch::Revision){edited=id;});
         emit panel.findChild<QLabel*>("appraisalDetailsIssues")->linkActivated(link.captured(0));
         require(edited=="a" && panel.selectedBoundaryId()=="a","issue link selects the area and opens its facts editor");
-        require(label(panel,"appraisalDetailsRounding").contains("Display precision 2"),"displayed GLA names its rounding basis");
+        require(label(panel,"appraisalDetailsRounding").contains("Display precision 1 decimal place in"),"displayed GLA names its rounding basis");
         entities.back().properties.erase("name");document=sketch::Document::create(entities);panel.setDocument(document.snapshot(),"p",false);
         require(label(panel,"appraisalDetailsIssues").contains("Area · Ground floor"),"unnamed area is named by type and floor, never by ID");
     }
@@ -668,7 +692,7 @@ void withheld_gla_names_issues_and_report_uses_appraisal_terms() {
         window.setAttribute(Qt::WA_DontShowOnScreen);window.resize(1280,900);window.show();QApplication::processEvents();
         auto& shortcut=child<QToolButton>(window,"appraisalGlaShortcut");
         auto& panel=child<AppraisalDetailsPanel>(window,"appraisalDetailsPanel");
-        require(!shortcut.isHidden() && shortcut.text()=="GLA · setup required" && shortcut.toolTip().contains("Setup") &&
+        require(!shortcut.isHidden() && shortcut.text()=="GLA · setup required" && shortcut.toolTip().contains("Appraisal setup") &&
             label(panel,"appraisalDetailsStatus").startsWith("GLA withheld"),"a drawn area shows the withheld GLA state before Setup");
     }
 }
@@ -681,6 +705,7 @@ int main(int argc,char** argv) {
     try {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"))>=0,"bundled Inter font loads for native Details capture");
         app.setFont(QFont(QStringLiteral("Inter"),10));
+        facts_from_classification_are_marked();
         narrow_details_keeps_dimensions_and_full_sources_readable();ansi_ceiling_height_uses_declared_acquisition_precision();ansi_canonical_units_declarations_and_curve_dimensions();qualified_units_refresh_and_callbacks();undeclared_and_invalid_measurements();
         categories_floors_deductions_and_phase();stale_wall_sources();native_main_window_details();live_gla_shortcut_matches_authoritative_details();area_arithmetic_is_shared_with_printed_report();signed_curve_arithmetic_is_shared_with_printed_report();ansi_fractional_components_preserve_unrounded_gross();editable_reporting_contract_matches_details();native_stale_context_withholds_actions_and_totals();
         withheld_gla_names_issues_and_report_uses_appraisal_terms();

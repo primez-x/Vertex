@@ -1,4 +1,5 @@
 #include "sketch/desktop/main_window.hpp"
+#include "sketch/appraisal_document.hpp"
 
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_entity.hpp"
@@ -35,7 +36,10 @@
 #include <QKeyEvent>
 #include <QInputDialog>
 #include <QLabel>
+#include <QGroupBox>
+#include <QLayout>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QRectF>
@@ -113,6 +117,27 @@ PlanCanvas* canvas(MainWindow& window, const QString& object_name) {
     auto* result = dynamic_cast<PlanCanvas*>(widget);
     require(result != nullptr, "named plan canvas must be available");
     return result;
+}
+
+// The Define area chooser lists plain area types; each item keeps its
+// stored classification key.
+bool is_area_type_chooser(QWidget* modal) {
+    return modal && modal->objectName() == QStringLiteral("boundaryClassificationDialog") &&
+        modal->findChild<QListWidget*>(QStringLiteral("boundaryClassificationList"));
+}
+
+void choose_area_type(QWidget* modal, const QString& key) {
+    require(is_area_type_chooser(modal), "the Define area chooser must open");
+    auto* list = modal->findChild<QListWidget*>(QStringLiteral("boundaryClassificationList"));
+    for (int row = 0; row < list->count(); ++row)
+        if (list->item(row)->data(Qt::UserRole).toString() == key) {
+            list->setCurrentRow(row);
+            auto* create = modal->findChild<QPushButton*>(QStringLiteral("boundaryClassificationAccept"));
+            require(create != nullptr, "the chooser must offer its verb button");
+            create->click();
+            return;
+        }
+    require(false, "the chooser must offer the requested area type");
 }
 
 void prepare_window(MainWindow& window) {
@@ -788,9 +813,8 @@ void test_keyboard_only_boundary_authoring() {
             },"Ctrl+K must expose the actual Draw First start command",Qt::ControlModifier);
         } else {
             drive_boundary_modal(window,*drawing,Qt::Key_D,[&](QDialog* modal) {
-                auto* classification=qobject_cast<QInputDialog*>(modal);
-                require(classification,"Define First shortcut must request classification");
-                classification->setTextValue("living"); classification->accept();
+                require(is_area_type_chooser(modal),"Define First shortcut must request the area type");
+                choose_area_type(modal,QStringLiteral("above_grade_finished"));
             },"Ctrl+Shift+D must start Define First through actual keyboard UI",Qt::ControlModifier|Qt::ShiftModifier);
         }
         auto* drawing_mode = window.findChild<QComboBox*>(QStringLiteral("drawingMode"));
@@ -862,8 +886,8 @@ void test_keyboard_only_boundary_authoring() {
         require_same_document(before,window.document().snapshot(),"keyboard draft operations changed Document");
         if (mode==BoundaryAuthoringMode::draw_first) {
             drive_boundary_modal(window,*drawing,Qt::Key_Return,[&](QDialog* modal) {
-                auto* classification=qobject_cast<QInputDialog*>(modal); require(classification,"Draw First finish must classify area");
-                classification->setTextValue("living"); classification->accept();
+                require(is_area_type_chooser(modal),"Draw First finish must ask for the area type");
+                choose_area_type(modal,QStringLiteral("above_grade_finished"));
             });
         } else send_key(*drawing,Qt::Key_Return);
         if (mode==BoundaryAuthoringMode::define_first) {
@@ -874,9 +898,15 @@ void test_keyboard_only_boundary_authoring() {
         const auto geometry=sketch::boundary_geometry(sketch::decode_identified_boundary_entity(owner));
         require(geometry.size()==4 && std::abs(std::abs(sketch::signed_area(geometry))-96*0.3048*0.3048)<1e-8,
             "keyboard-only rectangle must calculate exactly 96 square feet");
-        require(after.revision()==before.revision()+1,"keyboard boundary must publish one command");
-        require(window.undoCommand() && window.document().snapshot().entities()==before.entities() &&
-            window.redoCommand() && window.document().snapshot().entities()==after.entities(),"keyboard commit must undo and redo once");
+        // The area is one command; the residential appraisal setup and the
+        // area's facts from its type follow as one more.
+        require(after.revision()==before.revision()+2,"keyboard boundary must publish the area, then its setup and facts");
+        require(owner.properties.value("appraisal_category",std::string{})=="above_grade_finished" &&
+            owner.properties.at("appraisal_facts").value("finish",std::string{})=="finished",
+            "the chosen Living area must carry its category and facts");
+        require(window.undoCommand() && window.undoCommand() && window.document().snapshot().entities()==before.entities() &&
+            window.redoCommand() && window.redoCommand() && window.document().snapshot().entities()==after.entities(),
+            "keyboard commit and its facts must undo and redo");
         QTemporaryDir directory; require(directory.isValid(),"keyboard fixture directory unavailable");
         const auto path=directory.filePath("keyboard-boundary.bldproj");
         require(window.saveProjectAs(path) && window.openProject(path) &&
@@ -906,7 +936,7 @@ void test_precision_and_draw_first_classification_modals() {
     send_click(*drawing, {2, 2});
     send_click(*drawing, {0, 2});
     drive_boundary_modal(window, *drawing, Qt::Key_Return, [&](QDialog* modal) {
-        require(qobject_cast<QInputDialog*>(modal) != nullptr,
+        require(is_area_type_chooser(modal),
                 "closed Draw First area must request classification");
         modal->reject();
     });
@@ -915,24 +945,21 @@ void test_precision_and_draw_first_classification_modals() {
     require(preview(*drawing).segments.size() == 4,
             "closed draft must remain available after classification cancellation");
     drive_boundary_modal(window, *drawing, Qt::Key_Return, [&](QDialog* modal) {
-        auto* input = qobject_cast<QInputDialog*>(modal);
-        require(input != nullptr, "Enter must reopen classification for the closed draft");
+        require(is_area_type_chooser(modal), "Enter must reopen classification for the closed draft");
         require(window.undoCommand(), "classification prompt must retain local undo");
-        input->setTextValue("living");
-        input->accept();
+        choose_area_type(modal, QStringLiteral("above_grade_finished"));
     });
     require_same_document(original, window.document().snapshot(),
                           "changed draft must invalidate pending classification approval");
     drive_boundary_modal(window, *drawing, Qt::Key_Return, [&](QDialog* modal) {
-        auto* input = qobject_cast<QInputDialog*>(modal);
-        require(input != nullptr, "revised closed draft must request classification again");
-        input->setTextValue("living");
-        input->accept();
+        require(is_area_type_chooser(modal), "revised closed draft must request classification again");
+        choose_area_type(modal, QStringLiteral("above_grade_finished"));
     });
     require(!drawing->boundaryDraftPreview(), "accepted classification must commit the live drawing");
     const auto boundary = committed_boundary(window.document().snapshot());
     require_rectangle(sketch::decode_identified_boundary_entity(boundary));
-    require(boundary.properties.at("classification") == "living", "chosen classification must be retained");
+    require(boundary.properties.value("appraisal_category", std::string{}) == "above_grade_finished",
+            "chosen area type must be retained as its classification key");
     const auto receipt = sketch::decode_boundary_receipt_envelope(boundary.properties.at("boundary_authoring"));
     require(receipt.record->edges.front().receipt.kind == sketch::BoundaryConstructionKind::line_heading,
             "precision form must retain its exact input receipt through desktop commit");
@@ -966,10 +993,16 @@ void test_precision_and_draw_first_classification_modals() {
     const auto after_second = window.document().snapshot();
     std::string second_classification;
     for (const auto& [id, entity] : after_second.entities())
-        if (!before_second.entities().contains(id) && entity.properties.contains("classification"))
-            second_classification = entity.properties.at("classification").get<std::string>();
-    require(!prompted && second_classification == "living",
-            "a later drawn area must reuse the last chosen classification without prompting");
+        if (!before_second.entities().contains(id) && entity.type == "measurement_boundary")
+            second_classification = entity.properties.value("appraisal_category",
+                entity.properties.value("classification", std::string{}));
+    require(!prompted && second_classification == "above_grade_finished",
+            "a later drawn area must reuse the last chosen classification without prompting (prompted=" +
+                std::to_string(prompted) + " type='" + second_classification + "' new=" +
+                std::to_string(after_second.entities().size() - before_second.entities().size()) + " draft=" +
+                std::to_string(drawing->boundaryDraftPreview().has_value()) + " segments=" +
+                std::to_string(drawing->boundaryDraftPreview() ? drawing->boundaryDraftPreview()->segments.size() : 0) + " error='" +
+                window.lastError().toStdString() + "')");
 }
 
 void test_define_first_pending_dimension_keys_and_persistence() {
@@ -1571,7 +1604,7 @@ void test_off_grid_define_first_pending_dimension_preview_and_placement() {
             const auto placed = preview(*active_canvas);
             require(placed.segments.size() == 1 && placed.labels.size() == 1 &&
                         same_point(placed.labels.front().position, expected_placement) &&
-                        placed.instruction.contains(QStringLiteral("Click to place each node")),
+                        placed.instruction.contains(QStringLiteral("Click to place each corner")),
                     "Define First manual placement must exactly retain the displayed label position");
             require_same_document(before, window.document().snapshot(),
                                   "Define First preview and dimension placement must not mutate the document");
@@ -1998,6 +2031,14 @@ void test_inline_wall_cardinal_length_chain() {
             "four typed cardinal walls must close at the exact original anchor");
     const auto perimeter = window.document().snapshot();
     require(!panel->isVisible(), "returning to the first wall anchor must finish the closed chain");
+    require(std::count_if(perimeter.entities().begin(), perimeter.entities().end(), [](const auto& entry) {
+                return entry.second.type == "measurement_boundary";
+            }) == 1 && !window.selectedEntityId().isEmpty(),
+            "the closed Measure wall loop must select its exterior area");
+    // The selected exterior area takes the deselect-only first click (FB-002).
+    send_click(*drawing, {-1.524, -1.524});
+    require(window.selectedEntityId().isEmpty() && !panel->isVisible(),
+            "the first empty click after closure must only clear the area selection");
     send_click(*drawing, {-1.524, -1.524});
     require(panel->isVisible(), "a new empty-canvas anchor must start another wall chain");
     send_key(*drawing, Qt::Key_Escape);
@@ -2193,10 +2234,8 @@ void start_define_first_with_keyboard(MainWindow& window, PlanCanvas& drawing) {
     QApplication::setActiveWindow(&window);
     process_events();
     drive_boundary_modal(window, drawing, Qt::Key_D, [](QDialog* modal) {
-        auto* classification = qobject_cast<QInputDialog*>(modal);
-        require(classification, "Define First shortcut must open its classification picker");
-        classification->setTextValue(QStringLiteral("living"));
-        classification->accept();
+        require(is_area_type_chooser(modal), "Define First shortcut must open its classification picker");
+        choose_area_type(modal, QStringLiteral("above_grade_finished"));
     }, "Ctrl+Shift+D must start the real Define First workflow",
        Qt::ControlModifier | Qt::ShiftModifier);
     auto* mode = window.findChild<QComboBox*>(QStringLiteral("drawingMode"));
@@ -2220,7 +2259,7 @@ void test_define_first_enter_anchors_cursor_and_continues() {
                 "explicit boundary startup must preserve the initial Wall default until accepted");
         const auto before_cancel = window.document().snapshot();
         drive_boundary_modal(window, *drawing, Qt::Key_D, [](QDialog* modal) {
-            require(qobject_cast<QInputDialog*>(modal), "cancelled Define First must reach classification");
+            require(is_area_type_chooser(modal), "cancelled Define First must reach classification");
             modal->reject();
         }, "cancelled Ctrl+Shift+D must reach the real picker", Qt::ControlModifier | Qt::ShiftModifier);
         require(mode->currentData() == QStringLiteral("wall") && !drawing->boundaryDraftPreview(),
@@ -2317,10 +2356,12 @@ void test_define_first_enter_anchors_cursor_and_continues() {
                     "Enter-anchored measurements must preserve the exact quantity and original typed expression");
         }
         if (snap) capture_inline_widget(window, QStringLiteral("define-first-enter-completed.png"));
-        require(committed.revision() == original.revision() + 1 && window.undoCommand() &&
+        // The area is one command; the residential setup and the Living area
+        // facts recorded from its type follow as one more.
+        require(committed.revision() == original.revision() + 2 && window.undoCommand() && window.undoCommand() &&
                     window.document().snapshot().entities() == original.entities() && window.redoCommand() &&
-                    window.document().snapshot().entities() == committed.entities(),
-                "Enter-anchored boundary must commit, undo and redo as one document command");
+                    window.redoCommand() && window.document().snapshot().entities() == committed.entities(),
+                "Enter-anchored boundary and its area facts must commit, undo and redo");
         QTemporaryDir directory;
         require(directory.isValid(), "Enter anchor persistence fixture needs a temporary directory");
         const auto path = directory.filePath(QStringLiteral("enter-anchored-boundary.bldproj"));
@@ -3272,7 +3313,197 @@ void test_appraisal_draw_category_survives_workflow_switches() {
     auto* gla = window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"));
     require(garage && garage->text().contains(QStringLiteral("43.06")) &&
                 gla && gla->text().contains(QStringLiteral("0.00")),
-            "returning to Appraisal must restore the drawn garage category and automatic total");
+            "returning to Appraisal must restore the drawn garage category and automatic total (garage='" +
+                (garage ? garage->text().toStdString() : std::string("missing")) + "' gla='" +
+                (gla ? gla->text().toStdString() : std::string("missing")) + "')");
+}
+
+std::string new_area_id(const DocumentSnapshot& before, const DocumentSnapshot& after) {
+    std::string result;
+    for (const auto& [id, entity] : after.entities())
+        if (!before.entities().contains(id) && entity.type == "measurement_boundary") {
+            require(result.empty(), "one drawn area fixture must create one area");
+            result = id;
+        }
+    require(!result.empty(), "the drawn area fixture must create an area");
+    return result;
+}
+
+// Draws a closed 2 m x 2 m area with Draw First. An empty chosen type means
+// no chooser is expected (explicit or already chosen type).
+std::string draw_square_area(MainWindow& window, PlanCanvas& drawing, Vec2 origin, const QString& chosen,
+                             const QString& explicit_type = {}) {
+    const auto before = window.document().snapshot();
+    require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, explicit_type),
+            "area type fixture must start Draw First");
+    send_click(drawing, origin);
+    send_click(drawing, {origin.x + 2, origin.y});
+    send_click(drawing, {origin.x + 2, origin.y + 2});
+    send_click(drawing, {origin.x, origin.y + 2});
+    if (chosen.isEmpty()) send_key(drawing, Qt::Key_Return);
+    else drive_boundary_modal(window, drawing, Qt::Key_Return, [&](QDialog* modal) {
+        require(is_area_type_chooser(modal), "closing an unclassified area must open the Define area chooser");
+        auto* list = modal->findChild<QListWidget*>(QStringLiteral("boundaryClassificationList"));
+        auto* create = modal->findChild<QPushButton*>(QStringLiteral("boundaryClassificationAccept"));
+        require(list->currentItem() && list->currentItem()->text() == QStringLiteral("Living area") &&
+                    create && create->text() == QStringLiteral("Create area"),
+                "the chooser must default to Living area and offer the Create area verb");
+        QStringList labels;
+        for (int row = 0; row < list->count(); ++row) {
+            labels.push_back(list->item(row)->text());
+            require(!list->item(row)->icon().isNull(), "every area type must show its area chip");
+        }
+        for (const auto* expected : {"Living area", "Garage", "Porch", "Deck", "Patio", "Other area"})
+            require(labels.contains(QString::fromUtf8(expected)), "the chooser must list plain area types");
+        require(labels.contains(QStringLiteral("Basement — finished")) &&
+                    labels.contains(QStringLiteral("Basement — unfinished")) &&
+                    std::none_of(labels.begin(), labels.end(), [](const QString& label) {
+                        return label.contains(QLatin1Char('_')) || label.startsWith(QStringLiteral("Commercial"));
+                    }),
+                "a residential chooser must use plain labels without raw keys or commercial types");
+        choose_area_type(modal, chosen);
+    }, "closing an unclassified area must ask for its type");
+    require(!drawing.boundaryDraftPreview(), "the chosen type must create the area");
+    return new_area_id(before, window.document().snapshot());
+}
+
+sketch::AppraisalDocumentReport appraisal_report(MainWindow& window) {
+    return sketch::build_appraisal_document_report(window.document().snapshot(), "property-1",
+                                                   sketch::AreaUnit::square_metre);
+}
+
+double category_square_metres(const sketch::AppraisalDocumentReport& report, sketch::AppraisalAreaCategory category) {
+    require(report.qualified && report.calculation.has_value(), "the fixture's totals must be computed");
+    return report.calculation->property.by_category.at(category).total.square_metres;
+}
+
+nlohmann::json facts_of(MainWindow& window, const std::string& id, const char* key = "appraisal_facts") {
+    return window.document().snapshot().entities().at(id).properties.value(key, nlohmann::json::object());
+}
+
+// FB-011: the area type chosen while drawing records explicit, visible and
+// editable fact defaults; the first area also applies the residential Setup
+// defaults. Declared facts are never overwritten, and a fact left Undeclared
+// still withholds totals.
+void test_area_type_defaults_compute_gla_without_setup() {
+    using Category = sketch::AppraisalAreaCategory;
+    {
+        MainWindow window;
+        prepare_window(window);
+        window.setMetricUnits(true);
+        QApplication::setActiveWindow(&window);
+        process_events();
+        auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+        const auto before = window.document().snapshot();
+        require(!sketch::build_appraisal_document_report(before, "property-1").configured,
+                "a new project starts without appraisal declarations");
+        const auto living = draw_square_area(window, *drawing, {0, 0}, QStringLiteral("above_grade_finished"));
+        const auto after = window.document().snapshot();
+        require(after.revision() == before.revision() + 2,
+                "the area is one command and its setup and facts are one more");
+        const auto& property = after.entities().at("property-1").properties;
+        require(property.value("calculation_workflow", std::string{}) == "appraisal" &&
+                    property.at("appraisal_policy") == nlohmann::json({{"policy_kind", "residential_declared"}, {"version", 1},
+                        {"property_kind", "detached_single_family"}, {"measurement_basis", "exterior"}}),
+                "the first area must apply the residential Setup defaults, never ANSI");
+        const auto& area = after.entities().at(living).properties;
+        require(area.value("appraisal_category", std::string{}) == "above_grade_finished" &&
+                    area.value("classification", std::string{}) == "measurement",
+                "Living area must keep the stored above_grade_finished key");
+        require(facts_of(window, living) == nlohmann::json({{"finish", "finished"}, {"access", "direct_interior"},
+                    {"ceiling_eligibility", "standard"}, {"area_use", "dwelling"}, {"boundary_role", "measured_area"}}) &&
+                    facts_of(window, living, "appraisal_fact_defaults").value("facts", nlohmann::json()) == facts_of(window, living),
+                "Living area facts must be declared and flagged as from classification");
+        require(facts_of(window, "floor-1") == nlohmann::json({{"grade", "above"}}) &&
+                    facts_of(window, "floor-1", "appraisal_fact_defaults").value("facts", nlohmann::json()) ==
+                        nlohmann::json({{"grade", "above"}}),
+                "Living area must default its floor to above grade, flagged as a default");
+        require(window.statusBar()->currentMessage().contains(
+                    QStringLiteral("Appraisal set up with residential defaults · change in")),
+                "the automatic setup must be announced with its route to Setup; status='" +
+                    window.statusBar()->currentMessage().toStdString() + "'");
+        auto report = appraisal_report(window);
+        require(report.configured && std::abs(category_square_metres(report, Category::above_grade_finished) - 4.0) < 1e-12,
+                "a drawn Living area must compute GLA with no Setup or Edit facts step");
+
+        // A garage records non-GLA use; facts that cannot change its
+        // category are declared Unknown rather than guessed.
+        const auto garage = draw_square_area(window, *drawing, {3, 0}, {}, QStringLiteral("garage"));
+        require(facts_of(window, garage) == nlohmann::json({{"finish", "unknown"}, {"access", "unknown"},
+                    {"ceiling_eligibility", "unknown"}, {"area_use", "garage"}, {"boundary_role", "measured_area"}}),
+                "Garage must record garage use and leave irrelevant facts Unknown");
+        report = appraisal_report(window);
+        require(std::abs(category_square_metres(report, Category::above_grade_finished) - 4.0) < 1e-12 &&
+                    std::abs(category_square_metres(report, Category::garage) - 4.0) < 1e-12,
+                "a Garage must count as non-GLA and leave GLA exact");
+
+        // Edit facts names the defaults and keeps the property declarations
+        // on one compact row.
+        require(window.selectEntity(QString::fromStdString(living)), "select the Living area");
+        bool inspected = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (!dialog) return;
+            inspected = true;
+            auto* note = dialog->findChild<QLabel*>(QStringLiteral("appraisalFactsDefaultsNote"));
+            auto* property_row = dialog->findChild<QWidget*>(QStringLiteral("appraisalFactsProperty"));
+            if (dialog->layout()) dialog->layout()->activate();
+            const bool noted = note && note->text().startsWith(QStringLiteral("From classification: floor grade, finish"));
+            if (!noted) std::cerr << "facts dialog '" << dialog->objectName().toStdString() << "' note: "
+                                  << (note ? note->text().toStdString() : std::string("missing")) << '\n';
+            const bool compact = property_row && !qobject_cast<QGroupBox*>(property_row) && property_row->sizeHint().height() < 80;
+            dialog->reject();
+            require(noted, "Edit facts must name the facts recorded from the area type");
+            require(compact, "Edit facts must show the property declarations compactly, without an empty group box");
+        });
+        window.showAppraisalFacts();
+        require(inspected, "Edit facts must open for the Living area");
+
+        // Clearing a fact is the user's choice: it is no longer flagged as a
+        // default, the others stay flagged, and the missing fact withholds.
+        const auto policy = window.document().snapshot().entities().at("property-1").properties.at("appraisal_policy");
+        auto cleared = facts_of(window, living);
+        cleared.erase("ceiling_eligibility");
+        require(window.editSelectedAppraisalFacts(QString::fromStdString(nlohmann::json({{"appraisal_policy", policy},
+                    {"floor_appraisal_facts", facts_of(window, "floor-1")}, {"appraisal_facts", cleared}}).dump())),
+                "Edit facts must accept an Undeclared ceiling eligibility");
+        const auto flagged = facts_of(window, living, "appraisal_fact_defaults").value("facts", nlohmann::json::object());
+        require(!flagged.contains("ceiling_eligibility") && flagged.value("finish", std::string{}) == "finished",
+                "only facts still holding their default value stay flagged");
+        report = appraisal_report(window);
+        require(!report.qualified && !report.calculation,
+                "a genuinely undeclared fact must still withhold totals");
+    }
+    {
+        // A floor grade the user declared is kept: the Living area defaults
+        // never overwrite it, so this area derives below-grade finished.
+        MainWindow window;
+        prepare_window(window);
+        window.setMetricUnits(true);
+        QApplication::setActiveWindow(&window);
+        process_events();
+        auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+        const auto garage = draw_square_area(window, *drawing, {0, 0}, QStringLiteral("garage"));
+        require(facts_of(window, "floor-1").value("grade", std::string{}) == "above",
+                "a Garage on an undeclared floor uses its floor level, else above grade");
+        require(window.selectEntity(QString::fromStdString(garage)), "select the Garage");
+        const auto policy = window.document().snapshot().entities().at("property-1").properties.at("appraisal_policy");
+        require(window.editSelectedAppraisalFacts(QString::fromStdString(nlohmann::json({{"appraisal_policy", policy},
+                    {"floor_appraisal_facts", {{"grade", "below"}}}, {"appraisal_facts", facts_of(window, garage)}}).dump())),
+                "the user declares the floor below grade");
+        require(!window.document().snapshot().entities().at("floor-1").properties.contains("appraisal_fact_defaults"),
+                "a changed floor grade is the user's own, not a default");
+        const auto living = draw_square_area(window, *drawing, {3, 0}, {}, QStringLiteral("above_grade_finished"));
+        require(facts_of(window, "floor-1") == nlohmann::json({{"grade", "below"}}) &&
+                    facts_of(window, living).value("finish", std::string{}) == "finished",
+                "area type defaults must never overwrite a declared floor grade");
+        require(window.statusBar()->currentMessage().contains(QStringLiteral("stays below grade")),
+                "a kept declared fact that differs from the type must be named");
+        const auto report = appraisal_report(window);
+        require(std::abs(category_square_metres(report, Category::below_grade_finished) - 4.0) < 1e-12 &&
+                    category_square_metres(report, Category::above_grade_finished) == 0.0,
+                "declared facts, not the area type, decide the category");
+    }
 }
 
 void install_test_font() {
@@ -3349,6 +3580,173 @@ void test_adaptive_grid_boundary_commit() {
             "persisted boundary must retain the previewed model coordinates and exact closing anchor");
 }
 
+void click_at_model(PlanCanvas& canvas, Vec2 model, QPointF offset = {}) {
+    // Fractional screen positions keep exact canonical metres through the
+    // canvas transform, matching the wall-chain fixtures.
+    const QRectF viewport(canvas.rect());
+    const auto center = canvas.viewCenter();
+    const QPointF screen(viewport.center().x() + (model.x - center.x) * canvas.viewScale() + offset.x(),
+                         viewport.center().y() - (model.y - center.y) * canvas.viewScale() + offset.y());
+    QMouseEvent move(QEvent::MouseMove, screen, canvas.mapToGlobal(screen.toPoint()),
+                     Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &move);
+    QMouseEvent press(QEvent::MouseButtonPress, screen, canvas.mapToGlobal(screen.toPoint()),
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &press);
+    QMouseEvent release(QEvent::MouseButtonRelease, screen, canvas.mapToGlobal(screen.toPoint()),
+                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &release);
+    process_events();
+}
+
+std::vector<std::string> entity_ids_of_type(const DocumentSnapshot& snapshot, std::string_view type) {
+    std::vector<std::string> ids;
+    for (const auto& [id, entity] : snapshot.entities())
+        if (entity.type == type) ids.push_back(id);
+    return ids;
+}
+
+double straight_polygon_area(const IdentifiedBoundary& boundary) {
+    double twice = 0.0;
+    for (const auto& edge : boundary.segments)
+        twice += edge.segment.start.x * edge.segment.end.y - edge.segment.end.x * edge.segment.start.y;
+    return std::abs(twice) * 0.5;
+}
+
+// Audit blocker: four Wall clicks closing a 30 ft x 40 ft loop in the Measure
+// workspace must produce the exterior-measured, GLA-eligible area in the same
+// undoable revision as the closing wall.
+void test_measure_wall_loop_creates_exterior_gla_area() {
+    MainWindow window;
+    prepare_window(window);
+    window.setMetricUnits(false);
+    window.setWorkspace(Workspace::measurement);
+    process_events();
+    auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    auto* snap = window.findChild<QToolButton*>(QStringLiteral("snapTool"));
+    require(snap != nullptr, "wall loop fixture needs the snap control");
+    snap->setChecked(false);
+    drawing->setViewTransform({0.0, 0.0}, 40.0);
+    process_events();
+    constexpr double foot = 0.3048;
+    const double width = 40.0 * foot, depth = 30.0 * foot;
+    const Vec2 a{-width / 2, -depth / 2}, b{width / 2, -depth / 2}, c{width / 2, depth / 2}, d{-width / 2, depth / 2};
+    const auto before = window.document().snapshot();
+    // Wall is the default Draw choice on the unified pointer surface.
+    click_at_model(*drawing, a);
+    click_at_model(*drawing, b);
+    click_at_model(*drawing, c);
+    click_at_model(*drawing, d);
+    const auto open = window.document().snapshot();
+    require(entity_ids_of_type(open, "wall").size() == 3 &&
+                entity_ids_of_type(open, "measurement_boundary").empty(),
+            "an open wall chain must not create a premature area");
+    click_at_model(*drawing, a);
+    const auto closed = window.document().snapshot();
+    const auto walls = entity_ids_of_type(closed, "wall");
+    const auto areas = entity_ids_of_type(closed, "measurement_boundary");
+    if (walls.size() != 4 || areas.size() != 1)
+        throw std::runtime_error("closing the wall loop must create one exterior area: " +
+            window.statusBar()->currentMessage().toStdString() + "; " + window.lastError().toStdString());
+    // The closing wall and its exterior area land in one revision; on a fresh
+    // project one more revision records the residential appraisal setup and
+    // the Living area facts (the same path as a drawn Living area).
+    require(closed.revision() == open.revision() + 2,
+            "the closing wall with its area, then the Living area facts, must be two revisions");
+    const auto& area = closed.entities().at(areas.front());
+    require(area.properties.value("classification", std::string{}) == "measurement" &&
+                area.properties.value("appraisal_category", std::string{}) == "above_grade_finished" &&
+                area.properties.contains("appraisal_fact_defaults") &&
+                area.properties.contains("wall_measurement_source"),
+            "the wall-derived area must become a Living area with recorded type facts and retain its wall sources");
+    const double thickness = closed.entities().at(walls.front()).properties.at("thickness_m").get<double>();
+    const double measured = straight_polygon_area(sketch::decode_identified_boundary_entity(area));
+    require(std::abs(measured - (width + thickness) * (depth + thickness)) < 1e-6 &&
+                measured > width * depth,
+            "the area must be measured to the exterior wall faces, not the centerlines");
+    const auto message = window.statusBar()->currentMessage();
+    if (!message.startsWith(QStringLiteral("Area created from walls · Living area · ")) || !message.endsWith(QStringLiteral(" sf")))
+        throw std::runtime_error("closing the loop must report the created Living area: " + message.toStdString());
+    auto* gla = window.findChild<QLabel*>(QStringLiteral("appraisalDetailsGla"));
+    require(gla != nullptr && gla->text().contains(QStringLiteral(" sf")) &&
+                !gla->text().contains(QStringLiteral("withheld"), Qt::CaseInsensitive) &&
+                !gla->text().contains(QStringLiteral("unavailable"), Qt::CaseInsensitive),
+            "GLA must be computed from the wall loop without Setup or Edit facts steps");
+    require(window.undoCommand() && window.undoCommand() && window.document().snapshot().entities() == open.entities(),
+            "two Undos must remove the facts, then the closing wall with its derived area");
+    require(window.redoCommand() && window.redoCommand() && window.document().snapshot().entities() == closed.entities(),
+            "Redo must restore the closing wall, its area and the recorded facts");
+}
+
+// The Area Draw choice traces existing walls: a click on a wall's exterior
+// corner places the node (it does not select the wall), and clicking the first
+// node again closes and commits the area without Enter.
+void test_area_tool_snaps_to_wall_corners_and_closes_on_first_node() {
+    MainWindow window;
+    prepare_window(window);
+    window.setMetricUnits(true);
+    window.setWorkspace(Workspace::measurement);
+    process_events();
+    require(!window.createStraightWall({0, 0}, {4, 0}).isEmpty() && !window.createStraightWall({4, 0}, {4, 3}).isEmpty() &&
+                !window.createStraightWall({4, 3}, {0, 3}).isEmpty() && !window.createStraightWall({0, 3}, {0, 0}).isEmpty(),
+            "corner fixture authors four connected walls");
+    (void)window.selectEntity({});
+    auto* drawing_mode = window.findChild<QComboBox*>(QStringLiteral("drawingMode"));
+    require(drawing_mode != nullptr, "corner fixture needs the Draw choice selector");
+    drawing_mode->setCurrentIndex(drawing_mode->findData(QStringLiteral("measurement")));
+    auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    drawing->setViewTransform({2.0, 1.5}, 80.0);
+    process_events();
+    std::vector<Vec2> corners;
+    for (const auto& entity : drawing->entities())
+        if (entity.type == QStringLiteral("wall"))
+            for (const auto& segment : entity.segments) corners.push_back(segment.start);
+    require(corners.size() >= 4, "the canvas must present the wall footprints");
+    const auto extreme = [&](double sx, double sy) {
+        return *std::max_element(corners.begin(), corners.end(), [&](Vec2 l, Vec2 r) {
+            return sx * l.x + sy * l.y < sx * r.x + sy * r.y;
+        });
+    };
+    const auto bottom_left = extreme(-1, -1), bottom_right = extreme(1, -1),
+               top_right = extreme(1, 1), top_left = extreme(-1, 1);
+    require(bottom_left.x < 0 && bottom_left.y < 0 && top_right.x > 4 && top_right.y > 3,
+            "the exterior footprint corners lie outside the wall centerlines");
+    const auto before = window.document().snapshot();
+    // Press two pixels inside the wall body: the corner snap owns the click.
+    click_at_model(*drawing, bottom_left, {2.0, -2.0});
+    const auto anchored = drawing->boundaryDraftPreview();
+    if (!drawing->selectedIds().isEmpty() || !anchored || !anchored->anchor || !same_point(*anchored->anchor, bottom_left))
+        throw std::runtime_error("clicking a wall corner with the Area choice must start the area there instead of selecting the wall; selected=" +
+            drawing->selectedIds().join(',').toStdString() + " error=" + window.lastError().toStdString());
+    click_at_model(*drawing, bottom_right, {-2.0, -2.0});
+    click_at_model(*drawing, top_right, {-2.0, 2.0});
+    click_at_model(*drawing, top_left, {2.0, 2.0});
+    const auto draft = preview(*drawing);
+    require(draft.segments.size() == 3 && same_point(draft.segments[0].end, bottom_right) &&
+                same_point(draft.segments[1].end, top_right) && same_point(draft.segments[2].end, top_left),
+            "each Area click must snap exactly to the wall corner it traces");
+    require_same_document(before, window.document().snapshot(), "an open area draft must not mutate the project");
+    // The finished outline may ask for its class; accept whatever is offered.
+    QTimer::singleShot(0, &window, [] {
+        if (auto* modal = qobject_cast<QDialog*>(QApplication::activeModalWidget())) modal->accept();
+    });
+    click_at_model(*drawing, bottom_left, {3.0, -1.0});
+    process_events();
+    if (drawing->boundaryDraftPreview().has_value())
+        throw std::runtime_error("clicking the first node must close the area without Enter: " + window.lastError().toStdString());
+    const auto after = window.document().snapshot();
+    const auto areas = entity_ids_of_type(after, "measurement_boundary");
+    if (areas.size() != 1)
+        throw std::runtime_error("closing on the first node must commit one measured area: revisions " +
+            std::to_string(after.revision() - before.revision()) + ", areas " + std::to_string(areas.size()) +
+            ", error " + window.lastError().toStdString());
+    const auto boundary = sketch::decode_identified_boundary_entity(after.entities().at(areas.front()));
+    require(boundary.segments.size() == 4 &&
+                std::abs(straight_polygon_area(boundary) -
+                         (bottom_right.x - bottom_left.x) * (top_left.y - bottom_left.y)) < 1e-9,
+            "the area must be the outline traced through the wall corners");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -3357,6 +3755,18 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
         install_test_font();
+        if (application.arguments().contains(QStringLiteral("--measure-walls-only"))) {
+            test_measure_wall_loop_creates_exterior_gla_area();
+            test_area_tool_snaps_to_wall_corners_and_closes_on_first_node();
+            std::cout << "Measure wall area tests passed\n";
+            return 0;
+        }
+        if (application.arguments().contains(QStringLiteral("--area-type-defaults-only"))) {
+            test_precision_and_draw_first_classification_modals();
+            test_area_type_defaults_compute_gla_without_setup();
+            std::cout << "Area type default workflows passed\n";
+            return 0;
+        }
         if (application.arguments().contains(QStringLiteral("--define-first-enter-anchor-only"))) {
             test_define_first_enter_anchors_cursor_and_continues();
             test_define_first_enter_anchor_guards();
@@ -3436,6 +3846,8 @@ int main(int argc, char** argv) {
                 throw std::runtime_error(std::string(name) + ": " + error.what());
             }
         };
+        run_test("measure_wall_loop_creates_exterior_gla_area", test_measure_wall_loop_creates_exterior_gla_area);
+        run_test("area_tool_snaps_to_wall_corners_and_closes_on_first_node", test_area_tool_snaps_to_wall_corners_and_closes_on_first_node);
         run_test("unified_pointer_clicks_to_draw_and_drags_to_pan", test_unified_pointer_clicks_to_draw_and_drags_to_pan);
         run_test("inline_wall_cardinal_length_chain", test_inline_wall_cardinal_length_chain);
         run_test("physical_wall_precision_heading", test_physical_wall_precision_heading);
@@ -3468,6 +3880,7 @@ int main(int argc, char** argv) {
         run_test("dimension_presentation_editing", test_dimension_presentation_editing);
         run_test("semantic_angle_and_area_dimension_creation", test_semantic_angle_and_area_dimension_creation);
         run_test("appraisal_draw_category_survives_workflow_switches", test_appraisal_draw_category_survives_workflow_switches);
+        run_test("area_type_defaults_compute_gla_without_setup", test_area_type_defaults_compute_gla_without_setup);
         run_test("concave_room_label_stays_inside_room", test_concave_room_label_stays_inside_room);
         run_test("long_room_label_footprint_avoids_narrow_notch", test_long_room_label_footprint_avoids_narrow_notch);
         run_test("room_label_avoids_components_and_retains_no_fit_names", test_room_label_avoids_components_and_retains_no_fit_names);

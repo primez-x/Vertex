@@ -1340,6 +1340,19 @@ if(SKETCH_BUILD_DESKTOP)
     set_tests_properties(preferences_dialog PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+    add_executable(workspace_theme_desktop_tests tests/workspace_theme_desktop_tests.cpp)
+    target_link_libraries(workspace_theme_desktop_tests PRIVATE sketch_desktop)
+    target_include_directories(workspace_theme_desktop_tests PRIVATE tests)
+    qt_add_resources(workspace_theme_desktop_tests workspace_theme_test_fonts
+      PREFIX "/fonts" BASE assets/fonts
+      FILES assets/fonts/Inter.ttf)
+    if(MSVC)
+      target_compile_options(workspace_theme_desktop_tests PRIVATE /W4 /permissive- /utf-8)
+    endif()
+    add_test(NAME workspace_theme_desktop COMMAND workspace_theme_desktop_tests)
+    set_tests_properties(workspace_theme_desktop PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     add_executable(edit_menu_desktop_tests tests/edit_menu_desktop_tests.cpp)
     target_link_libraries(edit_menu_desktop_tests PRIVATE sketch_desktop)
     target_include_directories(edit_menu_desktop_tests PRIVATE tests)

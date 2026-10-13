@@ -374,9 +374,21 @@ void test_automatic_appraisal_wall_chain_closure(bool survey_only=false) {
                 "nested, enclosing or hidden same-floor overlapping area must retain physical closure, explain refusal and avoid a duplicate contributor");
             return;
         }
+        if (std::string(workflow)=="measurement") {
+            // The generic measurement workflow measures the closed loop to its
+            // exterior faces with the profile's living (GLA) classification.
+            require(areas.size()==1 && closed.revision()==open.revision()+1 &&
+                    closed.entities().at(areas.front()).properties.value("classification",std::string{})=="living" &&
+                    wall_measurement_source_current(closed,closed.entities().at(areas.front())) &&
+                    window.statusBar()->currentMessage().startsWith(QStringLiteral("Area created from walls · GLA ")),
+                "measurement workflow closure must create the exterior living area in the closing revision");
+            require(window.undoCommand() && window.document().snapshot().entities()==open.entities(),
+                "one Undo removes the closing wall and its living area together");
+            return;
+        }
         if (!automatic) {
             require(areas.empty() && closed.revision()==open.revision()+1,
-                "measurement workflow and interior basis retain physical closure without automatic appraisal area");
+                "a declared interior appraisal basis retains physical closure without automatic appraisal area");
             return;
         }
         if (areas.size()!=(existing_region==4 ? 2U : 1U))

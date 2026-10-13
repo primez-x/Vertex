@@ -13,6 +13,7 @@
 #include "sketch/project_organization.hpp"
 #include "support/noninteractive_errors.hpp"
 
+#include <array>
 #include <algorithm>
 #include <cmath>
 #include <chrono>
@@ -398,6 +399,38 @@ void test_connected_resize_moves_only_an_explicit_component() {
                 baseline(preview.candidate_entities().at("wall-c")).start.x == 0.0 &&
                 baseline(preview.candidate_entities().at("wall-c")).end.x == -1.0,
             "coincident coordinates created an implicit component connection");
+    (void)apply_constraint_authoring(document, preview);
+}
+
+// Live audit: setting one wall of a rectangular room to 20' slanted the
+// connected wall and turned the room into a trapezoid. A wall meeting the
+// moved end at a right angle must translate, keeping the room square.
+void test_connected_resize_keeps_orthogonal_room_square() {
+    std::vector<Entity> entities{
+        wall("top", {0.0, 3.0}, {4.0, 3.0}), wall("right", {4.0, 3.0}, {4.0, 0.0}),
+        wall("bottom", {4.0, 0.0}, {0.0, 0.0}), wall("left", {0.0, 0.0}, {0.0, 3.0})};
+    const std::array<std::pair<const char*, const char*>, 4> joints{{
+        {"top", "right"}, {"right", "bottom"}, {"bottom", "left"}, {"left", "top"}}};
+    int index = 0;
+    for (const auto& [from, to] : joints)
+        entities.push_back(encode_constraint_entity(relation("corner-" + std::to_string(index++),
+            ConstraintRelationKind::coincident, {endpoint(from, WallEndpointRole::end), endpoint(to, WallEndpointRole::start)})));
+    auto document = Document::create(std::move(entities));
+    ConstraintAuthoringIntent intent;
+    intent.wall_resize = WallResizeIntent{"top", parse_quantity("20 ft"), WallResizeAnchor::start, true};
+    const auto preview = preview_constraint_authoring(document.snapshot(), intent);
+    require_accepted(preview, "connected resize of a rectangular room must solve");
+    const auto& candidate = preview.candidate_entities();
+    const auto top = baseline(candidate.at("top")), right = baseline(candidate.at("right"));
+    const auto bottom = baseline(candidate.at("bottom")), left = baseline(candidate.at("left"));
+    constexpr double twenty_feet = 20.0 * 0.3048;
+    require_near(top.end.x, twenty_feet, 1e-8, "edited wall reaches the typed length");
+    require_near(right.start.x, twenty_feet, 1e-8, "connected wall follows the moved corner");
+    require_near(right.end.x, twenty_feet, 1e-8, "connected wall stays square instead of slanting");
+    require_near(length(right), 3.0, 1e-8, "connected perpendicular wall keeps its length");
+    require_near(bottom.start.x, twenty_feet, 1e-8, "opposite wall lengthens to match");
+    require_near(bottom.start.y, 0.0, 1e-8, "opposite wall stays level");
+    require(!moved(Segment{{0.0, 0.0}, {0.0, 3.0}, 0.0}, left), "anchored wall does not move");
     (void)apply_constraint_authoring(document, preview);
 }
 
@@ -3552,6 +3585,7 @@ int main() {
         test_nested_metadata_and_receipt_validation();
         test_rigid_transform_rebases_length_receipt_without_losing_metadata();
         test_connected_resize_moves_only_an_explicit_component();
+        test_connected_resize_keeps_orthogonal_room_square();
         test_disabled_connected_movement_freezes_other_walls_and_rejects_conflict();
         test_solver_conflicts_use_semantic_wall_diagnostics();
         test_overlap_and_endpoint_reversal_are_rejected_after_solve();

@@ -146,7 +146,7 @@ struct AppraisalDocumentReport {
     std::vector<AppraisalBoundaryStatus> boundaries;
     std::vector<std::string> issues;
     std::optional<AppraisalCalculationReport> calculation;
-    unsigned display_decimal_places{2};
+    unsigned display_decimal_places{1};
     // Provenance for the calculation's actual inputs. Every geometry, hierarchy,
     // policy/fact, display and phase record lives in the entity map. Assets and
     // history are not inputs to this numeric projection.

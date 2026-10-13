@@ -215,7 +215,9 @@ struct CalculationProfile {
     std::string id;
     unsigned version{1};
     AreaUnit display_unit{AreaUnit::square_metre};
-    unsigned decimal_places{2};
+    // Design system: areas read with one decimal (1,842.5 sf). ANSI profiles
+    // use whole square feet (0).
+    unsigned decimal_places{1};
     std::map<std::string, ClassificationRule> classifications;
 };
 

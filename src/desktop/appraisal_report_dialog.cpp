@@ -217,7 +217,7 @@ QString summary(const DocumentSnapshot& source,const AppraisalDocumentReport& re
     }
     if (!report.configured) {
         html+=QStringLiteral("<p style='font-size:13pt'><b>GLA withheld.</b></p><p>Appraisal is not set up for this property, so no area has a declared basis for GLA. "
-            "Use Setup in Details to choose the policy and measurement basis, then declare each area's facts with Edit facts.</p>");
+            "Use Appraisal setup in Details to choose the policy and measurement basis, then declare each area's facts with Edit facts.</p>");
     } else if (!report.qualified || !report.calculation) {
         html+=QStringLiteral("<p style='font-size:13pt'><b>GLA withheld.</b></p><p><b>Unqualified — automatic property totals withheld.</b> "
             "Resolve the items under Issues to resolve; Vertex does not total areas whose facts are missing or invalid.</p>");
@@ -485,6 +485,25 @@ QString appraisal_source_label(const DocumentSnapshot& source,const std::string&
     return result;
 }
 
+QStringList appraisal_area_summary_lines(const AppraisalDocumentReport& report,bool metric,QString* note) {
+    if(note)note->clear();
+    if(!report.configured) {
+        if(note)*note=QStringLiteral("Appraisal is not set up, so no area counts toward GLA.");
+        return {QStringLiteral("GLA\tNot set up")};
+    }
+    if(!report.qualified || !report.calculation) {
+        if(note)*note=QStringLiteral("Totals are withheld until the report's issues are resolved.");
+        return {QStringLiteral("GLA\tWithheld")};
+    }
+    QStringList lines{QStringLiteral("GLA\t")+area(report.calculation->property.gla().total.square_metres,report,metric)};
+    for(const auto& [kind,bucket]:report.calculation->property.by_category) {
+        if(kind==AppraisalAreaCategory::above_grade_finished || bucket.total.square_metres==0.0)continue;
+        lines.push_back(appraisal_category_label(kind)+QLatin1Char('\t')+area(bucket.total.square_metres,report,metric));
+    }
+    if(note)*note=QStringLiteral("GLA is above-grade finished area only. Rounding: %1").arg(appraisal_rounding_basis(report,metric));
+    return lines;
+}
+
 QString appraisal_category_label(AppraisalAreaCategory category) {
     using C=AppraisalAreaCategory;
     switch(category) {
@@ -550,18 +569,18 @@ QString sentence(QString value) {
 
 QString appraisal_issue_message(const DocumentSnapshot& source,std::string_view message) {
     const auto raw=QString::fromUtf8(message.data(),static_cast<qsizetype>(message.size())).trimmed();
-    const auto place=[](const QString& key){return setup_fact(key) ? QStringLiteral("Setup") : QStringLiteral("Edit facts");};
+    const auto place=[](const QString& key){return setup_fact(key) ? QStringLiteral("Appraisal setup") : QStringLiteral("Edit facts");};
     QRegularExpressionMatch match;
     if(raw==QStringLiteral("Declare policy version."))
-        return QStringLiteral("The appraisal policy version is not declared. Choose the policy again in Setup.");
+        return QStringLiteral("The appraisal policy version is not declared. Choose the policy again in Appraisal setup.");
     if(raw==QStringLiteral("Declare an appraisal policy before producing automatic totals."))
-        return QStringLiteral("No appraisal policy is declared. Choose one in Setup to produce totals.");
+        return QStringLiteral("No appraisal policy is declared. Choose one in Appraisal setup to produce totals.");
     if(raw==QStringLiteral("No qualified building appraisal areas are available."))
         return QStringLiteral("No measured area qualifies yet. Declare each area's facts with Edit facts.");
     if(raw==QStringLiteral("exclusion must be linked as a deduction"))
         return QStringLiteral("This exclusion is not deducted from any area. Link it to the area it removes, or change its boundary role in Edit facts.");
     if(raw==QStringLiteral("unsupported appraisal policy version"))
-        return QStringLiteral("The recorded policy version is not supported. Choose the policy again in Setup.");
+        return QStringLiteral("The recorded policy version is not supported. Choose the policy again in Appraisal setup.");
     if(raw==QStringLiteral("Qualified physical area requires a factor exactly equal to one."))
         return QStringLiteral("Qualified physical area requires a factor exactly equal to one. Set the area's factor to 1 in Properties, or keep it as a diagnostic.");
     static const QRegularExpression declare(QStringLiteral("^Declare (\\w+)\\.$"));
@@ -634,7 +653,7 @@ AppraisalIssuePresentation appraisal_issue_presentation(const DocumentSnapshot& 
 QString appraisal_rounding_basis(const AppraisalDocumentReport& report,bool metric) {
     if(ansi(report))return QStringLiteral("Whole square feet (ANSI Z765 profile); dimensions to 0.1 ft. Totals sum unrounded areas and round once.");
     const auto places=report.display_decimal_places;
-    return QStringLiteral("Display precision %1 decimal place%2 in %3, set in Setup. Totals sum unrounded areas and round once.")
+    return QStringLiteral("Display precision %1 decimal place%2 in %3, set in Appraisal setup. Totals sum unrounded areas and round once.")
         .arg(places).arg(places==1 ? QString{} : QStringLiteral("s"),metric ? QStringLiteral("square metres") : QStringLiteral("square feet"));
 }
 
@@ -871,11 +890,36 @@ QString appraisal_report_html(const DocumentSnapshot& source,const AppraisalDocu
     check_revision(source,report);
     auto html=summary(source,report,metric);
     if(include_details) {
+        // The body keeps one compact row per area; the full per-area
+        // arithmetic is audit material and prints in the appendix.
         html+=QStringLiteral("<h2>Area calculations</h2>");
         if(report.boundaries.empty()) html+=QStringLiteral("<p>No current building boundary measurements are available.</p>");
-        else html+=QStringLiteral("<p class='muted'>Each area shows gross, deductions, physical net and the exact factor, a multiplier on physical net "
-            "(1/1 means no adjustment; qualified areas require 1/1). Arithmetic precision: %1</p>").arg(arithmetic_precision_note());
-        for(const auto& status:report.boundaries) html+=boundary_details(source,report,status,metric,false);
+        else {
+            html+=QStringLiteral("<table width='100%' border='1' cellspacing='0'><tr><th align='left'>Area</th><th align='left'>Building / floor</th>"
+                "<th align='right'>Gross</th><th align='right'>Deductions</th><th align='right'>Counted area</th><th align='left'>Status</th></tr>");
+            for(const auto& status:report.boundaries) {
+                QString scope=QStringLiteral("—"),gross=QStringLiteral("—"),deducted=QStringLiteral("—"),counted=QStringLiteral("—");
+                if(status.measurement) {
+                    const auto& value=*status.measurement;
+                    scope=appraisal_source_label(source,value.building_id)+QStringLiteral(" / ")+appraisal_source_label(source,value.floor_id);
+                    gross=area(value.base_square_metres,report,metric);
+                    deducted=area(value.deducted_square_metres,report,metric);
+                    if(!status.exclusion)counted=area(value.factored_square_metres,report,metric);
+                }
+                const auto state=status.exclusion ? QStringLiteral("Deduction only") :
+                    !status.measurement ? QStringLiteral("Unavailable") :
+                    status.qualification.qualified && report.qualified ? QStringLiteral("Counted") : QStringLiteral("Unqualified");
+                html+=QStringLiteral("<tr><td>%1</td><td>%2</td><td align='right'>%3</td><td align='right'>%4</td><td align='right'>%5</td><td>%6</td></tr>")
+                    .arg(appraisal_area_title(source,status).toHtmlEscaped(),scope.toHtmlEscaped(),gross.toHtmlEscaped(),
+                         deducted.toHtmlEscaped(),counted.toHtmlEscaped(),state.toHtmlEscaped());
+            }
+            html+=QStringLiteral("</table><p class='muted'>Counted area is physical net (gross minus deductions) times the area's factor. "
+                "The step-by-step arithmetic for each area is in Appendix A.</p>");
+            html+=QStringLiteral("<h2 style='page-break-before:always'>Appendix A: area arithmetic</h2>"
+                "<p class='muted'>Each area shows gross, deductions, physical net and the exact factor, a multiplier on physical net "
+                "(1/1 means no adjustment; qualified areas require 1/1). Arithmetic precision: %1</p>").arg(arithmetic_precision_note());
+            for(const auto& status:report.boundaries) html+=boundary_details(source,report,status,metric,false);
+        }
     }
     html+=provenance_appendix(source,report);
     return shell(html);

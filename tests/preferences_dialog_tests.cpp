@@ -56,13 +56,33 @@ void test_defaults() {
     require(value.theme == Preferences::Theme::dark, "default theme is dark");
     require(value.grid_enabled && value.snap_enabled && value.overview_map_enabled, "grid, snap, overview on");
     require(value.autosave_enabled && !value.reopen_last_project, "autosave on, reopen off");
-    require_near(value.wall_thickness_m, 0.14, "wall thickness 140 mm");
+    // Imperial (the default units) starts at US standard sizes.
+    constexpr double inch = 0.0254;
+    require_near(value.wall_thickness_m, 6 * inch, "wall thickness 6 in");
     require_near(value.wall_height_m, 8 * 0.3048, "wall height 8 ft");
-    require_near(value.door_width_m, 0.9, "door width");
-    require_near(value.door_height_m, 2.1, "door height");
-    require_near(value.window_width_m, 1.2, "window width");
-    require_near(value.window_height_m, 1.2, "window height");
-    require_near(value.window_sill_m, 0.9, "window sill");
+    require_near(value.door_width_m, 36 * inch, "door width 3' 0\"");
+    require_near(value.door_height_m, 80 * inch, "door height 6' 8\"");
+    require_near(value.window_width_m, 36 * inch, "window width 3' 0\"");
+    require_near(value.window_height_m, 48 * inch, "window height 4' 0\"");
+    require_near(value.window_sill_m, 36 * inch, "window sill 3' 0\"");
+    require(Preferences::defaults(Preferences::Units::imperial) == value, "imperial market defaults");
+    // Metric starts at metric standard sizes.
+    const auto metric = Preferences::defaults(Preferences::Units::metric);
+    require(metric.units == Preferences::Units::metric, "metric defaults use metric units");
+    require_near(metric.wall_thickness_m, 0.14, "metric wall 140 mm");
+    require_near(metric.wall_height_m, 2.4, "metric wall height 2.4 m");
+    require_near(metric.door_width_m, 0.9, "metric door 900 mm");
+    require_near(metric.door_height_m, 2.1, "metric door 2100 mm");
+    require_near(metric.window_width_m, 1.2, "metric window 1200 mm");
+    require_near(metric.window_height_m, 1.2, "metric window 1200 mm high");
+    require_near(metric.window_sill_m, 0.9, "metric sill 900 mm");
+    // Untouched defaults follow the market; chosen values stay.
+    auto chosen = value;
+    chosen.door_width_m = 32 * inch;
+    const auto switched = chosen.withMarketDrawingDefaults(Preferences::Units::metric);
+    require_near(switched.door_width_m, 32 * inch, "chosen door width kept");
+    require_near(switched.door_height_m, 2.1, "untouched door height follows the market");
+    require_near(switched.wall_thickness_m, 0.14, "untouched wall follows the market");
     require_near(value.autosave_interval_minutes, 0.5, "autosave interval 30 s");
     require(value.imperial_precision_denominator == 16 && value.metric_precision_mm == 1, "precision");
     require_near(value.angle_snap_degrees, 45.0, "angle snap");
@@ -77,6 +97,27 @@ void test_settings_round_trip(const QString& directory) {
     {
         QSettings empty(path, QSettings::IniFormat);
         require(Preferences::load(empty) == Preferences::defaults(), "empty settings load defaults");
+    }
+    {
+        // A pre-market install saved the old metric-sized defaults with
+        // imperial units: they were never chosen and become US sizes.
+        QSettings legacy(directory + QStringLiteral("/legacy.ini"), QSettings::IniFormat);
+        legacy.setValue("preferences/units", "imperial");
+        legacy.setValue("preferences/wallThicknessM", 0.14);
+        legacy.setValue("preferences/doorWidthM", 0.9);
+        legacy.setValue("preferences/doorHeightM", 2.1);
+        legacy.setValue("preferences/windowSillM", 0.9);
+        legacy.setValue("preferences/windowWidthM", 1.5);
+        const auto loaded = Preferences::load(legacy);
+        require_near(loaded.wall_thickness_m, 6 * 0.0254, "legacy wall default becomes 6 in");
+        require_near(loaded.door_width_m, 36 * 0.0254, "legacy door default becomes 3' 0\"");
+        require_near(loaded.door_height_m, 80 * 0.0254, "legacy door height becomes 6' 8\"");
+        require_near(loaded.window_sill_m, 36 * 0.0254, "legacy sill becomes 3' 0\"");
+        require_near(loaded.window_width_m, 1.5, "a chosen window width is kept");
+        QSettings metric(directory + QStringLiteral("/metric.ini"), QSettings::IniFormat);
+        metric.setValue("preferences/units", "metric");
+        require(Preferences::load(metric) == Preferences::defaults(Preferences::Units::metric),
+                "metric settings without lengths load metric defaults");
     }
     Preferences value;
     value.units = Preferences::Units::metric;
@@ -123,7 +164,10 @@ void test_dialog_edits() {
     PreferencesDialog dialog(Preferences::defaults());
     auto& thickness = child<QLineEdit>(dialog, "preferencesWallThickness");
     auto& height = child<QLineEdit>(dialog, "preferencesWallHeight");
-    require(thickness.text() == QStringLiteral("5 1/2\""), "140 mm shows in feet-inches");
+    require(thickness.text() == QStringLiteral("6\""), "6 in wall shows in feet-inches");
+    require(child<QLineEdit>(dialog, "preferencesDoorWidth").text() == QStringLiteral("3' 0\""), "door 3' 0\"");
+    require(child<QLineEdit>(dialog, "preferencesDoorHeight").text() == QStringLiteral("6' 8\""), "door 6' 8\"");
+    require(child<QLineEdit>(dialog, "preferencesWindowHeight").text() == QStringLiteral("4' 0\""), "window 4' 0\"");
     require(height.text() == QStringLiteral("8' 0\""), "8 ft wall height shown");
 
     // Unchanged fields keep exact values (no rounding through display text).
@@ -139,18 +183,24 @@ void test_dialog_edits() {
     child<QLineEdit>(edited, "preferencesWindowSill").setText(QStringLiteral("2.4 m"));
     child<QDoubleSpinBox>(edited, "preferencesAutosaveInterval").setValue(2.0);
     select_data(child<QComboBox>(edited, "preferencesAngleSnap"), 15.0);
-    // Switching units re-shows edited text in metres without losing it.
+    // Switching units re-shows edited text in metres without losing it, and
+    // resets untouched defaults to the metric market's sizes.
     select_data(child<QComboBox>(edited, "preferencesUnits"), 1);
     require(child<QLineEdit>(edited, "preferencesWallHeight").text() == QStringLiteral("2.743 m"),
             "9 ft re-shown in metres");
     require(child<QLineEdit>(edited, "preferencesWallThickness").text() == QStringLiteral("0.14 m"),
-            "140 mm re-shown in metres");
+            "untouched 6 in wall becomes the metric 140 mm default");
+    require(child<QLineEdit>(edited, "preferencesDoorHeight").text() == QStringLiteral("2.1 m"),
+            "untouched 6' 8\" door becomes the metric 2.1 m default");
+    require(child<QLineEdit>(edited, "preferencesWindowWidth").text() == QStringLiteral("1.2 m"),
+            "untouched window becomes the metric 1.2 m default");
     require(edited.submit(), "edited submit");
     const auto result = edited.result();
     require(result.units == Preferences::Units::metric, "units metric");
     require(result.theme == Preferences::Theme::light, "theme light");
     require(!result.grid_enabled && result.reopen_last_project, "toggles");
-    require_near(result.wall_thickness_m, 0.14, "thickness kept exact across unit switch");
+    require_near(result.wall_thickness_m, 0.14, "untouched thickness reset to the metric default");
+    require_near(result.door_height_m, 2.1, "untouched door height reset to the metric default");
     require_near(result.wall_height_m, 9 * 0.3048, "wall height 9 ft exact");
     require_near(result.door_width_m, 36 * 0.0254, "door width 36 in");
     require_near(result.window_sill_m, 2.4, "sill 2.4 m");
@@ -179,7 +229,7 @@ void test_restore_defaults() {
     child<QLineEdit>(dialog, "preferencesDoorWidth").setText(QStringLiteral("nonsense"));
     button->click();
     require(dialog.errorText().isEmpty(), "restore clears messages");
-    require(child<QLineEdit>(dialog, "preferencesWallThickness").text() == QStringLiteral("5 1/2\""),
+    require(child<QLineEdit>(dialog, "preferencesWallThickness").text() == QStringLiteral("6\""),
             "restore re-shows imperial");
     require(dialog.submit(), "submit after restore");
     require(dialog.result() == Preferences::defaults(), "restore defaults produces defaults");

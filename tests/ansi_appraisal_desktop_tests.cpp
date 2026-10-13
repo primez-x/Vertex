@@ -222,7 +222,7 @@ void check_saved_appraisal_sheet(MainWindow& window, const QString& area, const 
                 if (table.item(i, label_column)->text() != "Above-grade finished (GLA)") continue;
                 const auto displayed = table.item(i, area_column)->text();
                 require(displayed.startsWith("100 sf") &&
-                    displayed.contains("supplemental: 9.29 m²") == metric,
+                    displayed.contains("supplemental: 9.3 m²") == metric,
                     "actual schedule table matches canonical GLA and supplementary metric output");
                 found = true;
             }

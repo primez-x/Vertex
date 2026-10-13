@@ -177,7 +177,7 @@ public:
         graph_layout->addWidget(graph_table);tabs->addTab(graph_page,QStringLiteral("Room relationships"));layout->addWidget(tabs,2);
         status=new QLabel(dialog);status->setObjectName(QStringLiteral("physicalRoomReviewStatus"));status->setWordWrap(true);status->setTextFormat(Qt::PlainText);layout->addWidget(status);
         auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,dialog);
-        apply=buttons->button(QDialogButtonBox::Apply);apply->setObjectName(QStringLiteral("physicalRoomReviewApply"));
+        apply=buttons->button(QDialogButtonBox::Apply);apply->setObjectName(QStringLiteral("physicalRoomReviewApply"));apply->setDefault(true);
         apply->setText(property_preparation?QStringLiteral("Accept reviewed rooms"):!predecessor?QStringLiteral("Apply reviewed rooms"):
             selected_context?QStringLiteral("Apply wall deletion and reviewed rooms"):
             curve_proposal(predecessor)?QStringLiteral("Apply curve and reviewed rooms"):

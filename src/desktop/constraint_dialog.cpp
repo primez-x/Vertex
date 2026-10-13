@@ -290,7 +290,7 @@ public:
         connected = new QCheckBox(QStringLiteral("Allow connected objects to move"), body);
         connected->setObjectName(QStringLiteral("constraintMoveConnected"));
         connected->setChecked(true);
-        connected->setToolTip(QStringLiteral("Moves objects linked by explicit constraints. When disabled, other objects stay fixed and incompatible edits are rejected."));
+        connected->setToolTip(QStringLiteral("Moves objects linked by explicit constraints. A wall meeting the moved end at a right angle moves with it, so square rooms stay square. When disabled, other objects stay fixed and incompatible edits are rejected."));
         form->addRow(connected);
         anchor_x = new QLineEdit(body); anchor_y = new QLineEdit(body);
         anchor_x->setObjectName(QStringLiteral("constraintAnchorX"));

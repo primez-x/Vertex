@@ -10,7 +10,9 @@
 #include <QBuffer>
 #include <QApplication>
 #include <QCryptographicHash>
+#include <QDate>
 #include <QDir>
+#include <QLocale>
 #include <QFile>
 #include <QFontDatabase>
 #include <QPdfDocument>
@@ -264,16 +266,28 @@ void checks() {
     require(selectable_phrase, "rotated text remains selectable PDF text");
     const auto recorded = canvas->recordSketchContent();
     require(recorded.has_value(), "shared renderer records committed drawing");
-    const auto expected_mm = QSizeF(recorded->ink_bounds.width() / recorded->pixels_per_mm + 4,
-                                   recorded->ink_bounds.height() / recorded->pixels_per_mm + 4);
-    require(std::abs(first.points.width() * 25.4 / 72 - expected_mm.width()) < 0.5 &&
-            std::abs(first.points.height() * 25.4 / 72 - expected_mm.height()) < 0.5,
-            "actual PDF page matches actual ink bounds plus two millimetres per edge");
+    // A standard sheet: US Letter for imperial work (A4 in metric locales),
+    // never a crop to the ink, with a title block and a stated scale.
+    const auto is_page = [](QSizeF points, QSizeF expected) {
+        return (std::abs(points.width() - expected.width()) < 1 && std::abs(points.height() - expected.height()) < 1) ||
+               (std::abs(points.width() - expected.height()) < 1 && std::abs(points.height() - expected.width()) < 1);
+    };
+    require(is_page(first.points, {612, 792}) || is_page(first.points, {595.3, 841.9}),
+            "sketch PDF is a Letter or A4 page, not an ink crop");
+    require(first.points.width() >= first.points.height(), "a wide drawing uses a landscape page");
+    const auto title_text = first.text.simplified();
+    require(title_text.contains("Sketch output") && title_text.contains("GLA") &&
+            title_text.contains("Scale") && title_text.contains("Date") && title_text.contains("Page 1 of 1") &&
+            title_text.contains(QLocale::system().toString(QDate::currentDate(), QLocale::ShortFormat)),
+            "title block names the property, GLA, scale, date and page");
+    require(title_text.contains("1:"), "title block states the drawing scale ratio");
     const auto sidecar = nlohmann::json::parse(read(base + ".fingerprint.json"));
     const auto stored = deserialize_output_fingerprint(sidecar.at("fingerprint"));
     require(stored.has_value() && sidecar.at("output_kind") == "sketch-pdf" &&
-            sidecar.at("composition").at("architectural_scale_certified") == false,
-            "content-only composition has a valid explicit fingerprint");
+            sidecar.at("composition").at("kind") == "titled-vector-sketch-sheet" &&
+            sidecar.at("composition").at("drawing_scale_ratio").get<double>() > 0 &&
+            sidecar.at("composition").at("architectural_scale_certified") == true,
+            "titled sheet composition has a valid explicit fingerprint with its scale");
     require(sidecar.at("output_sha256") == QCryptographicHash::hash(original, QCryptographicHash::Sha256)
                 .toHex().toStdString(), "fingerprint binds finalized actual PDF bytes");
 
@@ -341,9 +355,9 @@ void checks() {
     oversize.setEntities({long_line});
     auto too_large = oversize.recordSketchContent();
     QString limit_diagnostic;
-    require(too_large && make_sketch_pdf(std::move(*too_large), &limit_diagnostic).isEmpty() &&
-            limit_diagnostic.contains("page limit"),
-            "actual oversized vector composition refuses the PDF page limit instead of scaling silently");
+    require(too_large && make_sketch_pdf(std::move(*too_large), SketchPdfSheet{}, &limit_diagnostic).isEmpty() &&
+            limit_diagnostic.contains("does not fit"),
+            "a drawing larger than the sheet at its scale is refused instead of shrunk silently");
 
     const auto fingerprint_path = base + ".fingerprint.json";
     require(QFile::remove(fingerprint_path) && QDir().mkdir(fingerprint_path),

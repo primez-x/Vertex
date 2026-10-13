@@ -590,6 +590,8 @@ public:
 
     NativeModelView* owner{};
     QLabel* status_label{};
+    // Dark canvas token until the shell applies its theme.
+    QColor background{0x14, 0x16, 0x19};
     QFrame* selection_rectangle{};
     std::shared_ptr<const DocumentSnapshot> snapshot;
     std::shared_ptr<const DocumentSnapshot> published_snapshot;
@@ -1276,7 +1278,8 @@ public:
             // WA_DontShowOnScreen and can expose automated test windows.
             viewer->SetDefaultLights();
             viewer->SetLightOn();
-            view->SetBackgroundColor(Quantity_Color(0.09, 0.11, 0.14, Quantity_TOC_RGB));
+            view->SetBackgroundColor(Quantity_Color(background.redF(), background.greenF(),
+                                                    background.blueF(), Quantity_TOC_RGB));
             view->SetShadingModel(Graphic3d_TypeOfShadingModel_Phong);
             navigation_changed();
             view->SetProj(V3d_XposYnegZpos, false);
@@ -2688,6 +2691,7 @@ NativeModelView::NativeModelView(QWidget* parent)
     // Own actual touch sequences; accepting them prevents Qt's mouse fallback
     // from duplicating a touch selection or an object-edit completion.
     setAttribute(Qt::WA_AcceptTouchEvents, true);
+    setObjectName(QStringLiteral("nativeModelView"));
     setMinimumSize(480, 360);
     setAttribute(Qt::WA_NativeWindow, true);
     setAttribute(Qt::WA_PaintOnScreen, true);
@@ -2769,6 +2773,23 @@ std::shared_ptr<const DocumentSnapshot> NativeModelView::publishedSnapshot() con
 
 std::shared_ptr<const DocumentSnapshot> NativeModelView::gestureSourceSnapshot() const noexcept {
     return m_impl->commit_snapshot ? m_impl->commit_snapshot : m_impl->gesture_snapshot;
+}
+
+void NativeModelView::setBackgroundColor(const QColor& color) {
+    if (!color.isValid() || color == m_impl->background) return;
+    m_impl->background = color;
+    if (!m_impl->native_ready || m_impl->view.IsNull()) return;
+    try {
+        m_impl->view->SetBackgroundColor(Quantity_Color(color.redF(), color.greenF(), color.blueF(),
+                                                        Quantity_TOC_RGB));
+        m_impl->view->Redraw();
+    } catch (const Standard_Failure&) {
+        // The next successful redraw uses the stored color.
+    }
+}
+
+QColor NativeModelView::backgroundColor() const {
+    return m_impl->background;
 }
 
 void NativeModelView::fitAll() {

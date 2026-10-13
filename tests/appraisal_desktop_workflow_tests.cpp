@@ -103,7 +103,7 @@ void auto_subtract_selected_area_workflow() {
         after.entities().at(parent.toStdString()).properties.at("deduction_ids")==std::vector<std::string>{garage.toStdString()} &&
         after.entities().at(garage.toStdString())==before.entities().at(garage.toStdString()),
         "selected garage must subtract from its chosen parent in one command without source changes");
-    require(window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"))->text().contains("75.00"),
+    require(window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"))->text().contains("75.0"),
         "Auto-Subtract must update the 100-square-foot parent to 75 square feet GLA");
     require(window.undoCommand() && window.document().snapshot().entities()==before.entities() &&
         window.redoCommand() && window.document().snapshot().entities()==after.entities(),"Auto-Subtract must undo and redo atomically");
@@ -276,9 +276,9 @@ void appraisal_workflow_is_automatic_and_persistent() {
     auto* provenance = window.findChild<QLabel*>(QStringLiteral("appraisalContribution"));
     require(summary && !summary->isHidden() && gla && floor && property && garage_total && provenance,
             "appraisal mode must expose GLA, floor, property, excluded-area, and provenance results");
-    require(gla->text().contains(QStringLiteral("100.00")) &&
-                floor->text().contains(QStringLiteral("100.00")) &&
-                property->text().contains(QStringLiteral("100.00")) &&
+    require(gla->text().contains(QStringLiteral("100.0")) &&
+                floor->text().contains(QStringLiteral("100.0")) &&
+                property->text().contains(QStringLiteral("100.0")) &&
                 provenance->text().contains(finished),
             "a ten-foot-square above-grade finished boundary must automatically report 100 square feet of GLA");
 
@@ -296,14 +296,14 @@ void appraisal_workflow_is_automatic_and_persistent() {
         "link appraisal garage deduction"});
     require(window.selectEntity(finished),
             "appraisal fixture must refresh the enclosing finished boundary");
-    require(gla->text().contains(QStringLiteral("89.24")) &&
-                garage_total->text().contains(QStringLiteral("10.76")) &&
-                property->text().contains(QStringLiteral("100.00")) &&
+    require(gla->text().contains(QStringLiteral("89.2")) &&
+                garage_total->text().contains(QStringLiteral("10.8")) &&
+                property->text().contains(QStringLiteral("100.0")) &&
                 provenance->text().contains(finished),
             "an internal garage must reduce GLA, remain in the garage bucket, and preserve the property total");
     require(window.selectEntity(garage) &&
                 provenance->text().contains(garage) &&
-                garage_total->text().contains(QStringLiteral("10.76")),
+                garage_total->text().contains(QStringLiteral("10.8")),
             "the independently classified garage deduction must remain selectable with provenance");
 
     const auto measurement_index = workflow->findData(QStringLiteral("measurement"));
@@ -324,8 +324,8 @@ void appraisal_workflow_is_automatic_and_persistent() {
             "workflow and classification migration must be one undoable and redoable command");
     workflow->setCurrentIndex(appraisal_index);
     require(window.selectEntity(finished) &&
-                gla->text().contains(QStringLiteral("89.24")) &&
-                garage_total->text().contains(QStringLiteral("10.76")),
+                gla->text().contains(QStringLiteral("89.2")) &&
+                garage_total->text().contains(QStringLiteral("10.8")),
             "returning to Appraisal must restore explicit categories and calculated totals");
 
     QTemporaryDir directory;
@@ -340,8 +340,8 @@ void appraisal_workflow_is_automatic_and_persistent() {
     auto* reopened_gla = reopened.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"));
     auto* reopened_garage = reopened.findChild<QLabel*>(QStringLiteral("appraisalGarageTotal"));
     require(reopened_workflow && reopened_workflow->currentData() == QStringLiteral("appraisal") &&
-                reopened_gla && reopened_gla->text().contains(QStringLiteral("89.24")) &&
-                reopened_garage && reopened_garage->text().contains(QStringLiteral("10.76")),
+                reopened_gla && reopened_gla->text().contains(QStringLiteral("89.2")) &&
+                reopened_garage && reopened_garage->text().contains(QStringLiteral("10.8")),
             "save and reopen must reproduce the selected appraisal workflow, classifications, and totals");
 }
 
@@ -365,8 +365,8 @@ void appraisal_redefinition_updates_the_active_category() {
     require(updated.properties.at("classification") == "measurement" &&
                 updated.properties.at("measurement_classification") == "measurement" &&
                 updated.properties.at("appraisal_category") == "garage" &&
-                gla && gla->text().contains(QStringLiteral("0.00")) &&
-                garage && garage->text().contains(QStringLiteral("100.00")),
+                gla && gla->text().contains(QRegularExpression(QStringLiteral("(?<![\\d,.])0\\.0(?!\\d)"))) &&
+                garage && garage->text().contains(QStringLiteral("100.0")),
             "redefinition must update the appraisal category used by automatic totals");
 }
 
@@ -736,8 +736,8 @@ void auto_subtract_uses_current_declared_facts() {
     auto* gla = window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"));
     auto* garage_total = window.findChild<QLabel*>(QStringLiteral("appraisalGarageTotal"));
     require(qualification && qualification->text().startsWith(QStringLiteral("Qualified")) &&
-            gla && gla->text().contains(QStringLiteral("75.00")) &&
-            garage_total && garage_total->text().contains(QStringLiteral("25.00")),
+            gla && gla->text().contains(QStringLiteral("75.0")) &&
+            garage_total && garage_total->text().contains(QStringLiteral("25.0")),
             "current declared uses must yield 75 square feet of GLA and 25 square feet of garage");
     require(window.undoCommand() && window.document().snapshot().entities() == before.entities() &&
             window.redoCommand() && window.document().snapshot().entities() == after.entities(),
@@ -755,8 +755,8 @@ void auto_subtract_uses_current_declared_facts() {
                 std::vector<std::string>{garage.toStdString()} &&
             persisted.entities().at(parent.toStdString()).properties.at("appraisal_facts").at("area_use") == "dwelling" &&
             persisted.entities().at(garage.toStdString()).properties.at("appraisal_facts").at("area_use") == "garage" &&
-            reopened.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"))->text().contains(QStringLiteral("75.00")) &&
-            reopened.findChild<QLabel*>(QStringLiteral("appraisalGarageTotal"))->text().contains(QStringLiteral("25.00")),
+            reopened.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"))->text().contains(QStringLiteral("75.0")) &&
+            reopened.findChild<QLabel*>(QStringLiteral("appraisalGarageTotal"))->text().contains(QStringLiteral("25.0")),
             "reopen must retain the relationship and both declared facts in the automatic totals");
 }
 
@@ -843,8 +843,11 @@ void auto_subtract_define_first_keyboard_and_recovery() {
         auto* modal=qobject_cast<QDialog*>(QApplication::activeModalWidget()); if (!modal) return;
         if (modal->objectName()=="boundaryClassificationDialog" && !classification_seen) {
             classification_seen=true;
-            auto* classification=qobject_cast<QInputDialog*>(modal); require(classification,"classification must be native input dialog");
-            classification->setTextValue("Open to below"); classification->accept();
+            auto* types=modal->findChild<QListWidget*>("boundaryClassificationList"); require(types,"classification must be the area type chooser");
+            for (int row=0;row<types->count();++row)
+                if (types->item(row)->data(Qt::UserRole).toString()=="role:open_to_below") types->setCurrentRow(row);
+            require(types->currentItem() && types->currentItem()->text()=="Open to below","the chooser must offer Open to below");
+            modal->accept();
         } else if (modal->objectName()=="autoSubtractDialog" && !target_seen) {
             target_seen=true;
             auto* target=modal->findChild<QComboBox*>("autoSubtractTarget");
@@ -940,7 +943,7 @@ void auto_subtract_define_first_keyboard_and_recovery() {
         child.properties.at("appraisal_facts")==nlohmann::json{{"boundary_role","open_to_below"}} &&
         !child.properties.contains("appraisal_category"),"void drawing must record only its declared role, never fabricated qualifying facts");
     require(window.findChild<QLabel*>("appraisalQualification")->text().startsWith("Qualified") &&
-        window.findChild<QLabel*>("appraisalGlaTotal")->text().contains("75.00"),"qualified parent net must decrease by the linked 25 square foot void");
+        window.findChild<QLabel*>("appraisalGlaTotal")->text().contains("75.0"),"qualified parent net must decrease by the linked 25 square foot void");
     require(window.undoCommand() && window.document().snapshot().entities()==before_finish.entities() &&
         window.redoCommand() && window.document().snapshot().entities()==after.entities(),"pre-draw subtraction must undo and redo complete linked state");
     require(window.saveProject() && window.openProject(path) && window.document().snapshot().entities()==after.entities(),
@@ -961,7 +964,7 @@ void declared_appraisal_qualifies_without_manual_categories() {
     require(qualification && qualification->text().contains("Unqualified"), "undeclared geometry must never be qualified");
     const auto before = window.document().snapshot().revision();
     require(window.editSelectedAppraisalFacts(declarations()), "valid declarations must commit atomically");
-    require(qualification->text().startsWith("Qualified") && derived->text().startsWith("GLA\n") && gla->text().contains("100.00"),
+    require(qualification->text().startsWith("Qualified") && derived->text().startsWith("GLA\n") && gla->text().contains("100.0"),
             "facts must qualify and derive GLA without manual category assignment");
     const auto appraisal_schedule = window.scheduleSnapshot();
     const auto schedule_gla = std::find_if(
@@ -1004,7 +1007,7 @@ void declared_appraisal_qualifies_without_manual_categories() {
             window.document().snapshot().revision() == stable, "unknown tokens and stale edits must fail atomically");
     require(window.editSelectedAppraisalFacts(declarations().replace("\"finish\":\"finished\",", "")) &&
             qualification->text().contains("Unqualified") && qualification->text().contains("Declare finish") &&
-            !gla->text().contains("100.00"), "missing declarations must withhold automatic totals instead of inferring facts");
+            !gla->text().contains("100.0"), "missing declarations must withhold automatic totals instead of inferring facts");
     const auto unqualified_schedule = window.scheduleSnapshot();
     require(std::any_of(unqualified_schedule.snapshot.rows.begin(),
                         unqualified_schedule.snapshot.rows.end(), [](const auto& row) {
@@ -1023,11 +1026,11 @@ void declared_appraisal_qualifies_without_manual_categories() {
                 }),
             "unqualified sheet output must state that totals are withheld and print no area values");
     require(window.editSelectedAppraisalFacts(declarations("residential_declared", "dwelling", "below")) &&
-            derived->text().contains("Basement · finished") && gla->text().contains("0.00"),
+            derived->text().contains("Basement · finished") && gla->text().contains(QRegularExpression(QStringLiteral("(?<![\\d,.])0\\.0(?!\\d)"))),
             "declared floor grade must override neither name nor elevation, and exclude below grade from GLA");
     require(window.editSelectedFactor(QStringLiteral("0.5")) && qualification->text().contains("Unqualified") &&
-            derived->text().contains("Physical: 100.00") && derived->text().contains("Adjusted: 50.00") &&
-            !gla->text().contains("50.00"), "nonunity factors must show physical and adjusted values without qualifying adjusted GLA");
+            derived->text().contains("Physical: 100.0") && derived->text().contains("Adjusted: 50.0") &&
+            !gla->text().contains("50.0"), "nonunity factors must show physical and adjusted values without qualifying adjusted GLA");
     require(window.editSelectedFactor(QStringLiteral("1")), "restore physical factor");
     QTemporaryDir directory;
     const auto path = directory.filePath(QStringLiteral("declared.bldproj"));
@@ -1109,22 +1112,22 @@ void declared_appraisal_deductions_edit_without_manual_categories() {
     require(window.document().revision() == before + 1 &&
                 stored.properties.at("deduction_ids") == std::vector<std::string>{hole.toStdString()} &&
                 !stored.properties.contains("appraisal_category") &&
-                qualification->text().startsWith("Qualified") && total->text().contains("89.24"),
+                qualification->text().startsWith("Qualified") && total->text().contains("89.2"),
             "physical deduction must persist once and automatically qualify the net appraisal total");
     require(window.undoCommand() && qualification->text().contains("Unqualified") &&
                 !window.document().snapshot().entities().at(outer.toStdString()).properties.contains("deduction_ids") &&
-                window.redoCommand() && qualification->text().startsWith("Qualified") && total->text().contains("89.24"),
+                window.redoCommand() && qualification->text().startsWith("Qualified") && total->text().contains("89.2"),
             "deduction editing must undo and redo both links and automatic totals");
     require(window.editSelectedFactor(QStringLiteral("0.5")) && apply_deductions({}) &&
                 qualification->text().contains("Unqualified") && apply_deductions({hole}) &&
                 qualification->text().contains("Unqualified") && window.editSelectedFactor(QStringLiteral("1")) &&
-                qualification->text().startsWith("Qualified") && total->text().contains("89.24"),
+                qualification->text().startsWith("Qualified") && total->text().contains("89.2"),
             "unqualified factors must not prevent correcting deductions or enable adjusted automatic totals");
     require(window.editSelectedAppraisalFacts(declarations().replace("\"finish\":\"finished\",", "")) &&
                 apply_deductions({}) && qualification->text().contains("Unqualified") &&
                 apply_deductions({hole}) && qualification->text().contains("Unqualified") &&
                 window.editSelectedAppraisalFacts(declarations()) &&
-                qualification->text().startsWith("Qualified") && total->text().contains("89.24"),
+                qualification->text().startsWith("Qualified") && total->text().contains("89.2"),
             "incomplete facts must permit correcting deductions while continuing to withhold automatic totals");
 
     const auto outside = window.createBoundary(square(10, 10, 1));
@@ -1155,7 +1158,7 @@ void declared_exclusions_and_commercial_totals() {
     parent.properties["deduction_ids"] = std::vector<std::string>{hole.toStdString()};
     window.document().apply(sketch::ApplyEntityChanges{snapshot.revision(), {sketch::EntityChange::upsert(parent)}, {}, "link void"});
     require(window.selectEntity(hole) && qualification->text().startsWith("Qualified") &&
-            window.findChild<QLabel*>(QStringLiteral("appraisalPropertyTotal"))->text().contains("89.24"),
+            window.findChild<QLabel*>(QStringLiteral("appraisalPropertyTotal"))->text().contains("89.2"),
             "selected void must not contribute independently or hide valid parent totals");
     auto* exclusion_classification = inspector_classification_control(window);
     auto* exclusion_canvas = dynamic_cast<sketch::desktop::PlanCanvas*>(
@@ -1172,12 +1175,12 @@ void declared_exclusions_and_commercial_totals() {
     require(window.selectEntity(outer) && window.editSelectedAppraisalFacts(declarations("light_commercial_declared", "commercial_occupiable")), "declare commercial area");
     require(window.selectEntity(hole) && window.editSelectedAppraisalFacts(declarations("light_commercial_declared", "commercial_service")), "declare service area");
     require(qualification->text().startsWith("Qualified") &&
-            window.findChild<QLabel*>(QStringLiteral("appraisalCommercialTotals"))->text().contains("89.24") &&
-            window.findChild<QLabel*>(QStringLiteral("appraisalCommercialTotals"))->text().contains("10.76") &&
-            window.findChild<QLabel*>(QStringLiteral("appraisalPropertyTotal"))->text().contains("100.00"),
+            window.findChild<QLabel*>(QStringLiteral("appraisalCommercialTotals"))->text().contains("89.2") &&
+            window.findChild<QLabel*>(QStringLiteral("appraisalCommercialTotals"))->text().contains("10.8") &&
+            window.findChild<QLabel*>(QStringLiteral("appraisalPropertyTotal"))->text().contains("100.0"),
             "occupiable and service categories must partition commercial gross area without double counting");
     require(window.editSelectedAppraisalFacts(declarations("light_commercial_declared", "commercial_common")) &&
-            window.findChild<QLabel*>(QStringLiteral("appraisalCommercialTotals"))->text().contains(QStringLiteral("89.24 sf / 10.76 sf / 0.00 sf")),
+            window.findChild<QLabel*>(QStringLiteral("appraisalCommercialTotals"))->text().contains(QStringLiteral("89.2 sf / 10.8 sf / 0.0 sf")),
             "commercial common area must have its own derived bucket");
 }
 
@@ -1202,7 +1205,7 @@ void declared_appraisal_excludes_site_boundaries() {
     require(window.selectEntity(explicit_site), "site parent must be selectable in Measurement mode");
     auto* net = window.findChild<QLabel*>(QStringLiteral("calculationNetArea"));
     auto* deductions = window.findChild<QListWidget*>(QStringLiteral("calculationDeductions"));
-    require(net->text().contains("968.75") && deductions->count() == 1 &&
+    require(net->text().contains("968.8") && deductions->count() == 1 &&
                 deductions->item(0)->text().contains(legacy_site),
             "Measurement mode must retain site-to-site deduction arithmetic and trace");
 
@@ -1213,8 +1216,8 @@ void declared_appraisal_excludes_site_boundaries() {
     auto* qualification = window.findChild<QLabel*>(QStringLiteral("appraisalQualification"));
     auto* gla = window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"));
     auto* property = window.findChild<QLabel*>(QStringLiteral("appraisalPropertyTotal"));
-    require(qualification->text().startsWith("Qualified") && gla->text().contains("100.00") &&
-                property->text().contains("100.00"),
+    require(qualification->text().startsWith("Qualified") && gla->text().contains("100.0") &&
+                property->text().contains("100.0"),
             "explicit and legacy site outlines must not require building appraisal facts or alter totals");
 
     require(window.selectEntity(explicit_site), "site boundary must remain selectable");
@@ -1223,7 +1226,7 @@ void declared_appraisal_excludes_site_boundaries() {
             "site boundaries must show Excluded in the compact appraisal status");
     auto* status = window.findChild<QLabel*>(QStringLiteral("calculationStatus"));
     require(status->text().contains("excluded from building appraisal") &&
-                property->text().contains("100.00") && net->text().contains("968.75") &&
+                property->text().contains("100.0") && net->text().contains("968.8") &&
                 deductions->count() == 1 && deductions->item(0)->text().contains(legacy_site),
             "selected site area must explain its exclusion, preserve its deduction trace and leave building totals unchanged");
 
@@ -1238,7 +1241,7 @@ void declared_appraisal_excludes_site_boundaries() {
         "add appraisal site phase fixture"});
     require(window.selectEntity(dwelling) &&
                 window.selectRemodelingAlternative(QStringLiteral("hide-site-deduction")) &&
-                qualification->text().startsWith("Qualified") && property->text().contains("100.00"),
+                qualification->text().startsWith("Qualified") && property->text().contains("100.0"),
             "a hidden site-only deduction must not block independent building appraisal totals");
     require(window.selectEntity(explicit_site) &&
                 status->text().contains("hidden by the active design phase"),
@@ -1274,11 +1277,11 @@ void declared_appraisal_reports_selected_building_floor_and_property() {
     auto* building = window.findChild<QLabel*>(QStringLiteral("calculationBuildingTotal"));
     auto* floor = window.findChild<QLabel*>(QStringLiteral("appraisalFloorTotal"));
     auto* property = window.findChild<QLabel*>(QStringLiteral("appraisalPropertyTotal"));
-    require(building->text().contains("400.00") && floor->text().contains("400.00") &&
-                property->text().contains("500.00"),
+    require(building->text().contains("400.0") && floor->text().contains("400.0") &&
+                property->text().contains("500.0"),
             "selecting building 2 must show its 400 square feet separately from the 500 square foot property");
-    require(window.selectEntity(first) && building->text().contains("100.00") &&
-                floor->text().contains("100.00") && property->text().contains("500.00"),
+    require(window.selectEntity(first) && building->text().contains("100.0") &&
+                floor->text().contains("100.0") && property->text().contains("500.0"),
             "selecting building 1 must change building and floor totals without changing the property total");
 }
 
@@ -1334,7 +1337,7 @@ void contradictory_appraisal_ownership_withholds_inspector_and_schedule_totals()
         snapshot.revision(), {sketch::EntityChange::upsert(boundary)}, {},
         "correct appraisal building identity"});
     require(window.selectEntity(area) && qualification->text().startsWith("Qualified") &&
-                total->text().contains("100.00") && gla->text().contains("100.00"),
+                total->text().contains("100.0") && gla->text().contains("100.0"),
             "correcting ownership must restore qualified 100 square foot inspector totals");
     const auto corrected_schedule = window.scheduleSnapshot();
     require(std::any_of(corrected_schedule.snapshot.rows.begin(),
@@ -1487,7 +1490,8 @@ void plan_label_placement_workflow() {
     const auto identified=sketch::decode_identified_boundary_entity(geometry_before.entities().at(area.toStdString()));
     const auto old_text=label().text;
     const auto old_label=label().position;
-    require(window.moveSelectedBoundaryVertex(QString::fromStdString(identified.segments.front().start_vertex_id),{-0.1,-0.1}),
+    // Far enough that the one-decimal area text (0.1 m² -> 0.2 m²) changes.
+    require(window.moveSelectedBoundaryVertex(QString::fromStdString(identified.segments.front().start_vertex_id),{-0.5,-0.5}),
         "placed label fixture supports ordinary corner editing");
     require(label().text!=old_text && label().plan_label_offset &&
             (std::abs(label().position.x-old_label.x)>1e-6 || std::abs(label().position.y-old_label.y)>1e-6) &&
@@ -1582,8 +1586,8 @@ void appraisal_qualification_transition_preview_workflow(bool named=true) {
     };
     const auto old_parent=named ? QStringLiteral("Dwelling") : QString{};
     const auto old_child=named ? QStringLiteral("Garage") : QString{};
-    const auto new_parent=(named ? QStringLiteral("Dwelling\n") : QString{})+QStringLiteral("3.00 m²");
-    const auto new_child=(named ? QStringLiteral("Garage\n") : QString{})+QStringLiteral("1.00 m²");
+    const auto new_parent=(named ? QStringLiteral("Dwelling\n") : QString{})+QStringLiteral("3.0 m²");
+    const auto new_child=(named ? QStringLiteral("Garage\n") : QString{})+QStringLiteral("1.0 m²");
     require(text(canvas->labels(),parent)==old_parent && text(canvas->labels(),child)==old_child,
             "outside deduction must start with withheld appraisal quantities");
     const auto before=window.document().snapshot();
@@ -1646,7 +1650,7 @@ void appraisal_plan_area_labels_workflow() {
             [&](const auto& label) { return label.id == id && label.plan_only && label.avoid_components; });
         return found == canvas->labels().end() ? QString{} : found->text;
     };
-    require(label_text(outer) == QStringLiteral("100.00 sf"),
+    require(label_text(outer) == QStringLiteral("100.0 sf"),
             "generic area names must still show authoritative Appraisal area on the plan");
     const auto garage = window.createBoundary(square(0.5, 0.5, 1.524));
     require(!garage.isEmpty() && !label_text(outer).contains(QStringLiteral("sf")),
@@ -1680,7 +1684,7 @@ void appraisal_plan_area_labels_workflow() {
             window.document().snapshot().entities() == named.entities(),
             "area Name edits must undo/redo without changing appraisal geometry or facts");
     edit_name(garage, QStringLiteral("   "));
-    require(label_text(garage) == QStringLiteral("25.00 sf") && window.undoCommand() &&
+    require(label_text(garage) == QStringLiteral("25.0 sf") && window.undoCommand() &&
             window.document().snapshot().entities() == named.entities(),
             "clearing an area name removes only the name and undo restores it");
     require(window.selectEntity(garage), "select the area before testing a stale Name edit");
@@ -1712,8 +1716,8 @@ void appraisal_plan_area_labels_workflow() {
                 read_only_window.document().snapshot().entities() == before.entities(),
                 "programmatic Name signals must not mutate a read-only document");
     }
-    require(window.selectEntity(outer) && label_text(outer) == QStringLiteral("First Floor\n75.00 sf") &&
-            label_text(garage) == QStringLiteral("Garage\n25.00 sf"),
+    require(window.selectEntity(outer) && label_text(outer) == QStringLiteral("First Floor\n75.0 sf") &&
+            label_text(garage) == QStringLiteral("Garage\n25.0 sf"),
             "plan labels must show net parent area and the separate garage contribution exactly once");
     const auto parent_label = std::find_if(canvas->labels().begin(), canvas->labels().end(),
         [&](const auto& label) { return label.id == outer && label.avoid_components; });
@@ -1725,13 +1729,13 @@ void appraisal_plan_area_labels_workflow() {
     require(!void_area.isEmpty() &&
             window.editSelectedAppraisalFacts(declarations("residential_declared", "dwelling", "above", "other_void")) &&
             window.applySelectedAutoSubtract(outer) && !label_text(void_area).contains(QStringLiteral("sf")) &&
-            label_text(outer) == QStringLiteral("First Floor\n74.00 sf"),
+            label_text(outer) == QStringLiteral("First Floor\n74.0 sf"),
             "linked voids must reduce the parent without acquiring a standalone Appraisal area label");
-    require(window.deleteSelection() && label_text(outer) == QStringLiteral("First Floor\n75.00 sf"),
+    require(window.deleteSelection() && label_text(outer) == QStringLiteral("First Floor\n75.0 sf"),
             "deleting a void must rebuild its remaining parent's exact net label");
     const auto site = window.createBoundary(square(20, 20, 10), QStringLiteral("survey"));
     require(!site.isEmpty() && !label_text(site).contains(QStringLiteral("sf")) &&
-            label_text(outer) == QStringLiteral("First Floor\n75.00 sf") && window.deleteSelection(),
+            label_text(outer) == QStringLiteral("First Floor\n75.0 sf") && window.deleteSelection(),
             "independent site outlines must not acquire numerical building Appraisal labels or change GLA");
     const auto separate_layer = window.createLayer(QStringLiteral("floor-1"), QStringLiteral("Garage presentation"));
     require(!separate_layer.isEmpty(), "presentation filter fixture needs a distinct layer");
@@ -1741,12 +1745,12 @@ void appraisal_plan_area_labels_workflow() {
     window.document().apply(sketch::ApplyEntityChanges{source.revision(),
         {sketch::EntityChange::upsert(relayered)}, {}, "Move garage to a presentation layer"});
     require(window.setContainerVisible(separate_layer, false) && window.selectEntity(outer) &&
-            label_text(outer) == QStringLiteral("First Floor\n75.00 sf") && label_text(garage).isEmpty(),
+            label_text(outer) == QStringLiteral("First Floor\n75.0 sf") && label_text(garage).isEmpty(),
             "hiding a deduction's layer must not alter its visible parent's numerical area");
     require(window.setContainerVisible(separate_layer, true), "restore the garage presentation");
     window.setMetricUnits(true);
-    require(label_text(outer) == QStringLiteral("First Floor\n6.97 m²") &&
-            label_text(garage) == QStringLiteral("Garage\n2.32 m²"),
+    require(label_text(outer) == QStringLiteral("First Floor\n7.0 m²") &&
+            label_text(garage) == QStringLiteral("Garage\n2.3 m²"),
             "automatic labels must convert workspace units without altering geometry");
     window.setMetricUnits(false);
     require(window.selectEntity(garage), "select the deduction for an ordinary size edit");
@@ -1787,8 +1791,8 @@ void appraisal_plan_area_labels_workflow() {
     // Moving this corner by 0.2 m on each axis removes 1.524 * 0.2 m²
     // from the five-foot square. The unchanged parent gains that deduction.
     const std::map<QString, QString> preview_values{
-        {outer, QStringLiteral("First Floor\n78.28 sf")},
-        {garage, QStringLiteral("Garage\n21.72 sf")}};
+        {outer, QStringLiteral("First Floor\n78.3 sf")},
+        {garage, QStringLiteral("Garage\n21.7 sf")}};
     for (const auto& [id, expected] : preview_values) {
         const auto& labels = canvas->boundaryVertexPreviewLabels();
         const auto proposed = std::find_if(labels.begin(), labels.end(), [&](const auto& label) { return label.id == id; });
@@ -1806,7 +1810,7 @@ void appraisal_plan_area_labels_workflow() {
     QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QApplication::sendEvent(canvas, &escape);
     require(window.document().snapshot().entities() == before_drag.entities() &&
-            label_text(outer) == QStringLiteral("First Floor\n75.00 sf"),
+            label_text(outer) == QStringLiteral("First Floor\n75.0 sf"),
             "cancelling a vertex preview must restore committed area labels without changing geometry");
     QApplication::sendEvent(canvas, &down);
     QApplication::sendEvent(canvas, &drag);
@@ -1825,7 +1829,7 @@ void appraisal_plan_area_labels_workflow() {
             "committing the corner must match the previewed parent and deduction net values");
     require(window.undoCommand() &&
                 window.document().snapshot().entities() == before_drag.entities() &&
-                label_text(outer) == QStringLiteral("First Floor\n75.00 sf"),
+                label_text(outer) == QStringLiteral("First Floor\n75.0 sf"),
             "undo must restore the geometry and the committed area values after the live preview");
     // Connected mode preserves the complementary 5-ft edge while changing
     // the anchored edge to 4 ft: (4 + 5) / 2 * 5 = 22.5 sf.
@@ -1834,17 +1838,17 @@ void appraisal_plan_area_labels_workflow() {
     require(window.editSelectedBoundaryEdgeLength(QString::fromStdString(boundary.segments.front().segment_id),
         QStringLiteral("4 ft"), sketch::BoundaryFixedEndpoint::start, true),
         "Appraisal plan labels must follow a real measured-edge edit");
-    if (label_text(outer) != QStringLiteral("First Floor\n77.50 sf") ||
-        label_text(garage) != QStringLiteral("Garage\n22.50 sf"))
+    if (label_text(outer) != QStringLiteral("First Floor\n77.5 sf") ||
+        label_text(garage) != QStringLiteral("Garage\n22.5 sf"))
         throw std::runtime_error((QStringLiteral("Actual labels after measured edit: parent [%1], garage [%2]")
             .arg(label_text(outer), label_text(garage))).toStdString());
-    require(window.undoCommand() && label_text(outer) == QStringLiteral("First Floor\n75.00 sf") &&
-            window.redoCommand() && label_text(outer) == QStringLiteral("First Floor\n77.50 sf"),
+    require(window.undoCommand() && label_text(outer) == QStringLiteral("First Floor\n75.0 sf") &&
+            window.redoCommand() && label_text(outer) == QStringLiteral("First Floor\n77.5 sf"),
             "ordinary undo/redo must rebuild derived area labels");
     QTemporaryDir directory;
     require(directory.isValid() && window.saveProjectAs(directory.filePath(QStringLiteral("plan-labels.bldproj"))) &&
             window.openProject(directory.filePath(QStringLiteral("plan-labels.bldproj"))) &&
-            label_text(outer) == QStringLiteral("First Floor\n77.50 sf"),
+            label_text(outer) == QStringLiteral("First Floor\n77.5 sf"),
             "ordinary save/reopen must rebuild exact numerical plan labels");
     const auto pdf_path = directory.filePath(QStringLiteral("appraisal-plan-labels.pdf"));
     require(window.exportDraftPdf(pdf_path), "the ordinary draft plan output must include calculated area labels");
@@ -1852,10 +1856,10 @@ void appraisal_plan_area_labels_workflow() {
     require(pdf.load(pdf_path) == QPdfDocument::Error::None && pdf.pageCount() > 0,
             "the actual Appraisal plan PDF must reopen");
     const auto text = pdf.getAllText(0).text().simplified();
-    require(text.contains(QStringLiteral("First Floor")) && text.contains(QStringLiteral("77.50 sf")) &&
-            text.contains(QStringLiteral("Garage")) && text.contains(QStringLiteral("22.50 sf")),
+    require(text.contains(QStringLiteral("First Floor")) && text.contains(QStringLiteral("77.5 sf")) &&
+            text.contains(QStringLiteral("Garage")) && text.contains(QStringLiteral("22.5 sf")),
             "plan PDF must retain complete names and numerical labels without clipping a second line");
-    require(text.count(QStringLiteral("77.50 sf")) == 1 && text.count(QStringLiteral("22.50 sf")) == 1,
+    require(text.count(QStringLiteral("77.5 sf")) == 1 && text.count(QStringLiteral("22.5 sf")) == 1,
             "plan-only area values must not leak into elevation or section sheet viewports");
     const auto captures = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
     if (!captures.isEmpty()) {
@@ -2717,7 +2721,7 @@ void appraisal_area_properties_entry_points_are_visible() {
     require(window.findChild<QLabel*>(QStringLiteral("appraisalQualification"))->text().startsWith(
                 QStringLiteral("Qualified")) &&
             window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"))->text().contains(
-                QStringLiteral("100.00")) &&
+                QStringLiteral("100.0")) &&
             after_facts.entities().at(area.toStdString()).properties.at("appraisal_facts").at("area_use") == "dwelling",
             "the quick-panel action must open the native fact editor and save the declared Dwelling facts");
     require(window.undoCommand() && window.document().snapshot().entities() == before_cancel.entities() &&
@@ -2986,12 +2990,12 @@ void appraisal_area_display_precision_workflow() {
     require(workflow, "area display fixture needs the appraisal workflow selector");
     workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
     require(!first.isEmpty() && window.editSelectedAppraisalFacts(declarations()),
-            "area display fixture must qualify its first 151.51 square foot room");
+            "area display fixture must qualify its first 151.5 square foot room");
     const auto second = window.createBoundary(square(6, 0, side));
     require(!second.isEmpty() && window.editSelectedAppraisalFacts(declarations()),
             "area display fixture must qualify its second nonoverlapping room");
     auto* gla = window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"));
-    require(gla && gla->text().contains(QStringLiteral("303.02")),
+    require(gla && gla->text().contains(QStringLiteral("303.0")),
             "area display fixture must start with the exact aggregate shown at two decimals");
     auto* canvas = dynamic_cast<sketch::desktop::PlanCanvas*>(
         window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
@@ -3001,8 +3005,8 @@ void appraisal_area_display_precision_workflow() {
             [&](const auto& item) { return item.id == id && item.plan_only && item.avoid_components; });
         return label == canvas->labels().end() ? QString{} : label->text;
     };
-    require(area_label(first).contains(QStringLiteral("151.51 sf")) &&
-            area_label(second).contains(QStringLiteral("151.51 sf")),
+    require(area_label(first).contains(QStringLiteral("151.5 sf")) &&
+            area_label(second).contains(QStringLiteral("151.5 sf")),
             "qualified areas must automatically show their calculated square footage on the plan");
     auto* action = window.findChild<QAction*>(QStringLiteral("calculationProfile"));
     require(action && action->isEnabled(),
@@ -3020,7 +3024,7 @@ void appraisal_area_display_precision_workflow() {
     property.extensions["vendor_area_display"] = {{"value", 17}};
     window.document().apply(sketch::ApplyEntityChanges{
         seeded.revision(), {sketch::EntityChange::upsert(property)}, {}, "Seed opaque area display metadata"});
-    require(window.selectEntity(second) && gla->text() == QStringLiteral("303.02 sf") && action->isEnabled(),
+    require(window.selectEntity(second) && gla->text() == QStringLiteral("303.0 sf") && action->isEnabled(),
             "hidden legacy profile metadata must not block qualified Appraisal totals or display editing");
     const auto original = window.document().snapshot();
     const auto physical_report = sketch::build_appraisal_document_report(original, "property-1");
@@ -3214,7 +3218,7 @@ void appraisal_area_display_precision_workflow() {
     export_precision(QStringLiteral("303.020000"), QStringLiteral("area-display-six.pdf"));
     edit_precision(0, true);
     const auto whole_text = export_precision(QStringLiteral("303"), QStringLiteral("area-display-zero.pdf"));
-    require(!whole_text.contains(QStringLiteral("303.02")) && !whole_text.contains(QStringLiteral("304 sf")),
+    require(!whole_text.contains(QStringLiteral("303.0")) && !whole_text.contains(QStringLiteral("304 sf")),
             "whole-number PDF totals must sum exact room quantities before rounding once");
     check_precision(0, QStringLiteral("303"));
 

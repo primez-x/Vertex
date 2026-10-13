@@ -44,7 +44,7 @@ Json measurement_profile() {
         classifications[std::string(preset.classification)] = {{"building_total",preset.building_total},
             {"living_total",preset.living_total},{"appraisal_category","none"}};
     return {{"id","vertex-pinc-measurement"},{"version",2u},{"display_unit","square_foot"},
-        {"decimal_places",2},{"classifications",std::move(classifications)}};
+        {"decimal_places",1},{"classifications",std::move(classifications)}};
 }
 void context_properties(Entity& entity,const DrawingContext& context) {
     entity.properties["property_id"] = context.property_id;

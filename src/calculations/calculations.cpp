@@ -701,7 +701,8 @@ double AppraisalTotals::nonstandard_finished_square_metres() const {
 }
 
 CalculationProfile builtin_appraisal_profile() {
-    CalculationProfile profile{"vertex-appraisal", 1, AreaUnit::square_foot, 2, {}};
+    // One decimal by default (1,842.5 sf); Setup can choose 0-6.
+    CalculationProfile profile{"vertex-appraisal", 1, AreaUnit::square_foot, 1, {}};
     for (const auto& [category, name] : detail::appraisal_category_tokens) {
         if (category != AppraisalAreaCategory::none && category <= AppraisalAreaCategory::commercial_service)
             profile.classifications.emplace(std::string(name), ClassificationRule{

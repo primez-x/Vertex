@@ -33,14 +33,16 @@ struct Preferences {
     bool autosave_enabled{true};
     bool reopen_last_project{false};
 
-    // Drawing defaults (metres)
-    double wall_thickness_m{0.14};
-    double wall_height_m{2.4384}; // 8 ft
-    double door_width_m{0.9};
-    double door_height_m{2.1};
-    double window_width_m{1.2};
-    double window_height_m{1.2};
-    double window_sill_m{0.9};
+    // Drawing defaults (metres). Each market starts at its own standard
+    // sizes (see defaults(Units)); these initializers are the imperial (US)
+    // ones because imperial is the default unit system.
+    double wall_thickness_m{0.1524};   // 6"
+    double wall_height_m{2.4384};      // 8' 0"
+    double door_width_m{0.9144};       // 3' 0"
+    double door_height_m{2.032};       // 6' 8"
+    double window_width_m{0.9144};     // 3' 0"
+    double window_height_m{1.2192};    // 4' 0"
+    double window_sill_m{0.9144};      // 3' 0"
 
     // Advanced
     // Longest wait between recovery saves while editing continues (the
@@ -54,8 +56,22 @@ struct Preferences {
     double angle_snap_degrees{45.0};
 
     [[nodiscard]] static Preferences defaults() { return Preferences{}; }
+    // Shipped defaults with the drawing defaults of that market:
+    //   imperial: wall 6" × 8' 0", door 3' 0" × 6' 8", window 3' 0" × 4' 0"
+    //             with a 3' 0" sill;
+    //   metric:   wall 140 mm × 2.4 m, door 900 × 2100 mm, window
+    //             1200 × 1200 mm with a 900 mm sill.
+    [[nodiscard]] static Preferences defaults(Units units);
+    // True when the drawing default `member` still holds a shipped value (either
+    // market's default, or the single pre-market default set), i.e. the person
+    // never chose it.
+    [[nodiscard]] static bool untouchedDrawingDefault(double Preferences::*member, double metres) noexcept;
+    // This value with every untouched drawing default replaced by `units`'s
+    // market default; chosen values are kept exactly.
+    [[nodiscard]] Preferences withMarketDrawingDefaults(Units units) const;
     // Reads keys under "preferences/"; missing or invalid values fall back to
-    // the defaults so a damaged settings file never blocks startup.
+    // the defaults so a damaged settings file never blocks startup. Drawing
+    // defaults that still hold a shipped value follow the stored units.
     [[nodiscard]] static Preferences load(QSettings& settings);
     void save(QSettings& settings) const;
 

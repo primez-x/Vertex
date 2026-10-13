@@ -898,6 +898,10 @@ PlanCanvas::PlanCanvas(QWidget* parent) : QWidget(parent) {
 
 void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
     m_pending_dimension_space_tap.reset();
+    // A committed edit or newly opened project replaces the projection; the
+    // previous snap cue described the old geometry, so drop it until the
+    // pointer moves again.
+    m_snap_cue_cleared = true;
     // Replacing the document projection invalidates the captured revision and
     // its transient host-wall geometry, even when the selected ID survives.
     if (m_touch_active || m_gesture_button != Qt::NoButton ||
@@ -988,6 +992,12 @@ void PlanCanvas::setSnapEnabled(bool enabled) {
 void PlanCanvas::setAngleSnapDegrees(double degrees) {
     if (!std::isfinite(degrees) || degrees <= 0.0 || degrees > 360.0) return;
     m_angle_snap_degrees = degrees;
+}
+
+void PlanCanvas::clearSnapCue() {
+    if (m_snap_cue_cleared) return;
+    m_snap_cue_cleared = true;
+    update();
 }
 
 void PlanCanvas::setWallSnapEnabled(bool enabled) {
@@ -2311,7 +2321,12 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
                                  QPointF(wall.end.x, wall.end.y));
             }
         }
-        if (m_wall_snap_enabled && m_last_mouse_position) {
+        // Snap glyphs and their name are input feedback: show them while a
+        // drawing tool is active or a drag is in progress, and drop them once
+        // a point is committed or a project opens until the pointer moves.
+        const bool snap_feedback = !m_snap_cue_cleared &&
+            (m_tool != CanvasTool::select || m_left_dragging);
+        if (snap_feedback && m_wall_snap_enabled && m_last_mouse_position) {
             const auto snap = snapResult(*m_last_mouse_position);
             if (snap.kind != SnapKind::none) {
                 // Design system: snap glyphs use draw-snap and differ by
@@ -2513,11 +2528,11 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
             instruction = m_boundary_draft_preview->instruction;
         } else if (m_tool != CanvasTool::select) {
             if (m_tool == CanvasTool::boundary) {
-                instruction = QStringLiteral("Boundary tool  •  click points, Enter closes, D precise segment");
+                instruction = QStringLiteral("Area  ·  click each corner. Press Enter to close the area, or D to type a precise segment.");
             } else if (m_tool == CanvasTool::sloped_wall) {
-                instruction = QStringLiteral("Sloped wall tool  •  click two points, then enter the signed rise");
+                instruction = QStringLiteral("Sloped wall  ·  click the start and end points, then enter the rise (negative for a fall).");
             } else {
-                instruction = QStringLiteral("Wall tool  •  click two points");
+                instruction = QStringLiteral("Wall  ·  click to start, then click each corner. Click the start point to close the room; press Esc to stop.");
             }
         }
         if (!instruction.isEmpty()) {
@@ -2592,15 +2607,18 @@ void PlanCanvas::drawOverviewMap(QPainter& painter) const {
     if (map.isEmpty()) return;
     const auto bounds = contentBounds(true);
     const auto light = m_canvas_background.lightnessF() > 0.5;
+    // High contrast (black field): black body, solid white frame and text.
+    const bool high_contrast = m_canvas_background == QColor(Qt::black);
     painter.save();
-    painter.setPen(QPen(light ? QColor(128, 147, 173) : QColor(120, 143, 174), 1.0));
-    painter.setBrush(light ? QColor(255, 255, 255, 242) : QColor(17, 25, 38, 242));
+    painter.setPen(QPen(high_contrast ? QColor(Qt::white) : light ? QColor(128, 147, 173) : QColor(120, 143, 174),
+                        high_contrast ? 2.0 : 1.0));
+    painter.setBrush(high_contrast ? QColor(Qt::black) : light ? QColor(255, 255, 255, 242) : QColor(17, 25, 38, 242));
     painter.drawRoundedRect(map, 8.0, 8.0);
     // An opaque navigation body keeps the drawing legible and permits owned
     // committed geometry to be replayed without translucent precomposition.
-    const QColor body_color = light ? QColor(255, 255, 255) : QColor(17, 25, 38);
+    const QColor body_color = high_contrast ? QColor(Qt::black) : light ? QColor(255, 255, 255) : QColor(17, 25, 38);
     painter.fillRect(map.adjusted(8.0, 22.0, -8.0, -8.0), body_color);
-    painter.setPen(light ? QColor(50, 65, 84) : QColor(220, 232, 246));
+    painter.setPen(high_contrast ? QColor(Qt::white) : light ? QColor(50, 65, 84) : QColor(220, 232, 246));
     QFont map_font = painter.font();
     map_font.setPixelSize(10);
     painter.setFont(map_font);
@@ -2678,8 +2696,8 @@ void PlanCanvas::drawOverviewMap(QPainter& painter) const {
     };
     const auto draw_committed = [&](QPainter& target) {
         for (const auto& entity : m_entities) {
-            auto pen_color = color_for(entity, light, false);
-            pen_color.setAlpha(light ? 235 : 220);
+            auto pen_color = high_contrast ? QColor(Qt::white) : color_for(entity, light, false);
+            if (!high_contrast) pen_color.setAlpha(light ? 235 : 220);
             QPen pen(pen_color, 1.0,
                      Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
             pen.setCosmetic(true);
@@ -2785,11 +2803,11 @@ void PlanCanvas::drawOverviewMap(QPainter& painter) const {
     const auto bottom_right = to_map({m_view_center.x + visible_width * 0.5,
                                       m_view_center.y - visible_height * 0.5});
     auto viewport_rect = QRectF(top_left, bottom_right).normalized();
-    QPen viewport_pen(light ? QColor(32, 139, 220, 235) : QColor(103, 202, 255, 245), 1.5,
-                      Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
+    QPen viewport_pen(high_contrast ? QColor(255, 255, 0) : light ? QColor(32, 139, 220, 235) : QColor(103, 202, 255, 245),
+                      high_contrast ? 2.0 : 1.5, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
     viewport_pen.setCosmetic(true);
     painter.setPen(viewport_pen);
-    painter.setBrush(QColor(32, 139, 220, 28));
+    painter.setBrush(high_contrast ? QBrush(Qt::NoBrush) : QBrush(QColor(32, 139, 220, 28)));
     // Keep an enclosing viewport visible instead of clipping all four edges
     // away when the full drawing is already in view.
     painter.drawRect(viewport_rect.intersected(inner.adjusted(1.0, 1.0, -1.0, -1.0)));
@@ -4125,6 +4143,7 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
         setCursor(Qt::OpenHandCursor);
         return;
     }
+    if (m_last_mouse_position != std::optional<QPointF>{position}) m_snap_cue_cleared = false;
     m_last_mouse_position = position;
     if (m_move_release_pending || m_transform_release_pending || m_vertex_release_pending || m_roof_opening_release_pending || m_roof_opening_group_release_pending) return;
     if (m_gesture_button == Qt::RightButton && !m_right_dragging &&
@@ -4725,6 +4744,11 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
             } else if (selectionInteractionEnabled() && clear_selection_on_click) {
                 if (m_entity_selection_clicked) m_entity_selection_clicked({}, false);
                 else if (m_entity_clicked) m_entity_clicked({});
+            } else if (selectionInteractionEnabled() && (!pressed_entity.isEmpty() || pressed_occupied) &&
+                       vertexClickStartsDrawing(position)) {
+                // Area / Measured lines: a snapped wall corner or area vertex
+                // starts the chain instead of selecting the object under it.
+                m_point_clicked(inputPoint(position));
             } else if (selectionInteractionEnabled() && !pressed_entity.isEmpty()) {
                 if (m_entity_selection_clicked)
                     m_entity_selection_clicked(pressed_entity, false);
@@ -9145,6 +9169,17 @@ PlanCanvas::SnapResult PlanCanvas::snapResult(QPointF screen_point) const {
                 consider(endpoint, point, SnapKind::endpoint, point);
         }
     }
+    // Area and measured-line nodes also snap to the painted wall corners, so an
+    // exterior outline can trace the faces instead of only the centerlines.
+    if (areaVertexSnapActive()) {
+        for (const auto& entity : m_entities) {
+            if (entity.type != QStringLiteral("wall") || entity.snap_points.empty() || entity.svg_symbol) continue;
+            for (const auto& segment : entity.segments) {
+                consider(endpoint, segment.start, SnapKind::endpoint, segment.start);
+                consider(endpoint, segment.end, SnapKind::endpoint, segment.end);
+            }
+        }
+    }
     // A nearby true endpoint takes precedence over every projection. This
     // prevents an apparently aligned point from replacing a connected corner
     // with a nearby point that leaves a small gap.
@@ -9255,6 +9290,23 @@ PlanCanvas::SnapResult PlanCanvas::snapResult(QPointF screen_point) const {
         if (alignment.result.anchor && origin &&
             distance(*alignment.result.anchor,*origin)<1e-10)
             return length_snap(alignment.result);
+        // An external guide fixes one coordinate exactly; the coordinate
+        // along the guide still follows the drawing increment from this
+        // segment's start. Otherwise a node aligned with another corner keeps
+        // the raw pointer coordinate and the chain shows 7' 9 1/16" beside
+        // 7' 9" although Snap is on (every node of a chain snaps the same way).
+        if (alignment.result.anchor && origin) {
+            const auto step=drawingLengthIncrementMetres();
+            const auto guide_anchor=*alignment.result.anchor;
+            auto& point=alignment.result.point;
+            const auto round_from_origin=[&](double value,double start) {
+                const auto rounded=start+std::round((value-start)/step)*step;
+                return std::isfinite(rounded) ? rounded : value;
+            };
+            if (point.y==guide_anchor.y && point.x!=guide_anchor.x) point.x=round_from_origin(point.x,origin->x);
+            else if (point.x==guide_anchor.x && point.y!=guide_anchor.y) point.y=round_from_origin(point.y,origin->y);
+            if (alignment.result.guide) alignment.result.guide->end=point;
+        }
         return alignment.result;
     }
     return grid_result;
@@ -10425,6 +10477,33 @@ void PlanCanvas::setIdleWallSelectionRequested(std::function<bool()> callback) {
     update();
 }
 
+void PlanCanvas::setVertexStartsDrawingRequested(std::function<bool()> callback) {
+    resetGesture();
+    m_vertex_starts_drawing_requested = std::move(callback);
+    if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
+    update();
+}
+
+bool PlanCanvas::areaVertexSnapActive() const {
+    // Area and measured-line nodes trace physical corners. Wall drawing keeps
+    // its analytical baseline endpoints so connected joints stay exact.
+    if (m_tool == CanvasTool::boundary) return true;
+    if (m_tool != CanvasTool::select) return false;
+    if (m_boundary_draft_preview) return true;
+    try {
+        return m_vertex_starts_drawing_requested && m_vertex_starts_drawing_requested();
+    } catch (...) {
+        return false;
+    }
+}
+
+bool PlanCanvas::vertexClickStartsDrawing(QPointF point) const {
+    if (!m_point_clicked || m_point_placement_requested || !selectedIds().isEmpty() ||
+        !m_selected_generated_labels.empty() || !m_selected_roof_openings.empty() ||
+        !m_vertex_starts_drawing_requested || !areaVertexSnapActive()) return false;
+    return snapResult(point).kind == SnapKind::endpoint;
+}
+
 bool PlanCanvas::admitInteraction(bool context) {
     try {
         const auto callback = m_interaction_admission_requested;
@@ -10894,7 +10973,9 @@ void PlanCanvas::drawGrid(QPainter& painter, const QRectF& viewport, double scal
     const bool light_surface = m_canvas_background.lightnessF() > 0.5;
     const bool high_contrast = m_canvas_background == QColor(Qt::black);
     const auto& tokens = design::for_surface(light_surface);
-    QPen minor(high_contrast ? QColor(96, 96, 96) : tokens.grid_minor, 0.0);
+    // High contrast: the dense minor lines recede to a faint texture so the
+    // white drawing dominates; major lines stay readable for orientation.
+    QPen minor(high_contrast ? QColor(52, 52, 52) : tokens.grid_minor, 0.0);
     QPen major(high_contrast ? QColor(160, 160, 160) : tokens.grid_major, 0.0);
     const auto first_x = std::floor(min_x / step) * step;
     const auto first_y = std::floor(min_y / step) * step;

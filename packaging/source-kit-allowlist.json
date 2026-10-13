@@ -6035,6 +6035,10 @@
     },
     {
       "category": "source",
+      "path": "src/desktop/catalog_market_variants.hpp"
+    },
+    {
+      "category": "source",
       "path": "src/desktop/constraint_dialog.cpp"
     },
     {
@@ -7644,6 +7648,10 @@
     {
       "category": "source",
       "path": "tests/workspace_slot_validation_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/workspace_theme_desktop_tests.cpp"
     },
     {
       "category": "source",

@@ -398,6 +398,52 @@ int main(int argc, char** argv) {
                         variant.lastError().isEmpty() && variant.document().revision() == revision_before_preset,
                     "sidebar preset edits await a real canvas target without stale overlap errors or wall instructions");
         }
+        // A hinged door dropped into a wall that bounds a room swings into
+        // that room, whichever way the wall was drawn; with no room it keeps
+        // the catalog side. Imperial projects place the US nominal width.
+        for (const int room_side : {0, 1, -1}) for (const bool metric : {true, false}) {
+            sketch::desktop::MainWindow swing;
+            swing.resize(1200, 800);
+            swing.setMetricUnits(metric);
+            swing.show();
+            require(!swing.createStraightWall({-4, 0}, {4, 0}).isEmpty(), "swing host exists");
+            if (room_side != 0) {
+                const double y = 3.0 * room_side;
+                sketch::Boundary room{{{-4, 0}, {4, 0}, 0}, {{4, 0}, {4, y}, 0},
+                                      {{4, y}, {-4, y}, 0}, {{-4, y}, {-4, 0}, 0}};
+                if (room_side < 0) room = {{{-4, 0}, {-4, y}, 0}, {{-4, y}, {4, y}, 0},
+                                           {{4, y}, {4, 0}, 0}, {{4, 0}, {-4, 0}, 0}};
+                require(!swing.createBoundary(room).isEmpty(), "swing room exists");
+            }
+            QApplication::processEvents();
+            auto* target = dynamic_cast<sketch::desktop::PlanCanvas*>(
+                swing.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+            require(target != nullptr, "swing canvas exists");
+            const auto center = target->viewCenter();
+            const auto viewport = QRectF(target->rect());
+            const QPointF point{viewport.center().x() - center.x * target->viewScale(),
+                                viewport.center().y() + center.y * target->viewScale()};
+            QMimeData payload;
+            payload.setData("application/x-vertex-symbol", QJsonDocument(QJsonObject{
+                {QStringLiteral("id"), QStringLiteral("svg-v2-09_doors-door-hinged-910-left")},
+                {QStringLiteral("scale"), 1.0}}).toJson(QJsonDocument::Compact));
+            QDragEnterEvent enter(point.toPoint(), Qt::CopyAction, &payload, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target, &enter);
+            QDropEvent drop(point, Qt::CopyAction, &payload, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target, &drop);
+            const auto snapshot = swing.document().snapshot();
+            const auto created = snapshot.entities().find(swing.selectedEntityId().toStdString());
+            require(created != snapshot.entities().end() && created->second.type == "opening" &&
+                        created->second.properties.contains("door_operation"),
+                    "hinged door drop creates a hosted door");
+            const auto side = created->second.properties.at("door_operation").value("side", std::string{});
+            // The wall runs -x to +x: "left" is +y.
+            require(side == (room_side < 0 ? "right" : "left"),
+                    "a new door swings into the room its wall bounds (catalog side without a room)");
+            const auto width = created->second.properties.at("width_m").get<double>();
+            require(std::abs(width - (metric ? 0.91 : 36 * 0.0254)) < 1e-9,
+                    "metric keeps the 910 mm door; imperial places the nominal 3' 0\" door");
+        }
         for (const auto& [catalog_id, mechanism] : {
                  std::pair{"svg-v2-09_doors-door-double", "double_hinged"},
                  std::pair{"svg-v2-09_doors-door-sliding-glass", "sliding"}}) {
@@ -615,9 +661,31 @@ int main(int argc, char** argv) {
                     drawing_mode->accessibleName() == QStringLiteral("Drawing mode") &&
                     drawing_mode->currentData().toString() == QStringLiteral("wall"),
                 "a fresh idle plan defaults to the physical Wall mode");
+        // An imperial project starts at US drawing defaults, shown in
+        // feet-inches only (never "140 mm" or "0.91 m" in an imperial view).
+        require(!window.metricUnits() && field("wallDrawThickness")->text() == QStringLiteral("6\"") &&
+                    field("wallDrawHeight")->text() == QStringLiteral("8' 0\""),
+                "imperial wall defaults are 6\" thick and 8' 0\" high");
+        action("libraryDoor");
+        require(field("openingDrawWidth")->text() == QStringLiteral("3' 0\"") &&
+                    field("openingDrawHeight")->text() == QStringLiteral("6' 8\"") &&
+                    field("openingDrawSill")->text() == QStringLiteral("0\""),
+                "imperial door defaults are 3' 0\" x 6' 8\" at the floor");
+        action("libraryWindow");
+        require(field("openingDrawWidth")->text() == QStringLiteral("3' 0\"") &&
+                    field("openingDrawHeight")->text() == QStringLiteral("4' 0\"") &&
+                    field("openingDrawSill")->text() == QStringLiteral("3' 0\""),
+                "imperial window defaults are 3' 0\" x 4' 0\" with a 3' 0\" sill");
+        {
+            QKeyEvent cancel(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &cancel);
+            QApplication::processEvents();
+        }
         field("wallDrawThickness")->setText(QStringLiteral("240 mm"));
         field("wallDrawHeight")->setText(QStringLiteral("2.8 m"));
         window.setMetricUnits(true);
+        require(field("wallDrawThickness")->text() == QStringLiteral("0.24 m"),
+                "a typed wall thickness is re-shown in metres, never mixed units");
         QApplication::processEvents();
         require(drawing_mode->currentData().toString() == QStringLiteral("wall"),
                 "switching to the conventional plan keeps Wall as the fresh default");
@@ -848,8 +916,9 @@ int main(int argc, char** argv) {
         bool classification_accepted = false;
         QTimer::singleShot(0, &window, [&] {
             for (auto* widget : QApplication::topLevelWidgets()) {
-                auto* dialog = qobject_cast<QInputDialog*>(widget);
-                if (!dialog || dialog->objectName() != QStringLiteral("boundaryClassificationDialog")) continue;
+                auto* dialog = qobject_cast<QDialog*>(widget);
+                if (!dialog || dialog->objectName() != QStringLiteral("boundaryClassificationDialog") ||
+                    !dialog->isVisible()) continue;
                 classification_accepted = true;
                 dialog->accept();
                 break;

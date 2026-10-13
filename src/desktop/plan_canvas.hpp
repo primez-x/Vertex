@@ -485,6 +485,10 @@ public:
     [[nodiscard]] double angleSnapDegrees() const noexcept { return m_angle_snap_degrees; }
     [[nodiscard]] double angleSnapRadians() const noexcept { return m_angle_snap_degrees * std::numbers::pi / 180.0; }
     void setWallSnapEnabled(bool enabled);
+    // Hides the snap glyph and its name until the pointer next moves. Call
+    // after a point is committed or a project opens.
+    void clearSnapCue();
+    [[nodiscard]] bool snapCueCleared() const noexcept { return m_snap_cue_cleared; }
     // Tools that project onto a host consume raw coordinates, independently
     // of the user's retained grid/geometry snapping preference.
     void setRawPointInput(bool enabled);
@@ -768,6 +772,11 @@ public:
     // The host supplies pending authoring state even if its preview is absent.
     // This read-only predicate must not refresh or mutate the canvas.
     void setIdleWallSelectionRequested(std::function<bool()> callback);
+    // True while the host's Draw choice traces existing geometry (Area or
+    // Measured lines). Then a stationary click that snaps to a wall endpoint,
+    // wall corner or area vertex places a node instead of selecting the hit.
+    // Retained selections still take the deselect-only first click.
+    void setVertexStartsDrawingRequested(std::function<bool()> callback);
     // nullopt retains the ordinary transform preview; an engaged empty
     // proposal rejects it. Pending exact projections never invent geometry.
     void setEntityTransformPreviewRequested(std::function<std::optional<std::vector<CanvasEntity>>(
@@ -1195,6 +1204,8 @@ private:
     [[nodiscard]] Vec2 dragDelta(QPointF position) const;
     [[nodiscard]] QStringList rectangleHits(const QRectF& rectangle, bool crossing) const;
     [[nodiscard]] std::optional<Vec2> closingAnchor(QPointF point) const;
+    [[nodiscard]] bool areaVertexSnapActive() const;
+    [[nodiscard]] bool vertexClickStartsDrawing(QPointF point) const;
     [[nodiscard]] Vec2 inputPoint(QPointF point) const;
     void updatePointerCursor(QPointF point);
     void updateCursor(QPointF point);
@@ -1439,6 +1450,7 @@ private:
     bool m_snap_enabled{true};
     double m_angle_snap_degrees{45.0};
     bool m_wall_snap_enabled{false};
+    bool m_snap_cue_cleared{false};
     bool m_raw_point_input{false};
     Qt::KeyboardModifiers m_placement_modifiers{};
     bool m_overview_map_enabled{true};
@@ -1680,6 +1692,7 @@ private:
     std::function<void(QString)> m_entity_edit_gesture_started;
     std::function<bool(bool)> m_interaction_admission_requested;
     std::function<bool()> m_idle_wall_selection_requested;
+    std::function<bool()> m_vertex_starts_drawing_requested;
     std::function<std::optional<std::vector<CanvasEntity>>(
         QString, double, double, Vec2, std::uint64_t)> m_entity_transform_preview_requested;
     std::function<bool(QString, double, double, Vec2)> m_entity_axis_resize_requested;

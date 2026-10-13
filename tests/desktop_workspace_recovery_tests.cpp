@@ -19,6 +19,8 @@
 #include <QElapsedTimer>
 #include <QPushButton>
 #include <QTableWidget>
+#include <QTreeWidget>
+#include <QScreen>
 #include <QKeyEvent>
 #include <QMessageBox>
 #include <QMouseEvent>
@@ -29,6 +31,7 @@
 #include <QUuid>
 
 #include <algorithm>
+#include <optional>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -558,19 +561,21 @@ void test_startup_recovery_selection() {
         "recovery";
     std::filesystem::create_directories(recovery_directory);
     const auto recovery_path = recovery_directory / "recovery-startup.bldproj";
-    std::string recovered_document_id;
-    {
+    const auto discard_path = recovery_directory / "recovery-discard.bldproj";
+    const auto later_path = recovery_directory / "recovery-later.bldproj";
+    const auto write_copy = [](const std::filesystem::path& path, const std::string& archive_id,
+                               std::optional<std::string> source) {
         ProjectWorkspace workspace(Document::create().snapshot());
         auto edit = workspace.prepare(NameRevision{workspace.snapshot().revision(), "Startup edit"});
         (void)workspace.commit(edit);
         const auto snapshot = workspace.capture();
-        recovered_document_id = snapshot.document().document_id();
         const auto history = capture_workspace_history_record(snapshot);
         RecoveryCopyRecord record;
-        record.archive_id = "startup-recovery";
+        record.archive_id = archive_id;
         record.owner_token = "test-owner";
         record.document_id = snapshot.document().document_id();
         record.workspace_epoch = snapshot.epoch();
+        record.source_path = std::move(source);
         // Model a recovery capture that is one authoring generation ahead of
         // the last explicit save. The copy metadata is what startup uses to
         // decide whether asking the user is warranted.
@@ -582,24 +587,23 @@ void test_startup_recovery_selection() {
             {"history", "workspace_history",
              encode_workspace_history_record(snapshot.document(), history, snapshot.active_boundary())},
             {"copy", "recovery_copy", encode_recovery_copy_record(record)}};
-        (void)ProjectStore::save_archive(recovery_path,
+        (void)ProjectStore::save_archive(path,
             ProjectArchiveSnapshot(snapshot.document(), ledger, ArchiveRole::recovery_copy));
-    }
-    bool responded = false;
-    {
-        desktop::MainWindow window;
-        window.setAttribute(Qt::WA_DontShowOnScreen, true);
-        window.show();
-        QApplication::processEvents();
+        return snapshot.document().document_id();
+    };
+    const auto recovered_document_id = write_copy(recovery_path, "startup-recovery", std::nullopt);
+    (void)write_copy(discard_path, "discard-recovery", std::string("C:/Projects/Maple Street.bldproj"));
+    const auto chooser = [] { return QApplication::activeModalWidget() &&
+        QApplication::activeModalWidget()->objectName() == QStringLiteral("recoveryChooser")
+            ? qobject_cast<QDialog*>(QApplication::activeModalWidget()) : nullptr; };
+    const auto run_with = [&](desktop::MainWindow& window, const std::function<bool(QDialog*)>& respond) {
+        bool responded = false;
         QTimer responder;
         responder.setInterval(1);
         QObject::connect(&responder, &QTimer::timeout, &window, [&] {
-            auto* message = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
-            if (message == nullptr || responded) return;
-            auto* accept = message->button(QMessageBox::Yes);
-            require(accept != nullptr, "startup recovery prompt must offer recovery");
-            responded = true;
-            accept->click();
+            auto* dialog = chooser();
+            if (dialog == nullptr || responded) return;
+            responded = respond(dialog);
         });
         responder.start();
         QTimer timeout;
@@ -613,10 +617,77 @@ void test_startup_recovery_selection() {
         timeout.start();
         const auto opened = window.offerStartupRecovery();
         timeout.stop();
-        require(opened, "startup recovery prompt must open the selected copy");
         responder.stop();
+        return std::pair{opened, responded};
+    };
+    {
+        desktop::MainWindow window;
+        window.setAttribute(Qt::WA_DontShowOnScreen, true);
+        window.show();
+        QApplication::processEvents();
+        const auto [opened, responded] = run_with(window, [&](QDialog* dialog) {
+            auto* list = dialog->findChild<QTreeWidget*>(QStringLiteral("recoveryChooserList"));
+            require(list && list->topLevelItemCount() == 2 && list->columnCount() == 3,
+                    "recovery chooser lists each copy with name, last edit and size");
+            QStringList names;
+            for (int row = 0; row < list->topLevelItemCount(); ++row) {
+                const auto* item = list->topLevelItem(row);
+                for (int column = 0; column < 3; ++column) {
+                    const auto text = item->text(column);
+                    require(!text.contains(QStringLiteral("recovery"), Qt::CaseInsensitive) &&
+                            !text.contains(QLatin1Char('\\')) && !text.contains(QStringLiteral(".bldproj")) &&
+                            !text.contains(QStringLiteral("session")) && !text.contains(QStringLiteral("Projects/")),
+                            "recovery chooser rows show no storage paths or session identifiers");
+                }
+                names << item->text(0);
+            }
+            require(names.contains(QStringLiteral("Maple Street")) && names.contains(QStringLiteral("Untitled project")),
+                    "recovery chooser names projects by their saved name or Untitled project");
+            const auto* screen = dialog->screen();
+            require(screen && dialog->width() <= screen->availableGeometry().width(),
+                    "recovery chooser fits the screen");
+            // Discard is confirmed inside the dialog before anything is deleted.
+            for (int row = 0; row < list->topLevelItemCount(); ++row)
+                if (list->topLevelItem(row)->text(0) == QStringLiteral("Maple Street"))
+                    list->setCurrentItem(list->topLevelItem(row));
+            dialog->findChild<QPushButton*>(QStringLiteral("recoveryDiscard"))->click();
+            require(std::filesystem::exists(discard_path), "discard waits for confirmation");
+            dialog->findChild<QPushButton*>(QStringLiteral("recoveryKeepCopy"))->click();
+            require(std::filesystem::exists(discard_path) && list->topLevelItemCount() == 2,
+                    "Keep cancels discard without deleting the copy");
+            dialog->findChild<QPushButton*>(QStringLiteral("recoveryDiscard"))->click();
+            dialog->findChild<QPushButton*>(QStringLiteral("recoveryConfirmDiscard"))->click();
+            require(!std::filesystem::exists(discard_path) && list->topLevelItemCount() == 1,
+                    "confirmed discard deletes only that recovery copy");
+            require(std::filesystem::exists(recovery_path), "other recovery copies are kept");
+            list->setCurrentItem(list->topLevelItem(0));
+            dialog->findChild<QPushButton*>(QStringLiteral("recoveryRecover"))->click();
+            return true;
+        });
+        require(opened, "startup recovery prompt must open the selected copy");
         require(responded && window.document().snapshot().document_id() == recovered_document_id,
                 "startup recovery must load the persisted recovery document");
+    }
+    (void)write_copy(later_path, "later-recovery", std::nullopt);
+    {
+        desktop::MainWindow window;
+        window.setAttribute(Qt::WA_DontShowOnScreen, true);
+        window.show();
+        QApplication::processEvents();
+        const auto [opened, responded] = run_with(window, [&](QDialog* dialog) {
+            dialog->findChild<QPushButton*>(QStringLiteral("recoveryLater"))->click();
+            return true;
+        });
+        require(!opened && responded && std::filesystem::exists(later_path),
+                "Later keeps recovery copies and opens nothing");
+    }
+    {
+        desktop::MainWindow window;
+        window.setAttribute(Qt::WA_DontShowOnScreen, true);
+        window.show();
+        QApplication::processEvents();
+        const auto [opened, responded] = run_with(window, [&](QDialog* dialog) { dialog->reject(); return true; });
+        require(!opened && !responded, "Later is not asked again during the same session");
     }
     std::error_code cleanup_error;
     std::filesystem::remove_all(recovery_directory, cleanup_error);

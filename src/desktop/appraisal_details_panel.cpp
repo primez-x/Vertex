@@ -7,6 +7,7 @@
 
 #include <QFont>
 #include <QHeaderView>
+#include <QTimer>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QPainter>
@@ -23,7 +24,10 @@
 #include <QToolButton>
 #include <QTextDocument>
 #include <QTextOption>
+#include <QEvent>
+#include <QStyle>
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <set>
 #include <utility>
@@ -58,6 +62,22 @@ QString declaration(const Entity* entity,const char* object,const char* key) {
         }
     }
     return QStringLiteral("Undeclared");
+}
+// True while a declared fact still holds the value recorded from the area
+// type chosen when the area was drawn (appraisal_fact_defaults).
+bool from_classification(const Entity* entity,const char* key) {
+    if(!entity)return false;
+    const auto record=entity->properties.find("appraisal_fact_defaults");
+    const auto facts=entity->properties.find("appraisal_facts");
+    if(record==entity->properties.end() || facts==entity->properties.end() || !record->is_object() || !facts->is_object())return false;
+    const auto recorded=record->find("facts");
+    if(recorded==record->end() || !recorded->is_object() || !recorded->contains(key) || !facts->contains(key))return false;
+    return recorded->at(key)==facts->at(key);
+}
+QString fact(const Entity* entity,const char* key,bool& defaulted) {
+    auto value=declaration(entity,"appraisal_facts",key);
+    if(from_classification(entity,key)) {defaulted=true;value+=QStringLiteral(" · from classification");}
+    return value;
 }
 QString row(const QString& label,const QString& value) {
     return QStringLiteral("<tr><td style='padding:3px 8px 3px 0'>%1</td><td style='padding:3px 0'>%2</td></tr>")
@@ -98,6 +118,51 @@ void heading(QVBoxLayout* layout,const QString& title) {
     auto* value=label(layout->parentWidget(),"",title);auto font=value->font();font.setBold(true);value->setFont(font);
     layout->addSpacing(6);layout->addWidget(value);
 }
+// The GLA headline: sans for words ("Totals unavailable"), mono only for a
+// figure. The workspace style sheet keys the face on the "figure" property.
+void set_gla(QLabel* gla,const QString& value,bool figure) {
+    gla->setText(value);
+    auto font=gla->font();
+    if(figure) {font.setFamilies({QStringLiteral("IBM Plex Mono"),QStringLiteral("Cascadia Mono"),QStringLiteral("Consolas")});font.setPointSize(23);}
+    else {font.setFamilies({bundled_sans_family()});font.setPointSize(13);}
+    font.setBold(true);gla->setFont(font);
+    if(gla->property("figure").isValid() && gla->property("figure").toBool()==figure) return;
+    gla->setProperty("figure",figure);
+    gla->style()->unpolish(gla);gla->style()->polish(gla);
+}
+double relative_luminance(const QColor& color) {
+    const auto channel=[](double value){return value<=0.03928?value/12.92:std::pow((value+0.055)/1.055,2.4);};
+    return 0.2126*channel(color.redF())+0.7152*channel(color.greenF())+0.0722*channel(color.blueF());
+}
+// Rich-text links use the theme's accent-text token, which the workspace
+// theme publishes as palette Link. Where Link is Qt's default blue or would not
+// read on this surface (under 4.5:1), the surface's design token is used.
+QColor link_color(const QWidget* widget) {
+    const auto surface=widget->palette().color(QPalette::Window);
+    auto color=widget->palette().color(QPalette::Link);
+    const auto a=relative_luminance(color),b=relative_luminance(surface);
+    if(color==QColor(0,0,0xee) || color==QColor(0,0,0xff) || (std::max(a,b)+0.05)/(std::min(a,b)+0.05)<4.5)
+        color=design::for_surface(surface.lightness()>=128).accent_text;
+    return color;
+}
+class LinkColorSync final : public QObject {
+public:
+    explicit LinkColorSync(QWidget* panel):QObject(panel),panel_(panel) {panel->installEventFilter(this);}
+    bool eventFilter(QObject* watched,QEvent* event) override {
+        if(watched==panel_ && (event->type()==QEvent::PaletteChange || event->type()==QEvent::StyleChange ||
+                               event->type()==QEvent::Show))sync();
+        return false;
+    }
+    void sync() {
+        const auto color=link_color(panel_);
+        for(auto* value:panel_->findChildren<QLabel*>()) {
+            if(value->palette().color(QPalette::Link)==color)continue;
+            auto palette=value->palette();palette.setColor(QPalette::Link,color);value->setPalette(palette);
+        }
+    }
+private:
+    QWidget* panel_;
+};
 QString category(const AppraisalBoundaryStatus& status) {
     if(!status.qualification.qualified) return QStringLiteral("Unqualified");
     if(status.exclusion) return QStringLiteral("Deduction only");
@@ -125,8 +190,10 @@ QIcon area_chip(const AppraisalBoundaryStatus& status,bool light_surface) {
     }
     QPixmap chip(12,12);chip.fill(Qt::transparent);
     QPainter painter(&chip);painter.setRenderHint(QPainter::Antialiasing);
-    QColor outline=fill;outline.setAlpha(255);
-    painter.setPen(QPen(outline,1.0));painter.setBrush(fill);
+    // A filled chip: the opaque area colour, so it reads as a swatch rather
+    // than an outline at legend size.
+    fill.setAlpha(255);
+    painter.setPen(Qt::NoPen);painter.setBrush(fill);
     painter.drawRoundedRect(QRectF(1.5,1.5,9,9),design::radius_sm/2.0,design::radius_sm/2.0);
     painter.end();
     return QIcon(chip);
@@ -194,7 +261,7 @@ struct AppraisalDetailsPanel::Impl {
         const auto id=selected();if(report && !id.isEmpty() && locate_requested)locate_requested(id,report->revision);
     }
     // Issue links reuse the panel's existing actions: select the area (row and
-    // canvas), Edit facts, Setup, or Reporting and rooms.
+    // canvas), Edit facts, Appraisal setup, or Rooms and units.
     void issue_activated(const QString& link) {
         const auto parts=link.split(QLatin1Char(':'));
         bool valid=false;const auto index=parts.size()==3 ? parts[1].toULongLong(&valid) : 0;
@@ -215,6 +282,10 @@ struct AppraisalDetailsPanel::Impl {
         const auto id=selected();const AppraisalBoundaryStatus* boundary=nullptr;
         if(report)for(const auto& value:report->boundaries)if(text(value.boundary_id)==id){boundary=&value;break;}
         locate->setEnabled(boundary!=nullptr);facts->setEnabled(boundary!=nullptr);
+        // Disabled actions say why.
+        const auto pick_first=QStringLiteral("Select an area in the table first.");
+        locate->setToolTip(boundary ? QStringLiteral("Select this area on the drawing") : pick_first);
+        facts->setToolTip(boundary ? QStringLiteral("Declare finish, access, ceiling eligibility and use for this area") : pick_first);
         const auto* selected_owner=boundary?entity(boundary->boundary_id):nullptr;
         const bool has_linework_sources=selected_owner && selected_owner->type=="measurement_boundary" &&
             (selected_owner->extensions.contains("measurement_linework_sources") ||
@@ -225,7 +296,7 @@ struct AppraisalDetailsPanel::Impl {
             provenance->clear();provenance_toggle->setEnabled(false);
             provenance_toggle->setChecked(false);
             trace->setText(report && !report->configured ?
-                QStringLiteral("Areas appear here after Setup. Then select an area and choose Edit facts to declare its finish, access, ceiling eligibility and use.") :
+                QStringLiteral("Areas appear here after Appraisal setup. Then select an area and choose Edit facts to declare its finish, access, ceiling eligibility and use.") :
                 report && report->boundaries.empty() ?
                 QStringLiteral("Draw a measured area, then select it here and choose Edit facts to declare its finish, access, ceiling eligibility and use.") :
                 QStringLiteral("Select an area above to inspect its dimensions, declarations and deductions."));return;
@@ -246,12 +317,15 @@ struct AppraisalDetailsPanel::Impl {
             raw_sources.push_back(QStringLiteral("Deduction ID: %1").arg(text(deduction.id)));
         provenance->setPlainText(raw_sources.join(QLatin1Char('\n')));provenance_toggle->setEnabled(true);
         auto html=QStringLiteral("<p><b>%1</b><br>%2</p>").arg(name(*source,boundary->boundary_id).toHtmlEscaped(),category(*boundary).toHtmlEscaped());
-        auto facts_html=table(row(QStringLiteral("Floor grade"),declaration(entity(floor_id),"appraisal_facts","grade"))+
-            row(QStringLiteral("Finish"),declaration(owner,"appraisal_facts","finish"))+
-            row(QStringLiteral("Access"),declaration(owner,"appraisal_facts","access"))+
-            row(QStringLiteral("Ceiling eligibility"),declaration(owner,"appraisal_facts","ceiling_eligibility"))+
-            row(QStringLiteral("Use"),declaration(owner,"appraisal_facts","area_use"))+
-            row(QStringLiteral("Boundary role"),declaration(owner,"appraisal_facts","boundary_role")));
+        bool defaulted=false;
+        auto facts_html=table(row(QStringLiteral("Floor grade"),fact(entity(floor_id),"grade",defaulted))+
+            row(QStringLiteral("Finish"),fact(owner,"finish",defaulted))+
+            row(QStringLiteral("Access"),fact(owner,"access",defaulted))+
+            row(QStringLiteral("Ceiling eligibility"),fact(owner,"ceiling_eligibility",defaulted))+
+            row(QStringLiteral("Use"),fact(owner,"area_use",defaulted))+
+            row(QStringLiteral("Boundary role"),fact(owner,"boundary_role",defaulted)));
+        // Facts recorded from the area type are explicit and editable.
+        if(defaulted)facts_html=QStringLiteral("<p>From classification · edit facts</p>")+facts_html;
         if(ansi() && boundary->facts)facts_html+=ansi_facts(*boundary->facts);
         if(boundary->measurement) {
             const auto& value=*boundary->measurement;
@@ -305,7 +379,7 @@ struct AppraisalDetailsPanel::Impl {
         } else html+=QStringLiteral("<p><b>Current measurement unavailable.</b> Resolve the source geometry or dependency issues before using numeric dimensions.</p>");
         html+=QStringLiteral("<p><b>Area declarations</b></p>")+facts_html;
         if(!boundary->qualification.issues.empty()) {
-            html+=QStringLiteral("<p><b>Issues to resolve</b><br>Use Edit facts below for this area's declarations, or Setup above for the property policy.</p><ul>");
+            html+=QStringLiteral("<p><b>Issues to resolve</b><br>Use Edit facts below for this area's declarations, or Appraisal setup above for the property policy.</p><ul>");
             for(const auto& issue:boundary->qualification.issues)html+=QStringLiteral("<li>%1</li>").arg(appraisal_issue_message(*source,issue.message).toHtmlEscaped());
             html+=QStringLiteral("</ul>");
         }
@@ -321,6 +395,20 @@ struct AppraisalDetailsPanel::Impl {
         // The document revision is listed with the source IDs in provenance.
         trace->setText(html);
     }
+    // Size the area table to its rows (up to its maximum) so a short list
+    // does not leave a large empty block above the totals.
+    void fit_areas() {
+        int height=areas->header()->isVisible() ? areas->header()->sizeHint().height() : 0;
+        int rows=0;
+        for(QTreeWidgetItemIterator item(areas);*item;++item) {
+            const auto bounds=areas->visualItemRect(*item);
+            height+=bounds.height()>0 ? bounds.height() : std::max(28,areas->fontMetrics().height()+10);
+            ++rows;
+        }
+        height+=2*areas->frameWidth()+4;
+        if(rows==0)height=areas->minimumHeight();
+        areas->setFixedHeight(std::clamp(height,72,320));
+    }
     void show_report(const QString& previous) {
         const QSignalBlocker blocker(areas);areas->clear();
         const bool available=report && source;
@@ -328,7 +416,7 @@ struct AppraisalDetailsPanel::Impl {
         reporting_settings->setEnabled(available && bool(reporting_requested));
         property_name->setText(source && entity(property)?name(*source,property):QStringLiteral("Property details"));
         totals->clear();issues->clear();policy->clear();standards->clear();rounding->clear();rounding->hide();issue_items.clear();
-        gla->setText(QStringLiteral("Totals unavailable"));
+        set_gla(gla,QStringLiteral("Totals unavailable"),false);
         if(!available) {
             status->setText(QStringLiteral("Choose a property to inspect its appraisal areas and declarations."));show_trace();return;
         }
@@ -349,7 +437,7 @@ struct AppraisalDetailsPanel::Impl {
             policy->setText(table(row(QStringLiteral("Measurement basis"),declaration(owner,"appraisal_policy","measurement_basis"))+
                 row(QStringLiteral("Declared policy"),declaration(owner,"appraisal_policy","policy_kind"))+
                 row(QStringLiteral("Policy version"),declaration(owner,"appraisal_policy","version")))+
-                QStringLiteral("<p>Use Setup to enable and validate the appraisal policy.</p>"));
+                QStringLiteral("<p>Use Appraisal setup to enable and validate the appraisal policy.</p>"));
             standards->setText(QStringLiteral("ANSI review not verified. A measurement standard has not been verified for this property."));
         }
         // GLA always states its current state: the figure, or why it is
@@ -357,22 +445,22 @@ struct AppraisalDetailsPanel::Impl {
         rounding->setVisible(report->configured);
         if(report->configured)rounding->setText(QStringLiteral("Rounding: ")+appraisal_rounding_basis(*report,metric));
         if(!report->configured)status->setText(QStringLiteral("GLA withheld: Appraisal is not set up for this property, so no area has a declared basis for GLA. "
-            "Use Setup to choose the policy and measurement basis, then declare each area's facts with Edit facts."));
+            "Use Appraisal setup to choose the policy and measurement basis, then declare each area's facts with Edit facts."));
         else if(!report->qualified || !report->calculation)status->setText(report->issues.empty() ?
             QStringLiteral("GLA withheld: the current measurements cannot be totaled. Individual measurements are diagnostics.") :
             QStringLiteral("GLA withheld: %1 %2 below must be resolved first. Select an issue to open its area. Individual measurements are diagnostics.")
                 .arg(report->issues.size()).arg(report->issues.size()==1 ? QStringLiteral("issue") : QStringLiteral("issues")));
         else {
-            status->setText(ansi()?QStringLiteral("ANSI Z765-2021 profile · rules v%1. Whole sq ft; dimensions: 0.1 ft. Final standards validation pending.").arg(report->policy->version):
-                QStringLiteral("Qualified under the declared property policy. Totals sum unrounded contributions and round once."));
+            status->setText(ansi()?QStringLiteral("ANSI Z765-2021 profile · rules v%1. Final standards validation pending.").arg(report->policy->version):
+                QStringLiteral("Qualified under the declared property policy."));
             if(ansi() && std::any_of(report->boundaries.begin(),report->boundaries.end(),[](const auto& boundary) {
                 return !boundary.exclusion && boundary.facts && boundary.facts->ansi &&
                     boundary.facts->ansi->ceiling.kind==CeilingKind::sloped;
             }))status->setText(status->text()+(report->policy->version==1 ?
-                QStringLiteral(" Legacy V1 sloped-room totals are provisional. Setup offers the finished-room V2 rule.") :
+                QStringLiteral(" Legacy V1 sloped-room totals are provisional. Appraisal setup offers the finished-room V2 rule.") :
                 QStringLiteral(" V2 sloped rooms use countable finished area. Final ANSI validation remains pending.")));
             const auto& aggregate=report->calculation->property;
-            gla->setText(area(aggregate.gla().total.square_metres));
+            set_gla(gla,area(aggregate.gla().total.square_metres),true);
             double all=0;QString residential,nonstandard,other;
             for(const auto& [kind,bucket]:aggregate.by_category) {
                 all+=bucket.total.square_metres;
@@ -415,8 +503,8 @@ struct AppraisalDetailsPanel::Impl {
                 else if(!value.subject.isEmpty())item=QStringLiteral("<b>%1</b>: ").arg(value.subject.toHtmlEscaped());
                 item+=value.text.toHtmlEscaped();
                 if(value.fix==Fix::facts && listed)item+=QStringLiteral(" <a href='issue:%1:facts'>Edit facts</a>").arg(index);
-                else if(value.fix==Fix::setup)item+=QStringLiteral(" <a href='issue:%1:setup'>Open Setup</a>").arg(index);
-                else if(value.fix==Fix::reporting && reporting_requested)item+=QStringLiteral(" <a href='issue:%1:reporting'>Reporting and rooms</a>").arg(index);
+                else if(value.fix==Fix::setup)item+=QStringLiteral(" <a href='issue:%1:setup'>Open Appraisal setup</a>").arg(index);
+                else if(value.fix==Fix::reporting && reporting_requested)item+=QStringLiteral(" <a href='issue:%1:reporting'>Rooms and units</a>").arg(index);
                 else if(value.fix==Fix::locate && listed)item+=QStringLiteral(" <a href='issue:%1:select'>Show on canvas</a>").arg(index);
                 html+=QStringLiteral("<li>%1</li>").arg(item);
             }
@@ -462,7 +550,13 @@ struct AppraisalDetailsPanel::Impl {
                 }
             }
             auto* item=new QTreeWidgetItem(floor);item->setData(0,Qt::UserRole,text(boundary.boundary_id));
-            item->setText(0,name(*source,boundary.boundary_id));
+            // Rows sit under their floor, so drop the repeated " · <floor>".
+            auto area_name=name(*source,boundary.boundary_id);
+            if(!floor_id.empty()) {
+                const auto suffix=QStringLiteral(" · ")+name(*source,floor_id);
+                if(area_name.endsWith(suffix) && area_name.size()>suffix.size())area_name.chop(suffix.size());
+            }
+            item->setText(0,area_name);item->setToolTip(0,name(*source,boundary.boundary_id));
             const auto type=category(boundary);
             item->setText(1,type);item->setIcon(1,area_chip(boundary,light_surface));
             item->setToolTip(1,type);
@@ -488,7 +582,8 @@ struct AppraisalDetailsPanel::Impl {
                 if(!totaled)total->setToolTip(2,QStringLiteral("Totals are withheld until the issues above are resolved."));
             }
         }
-        areas->expandAll();areas->setCurrentItem(selected_item);show_trace();
+        areas->expandAll();areas->setCurrentItem(selected_item);
+        fit_areas();show_trace();
     }
 };
 
@@ -505,17 +600,17 @@ AppraisalDetailsPanel::AppraisalDetailsPanel(QWidget* parent):QWidget(parent),im
     auto& p=*impl_;p.property_name=label(content,"appraisalDetailsProperty");layout->addWidget(p.property_name);
     p.property_name->setTextFormat(Qt::PlainText);
     heading(layout,QStringLiteral("Above-grade finished area (GLA)"));p.gla=label(content,"appraisalDetailsGla",QStringLiteral("Totals unavailable"));
-    auto total_font=font;total_font.setPointSize(23);total_font.setBold(true);p.gla->setFont(total_font);layout->addWidget(p.gla);
-    p.gla->setTextFormat(Qt::PlainText);
+    layout->addWidget(p.gla);
+    p.gla->setTextFormat(Qt::PlainText);set_gla(p.gla,p.gla->text(),false);
     // Labels the rounding basis the displayed GLA and every area follow.
     p.rounding=label(content,"appraisalDetailsRounding");layout->addWidget(p.rounding);
     p.rounding->setTextFormat(Qt::PlainText);p.rounding->hide();
     p.status=label(content,"appraisalDetailsStatus");layout->addWidget(p.status);
     p.status->setTextFormat(Qt::PlainText);
     auto* actions=new QHBoxLayout;actions->setSpacing(6);
-    p.setup=new QPushButton(QStringLiteral("Setup"),content);p.setup->setObjectName(QStringLiteral("appraisalDetailsSetup"));actions->addWidget(p.setup);
-    p.full_report=new QPushButton(QStringLiteral("Full report"),content);p.full_report->setObjectName(QStringLiteral("appraisalDetailsReport"));actions->addWidget(p.full_report);layout->addLayout(actions);
-    p.reporting_settings=new QPushButton(QStringLiteral("Reporting and rooms…"),content);p.reporting_settings->setObjectName(QStringLiteral("appraisalDetailsReporting"));layout->addWidget(p.reporting_settings);
+    p.setup=new QPushButton(QStringLiteral("Appraisal setup"),content);p.setup->setObjectName(QStringLiteral("appraisalDetailsSetup"));actions->addWidget(p.setup);
+    p.full_report=new QPushButton(QStringLiteral("Open report"),content);p.full_report->setObjectName(QStringLiteral("appraisalDetailsReport"));actions->addWidget(p.full_report);layout->addLayout(actions);
+    p.reporting_settings=new QPushButton(QStringLiteral("Rooms and units…"),content);p.reporting_settings->setObjectName(QStringLiteral("appraisalDetailsReporting"));layout->addWidget(p.reporting_settings);
     // Withheld-GLA issues sit beside the status that refers to them; each
     // issue links to its area and to the action that resolves it.
     p.issues=label(content,"appraisalDetailsIssues");layout->addWidget(p.issues);
@@ -526,7 +621,11 @@ AppraisalDetailsPanel::AppraisalDetailsPanel(QWidget* parent):QWidget(parent),im
     p.areas->setAccessibleName(QStringLiteral("Areas by floor with GLA and non-GLA totals"));
     p.areas->setColumnCount(3);p.areas->setHeaderLabels({QStringLiteral("Name"),QStringLiteral("Type"),QStringLiteral("Area")});
     p.areas->headerItem()->setTextAlignment(2,Qt::AlignRight|Qt::AlignVCenter);
-    p.areas->setMinimumWidth(0);p.areas->setMinimumHeight(180);p.areas->setMaximumHeight(320);
+    p.areas->setMinimumWidth(0);p.areas->setMinimumHeight(72);p.areas->setMaximumHeight(320);
+    p.areas->setTextElideMode(Qt::ElideNone);p.areas->setUniformRowHeights(false);
+    p.areas->setSelectionBehavior(QAbstractItemView::SelectRows);p.areas->setAllColumnsShowFocus(true);
+    // One continuous highlight per row, not a rounded pill per cell.
+    p.areas->setStyleSheet(QStringLiteral("QTreeWidget::item { border-radius: 0px; margin: 0px; } QTreeWidget::item:focus { border: 0px; }"));
     p.areas->setIndentation(10);p.areas->setWordWrap(true);p.areas->setRootIsDecorated(false);
     p.areas->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);p.areas->setSelectionMode(QAbstractItemView::SingleSelection);
     p.areas->header()->setMinimumSectionSize(45);p.areas->header()->setStretchLastSection(false);
@@ -557,7 +656,8 @@ AppraisalDetailsPanel::AppraisalDetailsPanel(QWidget* parent):QWidget(parent),im
     p.review_sources->setObjectName(QStringLiteral("appraisalDetailsReviewSources"));layout->addWidget(p.review_sources);
     heading(layout,QStringLiteral("Area dimensions and trace"));p.trace=label(content,"appraisalDetailsTrace");layout->addWidget(p.trace);
     p.provenance_toggle=new QToolButton(content);p.provenance_toggle->setObjectName(QStringLiteral("appraisalDetailsProvenanceToggle"));
-    p.provenance_toggle->setText(QStringLiteral("Source IDs and fingerprint"));p.provenance_toggle->setCheckable(true);
+    p.provenance_toggle->setText(QStringLiteral("Advanced"));p.provenance_toggle->setAutoRaise(true);
+    p.provenance_toggle->setToolTip(QStringLiteral("Source record identifiers and revision, for audit"));p.provenance_toggle->setCheckable(true);
     p.provenance_toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);p.provenance_toggle->setArrowType(Qt::RightArrow);
     layout->addWidget(p.provenance_toggle);
     p.provenance=new QPlainTextEdit(content);p.provenance->setObjectName(QStringLiteral("appraisalDetailsProvenance"));
@@ -569,6 +669,7 @@ AppraisalDetailsPanel::AppraisalDetailsPanel(QWidget* parent):QWidget(parent),im
     });
     layout->addStretch();scroll->setWidget(content);outer->addWidget(scroll);
     connect(p.areas,&QTreeWidget::currentItemChanged,this,[this]{impl_->show_trace();});
+    connect(p.areas->header(),&QHeaderView::sectionResized,this,[this]{QTimer::singleShot(0,this,[this]{impl_->fit_areas();});});
     connect(p.areas,&QTreeWidget::itemActivated,this,[this]{impl_->locate_current();});
     connect(p.locate,&QPushButton::clicked,this,[this]{impl_->locate_current();});
     connect(p.facts,&QPushButton::clicked,this,[this]{const auto id=impl_->selected();if(impl_->report && !id.isEmpty() && impl_->facts_requested)impl_->facts_requested(id,impl_->report->revision);});
@@ -577,6 +678,7 @@ AppraisalDetailsPanel::AppraisalDetailsPanel(QWidget* parent):QWidget(parent),im
     connect(p.reporting_settings,&QPushButton::clicked,this,[this]{if(impl_->report && impl_->reporting_requested)impl_->reporting_requested(text(impl_->property),impl_->report->revision);});
     connect(p.review_sources,&QPushButton::clicked,this,[this]{const auto id=impl_->selected();if(impl_->report && !id.isEmpty() && impl_->source_review_requested)impl_->source_review_requested(id,impl_->report->revision);});
     p.show_report({});
+    (new LinkColorSync(this))->sync();
 }
 AppraisalDetailsPanel::~AppraisalDetailsPanel()=default;
 void AppraisalDetailsPanel::setDocument(const DocumentSnapshot& source,const std::string& property_id,bool metric,
@@ -604,7 +706,7 @@ void AppraisalDetailsPanel::setDocument(const DocumentSnapshot& source,const std
         if(p.report->configured && semantic_phase_ids)p.semantic_phase_ids=*semantic_phase_ids;
         p.show_report(selected);
     }
-    catch(const std::exception& failure) {p.report.reset();p.show_report({});p.status->setText(QStringLiteral("GLA withheld: the property declarations cannot be read. %1 Use Setup to correct them.").arg(appraisal_issue_message(source,failure.what())));}
+    catch(const std::exception& failure) {p.report.reset();p.show_report({});p.status->setText(QStringLiteral("GLA withheld: the property declarations cannot be read. %1 Use Appraisal setup to correct them.").arg(appraisal_issue_message(source,failure.what())));}
 }
 void AppraisalDetailsPanel::setSelectedBoundary(const QString& boundary_id) {
     QTreeWidgetItem* selected=nullptr;QTreeWidgetItemIterator item(impl_->areas);

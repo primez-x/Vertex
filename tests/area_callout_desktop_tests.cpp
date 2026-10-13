@@ -84,14 +84,14 @@ void independent_live_callouts_and_reopen() {
     name_area(window,id,"Studio");
     auto legacy=labels(canvas(window),id);
     require(legacy.size()==1 && legacy.front().callout_role.isEmpty() && legacy.front().text.contains("Studio") &&
-        legacy.front().text.contains("16.00"),"legacy name and live quantity remain combined until explicit adoption");
+        legacy.front().text.contains("16.0"),"legacy name and live quantity remain combined until explicit adoption");
     const auto original=window.document().snapshot();
     control<QPushButton>(window,"separateAreaCallouts").click();
     auto separated=window.document().snapshot();
     require(separated.revision()==original.revision()+1 && separated.entities().at(id.toStdString())==original.entities().at(id.toStdString()),
         "native separation is one presentation-only command");
     require(labels(canvas(window),id).size()==2 && callout(canvas(window),id,"area_name").text=="Studio" &&
-        callout(canvas(window),id,"area_calculation").text.contains("16.00"),"separation creates two live labels with the same native owner");
+        callout(canvas(window),id,"area_calculation").text.contains("16.0"),"separation creates two live labels with the same native owner");
     require(presentation(separated,id,"area_name").inherit_appearance && presentation(separated,id,"area_calculation").inherit_appearance,
         "new callouts inherit theme readability");
     require(window.separateSelectedAreaCallouts() && window.document().revision()==separated.revision(),"repeated adoption is idempotent");
@@ -114,7 +114,7 @@ void independent_live_callouts_and_reopen() {
     const auto after_place=window.document().snapshot();
     const auto calc_before_hide=presentation(after_place,id,"area_calculation");
     require(window.editSelectedAreaCallout("area_name","1.1","3.1","3.5","#2455AA","left",false,"0"),"hide only name callout");
-    require(labels(canvas(window),id).size()==1 && callout(canvas(window),id,"area_calculation").text.contains("16.00") &&
+    require(labels(canvas(window),id).size()==1 && callout(canvas(window),id,"area_calculation").text.contains("16.0") &&
         std::any_of(canvas(window).entities().begin(),canvas(window).entities().end(),[&](const auto& value){return value.id==id;}),
         "hiding a callout retains the quantity and area geometry");
     require(window.undoCommand() && labels(canvas(window),id).size()==2 && window.redoCommand() && labels(canvas(window),id).size()==1,
@@ -168,7 +168,7 @@ void independent_live_callouts_and_reopen() {
         return edge.segment.start.x==4 && edge.segment.start.y==4;});
     require(vertex!=identified.segments.end() && window.moveSelectedBoundaryVertex(QString::fromStdString(vertex->start_vertex_id),{6,4}),
         "native stable-ID geometry edit changes actual area");
-    require(callout(canvas(window),id,"area_calculation").text.contains("20.00") && callout(canvas(window),id,"area_name").text=="Studio",
+    require(callout(canvas(window),id,"area_calculation").text.contains("20.0") && callout(canvas(window),id,"area_name").text=="Studio",
         "calculation updates from geometry while name remains independent");
     capture(window,"area-callouts-light.png");
     const auto expected=window.document().snapshot();const auto path=files.filePath("callouts.bldproj");
@@ -176,7 +176,7 @@ void independent_live_callouts_and_reopen() {
     MainWindow reopened({},nullptr,files.filePath("text-library.json"));display(reopened);
     require(reopened.openProject(path) && reopened.document().snapshot().entities()==expected.entities() && reopened.selectEntity(id),
         "native reopen retains exact callout records and source geometry");
-    require(callout(canvas(reopened),id,"area_calculation").text.contains("20.00") &&
+    require(callout(canvas(reopened),id,"area_calculation").text.contains("20.0") &&
         callout(canvas(reopened),id,"area_name").text_alignment=="left","reopen rederives quantity and restores independent name alignment");
     require(reopened.editArchitecturalViewPresentation("view-plan","1.2","100",".5",".25",true,"solid","1","medium",
         id,std::nullopt,true),"named sheet view can filter by native area owner");
@@ -194,7 +194,7 @@ void independent_live_callouts_and_reopen() {
     reopened.document().apply(ApplyEntityChanges{before_conflict.revision(),
         {EntityChange::upsert(make_annotation_entity("conflicting-callouts",duplicate))}, {},"Seed individually valid duplicate providers"});
     require(reopened.selectEntity(id) && labels(canvas(reopened),id).size()==1 &&
-        callout(canvas(reopened),id,"area_calculation").text.contains("20.00") &&
+        callout(canvas(reopened),id,"area_calculation").text.contains("20.0") &&
         control<QLabel>(reopened,"areaCalloutDiagnostic").text().contains("Conflicting"),
         "cross-provider conflict withholds only its affected role and diagnoses it");
     require(std::any_of(canvas(reopened).entities().begin(),canvas(reopened).entities().end(),[&](const auto& value){
@@ -207,7 +207,7 @@ void independent_live_callouts_and_reopen() {
     require(reopened.saveProjectAs(conflict_path) && reopened.createNewProject(),"valid conflict project saves without provider substitution");
     MainWindow conflict_open({},nullptr,files.filePath("text-library.json"));display(conflict_open);
     require(conflict_open.openProject(conflict_path) && conflict_open.selectEntity(id) && labels(canvas(conflict_open),id).size()==1 &&
-        callout(canvas(conflict_open),id,"area_calculation").text.contains("20.00"),"actual native open renders valid conflicting providers without a global exception");
+        callout(canvas(conflict_open),id,"area_calculation").text.contains("20.0"),"actual native open renders valid conflicting providers without a global exception");
     capture(conflict_open,"area-callouts-conflict.png");
 }
 
@@ -224,8 +224,8 @@ void generic_measurement_callouts_do_not_claim_appraisal() {
     name_area(window,id,"studio-West_1");
     require(window.separateSelectedAreaCallouts(),"generic name and calculated value can be separated");
     require(callout(canvas(window),id,"area_name").text=="studio-West_1" &&
-        callout(canvas(window),id,"area_calculation").text.contains("16.00"),"authored name is exact and measurement area comes from geometry");
-    require(window.editSelectedFactor("1/2") && callout(canvas(window),id,"area_calculation").text.contains("8.00"),
+        callout(canvas(window),id,"area_calculation").text.contains("16.0"),"authored name is exact and measurement area comes from geometry");
+    require(window.editSelectedFactor("1/2") && callout(canvas(window),id,"area_calculation").text.contains("8.0"),
         "generic callout uses the same stored factor as Details");
     const Boundary cut{{{1,1},{2,1},0},{{2,1},{2,2},0},{{2,2},{1,2},0},{{1,2},{1,1},0}};
     const auto deduction=window.createBoundary(cut,"living");
@@ -233,17 +233,17 @@ void generic_measurement_callouts_do_not_claim_appraisal() {
     auto source=window.document().snapshot();auto parent=source.entities().at(id.toStdString());
     parent.properties["deduction_ids"]=nlohmann::json::array({deduction.toStdString()});
     window.document().apply(ApplyEntityChanges{source.revision(),{EntityChange::upsert(parent)}, {},"Add actual measurement deduction"});
-    require(window.selectEntity(id) && callout(canvas(window),id,"area_calculation").text.contains("7.50"),
+    require(window.selectEntity(id) && callout(canvas(window),id,"area_calculation").text.contains("7.5"),
         "actual geometric deduction precedes the stored factor");
     window.setMetricUnits(false);
-    require(callout(canvas(window),id,"area_calculation").text.contains("80.73"),"generic net quantity converts to square feet");
+    require(callout(canvas(window),id,"area_calculation").text.contains("80.7"),"generic net quantity converts to square feet");
     window.setMetricUnits(true);
     const auto path=files.filePath("generic-callouts.bldproj");
     require(window.saveProjectAs(path),"generic calculation saves natively");
     require(window.createNewProject(),"release the saved native project before opening another editor");
     MainWindow reopened({},nullptr,files.filePath("text-library.json"));display(reopened);
     require(reopened.openProject(path) && reopened.selectEntity(id) &&
-        callout(canvas(reopened),id,"area_calculation").text.contains("7.50"),"native reopen derives the same generic net quantity");
+        callout(canvas(reopened),id,"area_calculation").text.contains("7.5"),"native reopen derives the same generic net quantity");
     for(const auto& corrupt_id:{id,deduction}) {
         const auto before=reopened.document().snapshot();auto corrupt=before.entities().at(corrupt_id.toStdString());
         corrupt.properties["property_id"]="other-property";
@@ -254,7 +254,7 @@ void generic_measurement_callouts_do_not_claim_appraisal() {
         require(std::none_of(invalid.begin(),invalid.end(),[](const auto& value){return value.callout_role=="area_calculation" && !value.text.isEmpty();}),
             "contradictory parent or deduction property ownership withholds a numeric callout");
         require(reopened.undoCommand(),"restore valid measurement owner context");reopened.setMetricUnits(true);
-        require(callout(canvas(reopened),id,"area_calculation").text.contains("7.50"),"Undo restores the exact valid generic calculation");
+        require(callout(canvas(reopened),id,"area_calculation").text.contains("7.5"),"Undo restores the exact valid generic calculation");
     }
     auto& workflow=control<QComboBox>(reopened,"calculationWorkflow");
     workflow.setCurrentIndex(workflow.findData(QStringLiteral("appraisal")));
@@ -276,7 +276,7 @@ void stale_physical_calculation_is_withheld() {
     const auto rooms=window.detectRoomBoundariesFromExistingWalls("office");
     require(rooms.size()==1 && window.selectEntity(rooms.front()),"detect actual clear physical room");
     const auto id=rooms.front();name_area(window,id,"Office");
-    // Clear 3.8 m x 2.8 m = 10.64 m² (centerline would be 12 m²); a physical
+    // Clear 3.8 m x 2.8 m = 10.6 m² (centerline would be 12 m²); a physical
     // room readout uses the design-system metric area: one decimal, "m²".
     require(window.separateSelectedAreaCallouts() &&
         callout(canvas(window),id,"area_calculation").text==QStringLiteral(u"10.6 m²"),

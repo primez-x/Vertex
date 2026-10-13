@@ -127,12 +127,14 @@ void appraisal_tests() {
     auto tiny = legacy;
     tiny.id = "tiny";
     tiny.floor_id = "floor-2";
+    // Two places make the single rounding observable (the default is one).
+    profile.decimal_places = 2;
     check(calculate_appraisal_areas({legacy, tiny}, profile).property.gla().total.display.text == "0.01",
           "Appraisal aggregate rounds once after summing unrounded areas");
     profile.classifications["living"].appraisal_category = static_cast<Category>(999);
     rejected([&] { (void)calculate_appraisal_areas({legacy}, profile); });
     const auto empty = calculate_appraisal_areas({}, builtin_appraisal_profile());
-    check(empty.property.by_category.size() == 16 && empty.property.gla().total.display.text == "0.00",
+    check(empty.property.by_category.size() == 16 && empty.property.gla().total.display.text == "0.0",
           "Empty reports expose all zero-valued categories");
 }
 
@@ -241,7 +243,7 @@ void ansi_policy_tests() {
     check(!qualified(facts).qualified, "Room evidence must match current complete-room geometry");
     const auto profile = ansi_appraisal_profile();
     check(profile.decimal_places == 0 && profile.display_unit == AreaUnit::square_foot &&
-        builtin_appraisal_profile().decimal_places == 2 &&
+        builtin_appraisal_profile().decimal_places == 1 &&
         !builtin_appraisal_profile().classifications.contains("adu_above_grade_finished"),
         "Opt-in canonical reporting leaves the builtin legacy profile unchanged");
     auto first = room("first", rectangle(0, 0, 1, 0.151 * 0.09290304));

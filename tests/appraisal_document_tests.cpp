@@ -374,18 +374,18 @@ void qualified_document_recalculates_from_geometry() {
             "declared appraisal document must qualify without treating room geometry as an appraisal area");
     near(report.calculation->property.gla().total.square_metres, 9.290304, 1e-8,
          "document projection must use authoritative geometry");
-    require(report.calculation->property.gla().total.display.text == "100.00" &&
+    require(report.calculation->property.gla().total.display.text == "100.0" &&
                 report.calculation->property.gla().area_ids ==
                     std::vector<std::string>{"area-1"},
             "automatic GLA must retain square-foot output and source provenance");
-    require(report.display_decimal_places == 2,
-            "legacy appraisal properties must retain two display decimals");
+    require(report.display_decimal_places == 1,
+            "appraisal properties without a precision use the design system's one decimal");
     const auto& trace = status(report, "area-1").measurement;
     require(trace && trace->area_id == "area-1" && trace->building_id == "building-1" &&
                 trace->floor_id == "floor-1" && trace->classification == "above_grade_finished" &&
                 trace->profile_id == "vertex-appraisal" && trace->profile_version == 1 &&
                 trace->factor.numerator == 1 && trace->factor.denominator == 1 &&
-                trace->deductions.empty() && trace->display.text == "100.00",
+                trace->deductions.empty() && trace->display.text == "100.0",
             "qualified status must expose the aggregate's full measured trace and provenance");
     near(trace->base_square_metres, 9.290304, 1e-8, "trace must retain gross geometry");
     near(trace->perimeter_metres, 12.192, 1e-8, "trace must retain analytical perimeter");
@@ -461,7 +461,7 @@ void declaration_and_factor_failures_retain_physical_traces() {
         near(trace.net_square_metres, 9, 1e-9, "unqualified trace retains physical net");
         near(trace.factored_square_metres, nonunity ? 6 : 9, 1e-9, "unqualified trace exposes adjustment separately");
         require(trace.factor.numerator == (nonunity ? 2 : 1) && trace.factor.denominator == (nonunity ? 3 : 1) &&
-                    trace.display.text == (nonunity ? "6.00" : "9.00") &&
+                    trace.display.text == (nonunity ? "6.0" : "9.0") &&
                     boundary.qualification.physical_square_metres && boundary.qualification.adjusted_square_metres,
                 "exact factor, adjusted display and existing qualification diagnostics must remain inspectable");
         near(*boundary.qualification.physical_square_metres, 9, 1e-9, "qualification physical diagnostic stays unchanged");
@@ -501,7 +501,7 @@ void overlapping_void_deductions_expose_requested_and_applied_amounts() {
     for (const auto* id : {"void-a", "void-b"}) {
         const auto& excluded = status(report, id);
         require(excluded.exclusion && excluded.qualification.qualified && excluded.measurement &&
-                    excluded.measurement->display.text == "4.00", "each linked exclusion remains independently inspectable");
+                    excluded.measurement->display.text == "4.0", "each linked exclusion remains independently inspectable");
         near(excluded.measurement->net_square_metres, 4, 1e-9, "void's own physical trace remains complete");
     }
 }
@@ -513,7 +513,7 @@ void exclusion_only_report_retains_measurement_without_totals() {
     const auto report = sketch::build_appraisal_document_report(document.snapshot(), "property-1");
     const auto& excluded = status(report, "area-1");
     require(!report.qualified && !report.calculation && excluded.exclusion &&
-                excluded.qualification.qualified && excluded.measurement && excluded.measurement->display.text == "100.00",
+                excluded.qualification.qualified && excluded.measurement && excluded.measurement->display.text == "100.0",
             "an unlinked exclusion remains measurable but cannot supply property totals");
     near(excluded.measurement->net_square_metres, 9.290304, 1e-8, "exclusion-only report retains valid physical geometry");
     require(std::any_of(report.issues.begin(), report.issues.end(), [](const auto& issue) {
@@ -530,7 +530,7 @@ void global_overlap_withholds_totals_but_retains_individual_traces() {
         [](const auto& issue) { return issue.find("overlap") != std::string::npos; }), "same-floor overlap must withhold property totals");
     for (const auto* id : {"area-1", "area-2"}) {
         const auto& boundary = status(report, id);
-        require(boundary.qualification.qualified && boundary.measurement && boundary.measurement->display.text == "100.00",
+        require(boundary.qualification.qualified && boundary.measurement && boundary.measurement->display.text == "100.0",
             "global aggregation failure must retain valid individual qualification and measurement");
         near(boundary.measurement->net_square_metres, 9.290304, 1e-8, "global overlap must not corrupt individual geometry");
     }
@@ -609,7 +609,7 @@ void missing_policy_retains_diagnostics_without_inventing_declared_policy() {
         parent.qualification.policy_id.empty() && parent.qualification.policy_version == 0 &&
         parent.qualification.physical_square_metres && parent.qualification.adjusted_square_metres &&
         parent.measurement->factor.numerator == 1 && parent.measurement->factor.denominator == 2 &&
-        parent.measurement->classification == "unqualified" && parent.measurement->display.text == "4.15",
+        parent.measurement->classification == "unqualified" && parent.measurement->display.text == "4.1",
         "missing policy leaves valid physical/adjusted geometry diagnostic with exact factor and rounding");
     near(parent.measurement->base_square_metres, 9.290304, 1e-8, "missing-policy trace gross area");
     near(parent.measurement->deducted_square_metres, 1, 1e-8, "missing-policy trace retains linked deduction");
@@ -698,10 +698,10 @@ void report_excludes_other_property_site_and_phase_hidden_boundaries() {
 }
 
 void display_profile_preserves_fixed_appraisal_semantics() {
-    require(sketch::appraisal_display_profile(json::object()).decimal_places == 2 &&
+    require(sketch::appraisal_display_profile(json::object()).decimal_places == 1 &&
                 sketch::appraisal_display_profile({{"calculation_profile", json::object()}})
-                    .decimal_places == 2,
-            "absent decimal settings must retain the legacy default");
+                    .decimal_places == 1,
+            "absent decimal settings use the design system's one-decimal default (1,842.5 sf)");
     const auto builtin = sketch::builtin_appraisal_profile();
     for (const auto& value : std::vector<json>{0, 1, 6, std::uint64_t{0}, std::uint64_t{6}}) {
         const json properties = {{"calculation_profile",

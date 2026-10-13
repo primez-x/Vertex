@@ -261,7 +261,7 @@ public:
         status=new QLabel(dialog);status->setObjectName(QStringLiteral("physicalPhaseRoomReviewStatus"));
         status->setWordWrap(true);status->setTextFormat(Qt::PlainText);layout->addWidget(status);
         auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,dialog);
-        apply=buttons->button(QDialogButtonBox::Apply);apply->setObjectName(QStringLiteral("physicalPhaseRoomReviewApply"));
+        apply=buttons->button(QDialogButtonBox::Apply);apply->setObjectName(QStringLiteral("physicalPhaseRoomReviewApply"));apply->setDefault(true);
         apply->setText(destination.alternative_id?QStringLiteral("Apply alternative and reviewed rooms"):QStringLiteral("Apply baseline selection"));
         if (wall_authoring_intent) apply->setText(wall_authoring_intent->wall_demolition.is_null()?
             QStringLiteral("Apply wall edit and reviewed rooms"):QStringLiteral("Apply wall demolition and reviewed rooms"));

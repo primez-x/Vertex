@@ -12,6 +12,7 @@
 #include "plan_canvas.hpp"
 #include "vertex_design_tokens.hpp"
 #include "measurement_format.hpp"
+#include "catalog_market_variants.hpp"
 #include "advanced_section.hpp"
 #include "bundled_fonts.hpp"
 #include "assembly_profile_canvas_geometry.hpp"
@@ -285,6 +286,7 @@
 #include <QPushButton>
 #include <QStringList>
 #include <QScrollArea>
+#include <QShortcut>
 #include <QScrollBar>
 #include <QScreen>
 #include <QScopedValueRollback>
@@ -1472,6 +1474,86 @@ QIcon modern_toolbar_icon(const char* paths, QWidget* palette_owner) {
     return toolbar_svg_icon(QByteArray(paths), palette_owner);
 }
 
+// Windows draws the title bar outside Qt. Ask DWM for its dark frame when the
+// window's own surface is dark (the dark and high-contrast themes).
+void apply_native_title_bar(QWidget* window) {
+#ifdef _WIN32
+    if (!window || !window->isWindow() || !window->testAttribute(Qt::WA_WState_Created) ||
+        QGuiApplication::platformName() != QStringLiteral("windows")) return;
+    const auto handle = reinterpret_cast<HWND>(window->internalWinId());
+    if (!handle) return;
+    // Resolved at run time: dwmapi.h needs the full Windows UI headers.
+    using SetWindowAttribute = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+    static const auto set_window_attribute = [] {
+        const auto module = LoadLibraryW(L"dwmapi.dll");
+        return module ? reinterpret_cast<SetWindowAttribute>(
+                            reinterpret_cast<void*>(GetProcAddress(module, "DwmSetWindowAttribute")))
+                      : nullptr;
+    }();
+    if (!set_window_attribute) return;
+    const BOOL dark = window->palette().color(QPalette::Window).lightness() < 128 ? TRUE : FALSE;
+    constexpr DWORD immersive_dark_mode = 20; // DWMWA_USE_IMMERSIVE_DARK_MODE
+    (void)set_window_attribute(handle, immersive_dark_mode, &dark, sizeof(dark));
+#else
+    (void)window;
+#endif
+}
+
+void apply_native_title_bars() {
+    const auto apply = [] {
+        for (auto* window : QApplication::topLevelWidgets())
+            if (window->isVisible()) apply_native_title_bar(window);
+    };
+    apply();
+    // Qt's Windows platform resets the frame to the system scheme while it
+    // processes the palette change; apply the theme's frame again after it.
+    if (qApp) QTimer::singleShot(0, qApp, apply);
+}
+
+// Enter performs a dialog's verb. Qt only promotes an accept-role button, so
+// an Apply|Cancel box would otherwise leave Cancel (or nothing) on Enter.
+void make_dialog_verb_default(QDialogButtonBox* box) {
+    if (!box || qobject_cast<QMessageBox*>(box->window())) return;
+    for (auto* button : box->buttons())
+        if (auto* push = qobject_cast<QPushButton*>(button); push && push->isDefault()) return;
+    for (const auto which : {QDialogButtonBox::Save, QDialogButtonBox::Ok, QDialogButtonBox::Apply,
+                             QDialogButtonBox::Yes}) {
+        if (auto* button = box->button(which)) {
+            // A verb that explicitly opted out of Enter keeps that choice.
+            if (!button->autoDefault()) return;
+            button->setDefault(true);
+            return;
+        }
+    }
+}
+
+// Application-wide window chrome: native title bars follow the theme surface
+// and dialog button boxes make their verb the default as they are shown.
+class WindowChromeFilter final : public QObject {
+public:
+    using QObject::QObject;
+    static void install() {
+        static QPointer<WindowChromeFilter> filter;
+        if (filter || !qApp) return;
+        filter = new WindowChromeFilter(qApp);
+        qApp->installEventFilter(filter);
+    }
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::Show && watched->isWidgetType()) {
+            auto* widget = static_cast<QWidget*>(watched);
+            if (auto* box = qobject_cast<QDialogButtonBox*>(widget)) make_dialog_verb_default(box);
+            else if (widget->isWindow()) apply_native_title_bar(widget);
+        } else if (event->type() == QEvent::ThemeChange && watched->isWidgetType() &&
+                   static_cast<QWidget*>(watched)->isWindow()) {
+            // A system theme change makes Qt reset the frame; restore ours after it.
+            QPointer<QWidget> window(static_cast<QWidget*>(watched));
+            QTimer::singleShot(0, window, [window] { apply_native_title_bar(window); });
+        }
+        return false;
+    }
+};
+
 // Qt style sheets accept spin-box arrow images only by path. Write a small
 // chevron per theme color once to a per-user temporary folder; an empty
 // result leaves the style's own arrow in place.
@@ -1822,7 +1904,17 @@ QString plan_area_label(const Entity& entity) {
     if (entity.type == "room_boundary" && normalized == QStringLiteral("room")) {
         return QStringLiteral("Room");
     }
-    return normalized_plan_name(QString::fromStdString(value));
+    // Classification keys are identifiers: show the catalog's display name
+    // ("Living area", "Basement · finished"), never a title-cased key.
+    if (const auto* preset = area_type_for_classification(value))
+        return QString::fromUtf8(preset->label.data(), static_cast<qsizetype>(preset->label.size()));
+    if (const auto category = parse_appraisal_category(value); category && *category != AppraisalAreaCategory::none)
+        return sketch::desktop::appraisal_category_label(*category);
+    auto label = QString::fromStdString(value).trimmed();
+    label.replace(QLatin1Char('_'), QLatin1Char(' '));
+    label = label.simplified();
+    if (!label.isEmpty()) label[0] = label[0].toUpper();
+    return label;
 }
 
 Vec2 plan_label_anchor(const Boundary& boundary) {
@@ -2785,7 +2877,7 @@ CalculationProfile default_calculation_profile() {
         "vertex-default",
         2,
         AreaUnit::square_foot,
-        2,
+        1, // design system: one decimal (1,842.5 sf)
         {{"measurement", ClassificationRule{true, false}},
          {"survey", ClassificationRule{false, false}},
          {"room", ClassificationRule{true, true}},
@@ -2992,10 +3084,12 @@ QIcon symbol_library_thumbnail(const SymbolDefinition& definition) {
     const auto cache_key = QString::fromStdString(definition.id);
     if (const auto found = cache.constFind(cache_key); found != cache.cend()) return *found;
 
-    QPixmap thumbnail(136, 108);
-    thumbnail.setDevicePixelRatio(2.0);
-    thumbnail.fill(QColor(248, 250, 253));
-    QPainter painter(&thumbnail);
+    // Transparent: the tile surface comes from the theme (style sheet); the
+    // white-and-black symbol artwork itself is unchanged (FB-007).
+    QImage artwork(136, 108, QImage::Format_ARGB32_Premultiplied);
+    artwork.setDevicePixelRatio(2.0);
+    artwork.fill(Qt::transparent);
+    QPainter painter(&artwork);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
     painter.setPen(QPen(QColor(42, 61, 82), 1.25,
@@ -3063,7 +3157,31 @@ QIcon symbol_library_thumbnail(const SymbolDefinition& definition) {
             painter.drawLine(point(stroke.start), point(stroke.end));
     }
     painter.end();
-    const QIcon icon(thumbnail);
+    // A soft white edge around the artwork keeps its black linework (door
+    // swings, outlines) legible on a dark tile; on a light tile it vanishes.
+    QImage halo = artwork;
+    {
+        QPainter mask(&halo);
+        mask.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        mask.fillRect(QRectF(0, 0, 68, 54), Qt::white);
+    }
+    QPixmap thumbnail(136, 108);
+    thumbnail.setDevicePixelRatio(2.0);
+    thumbnail.fill(Qt::transparent);
+    {
+        QPainter compose(&thumbnail);
+        compose.setOpacity(0.6);
+        for (const auto& offset : {QPointF(-0.75, 0), QPointF(0.75, 0), QPointF(0, -0.75), QPointF(0, 0.75),
+                                   QPointF(-0.5, -0.5), QPointF(0.5, -0.5), QPointF(-0.5, 0.5), QPointF(0.5, 0.5)})
+            compose.drawImage(offset, halo);
+        compose.setOpacity(1.0);
+        compose.drawImage(QPointF(0, 0), artwork);
+    }
+    // The same artwork in every mode: selection is shown by the tile, never
+    // by tinting the symbol with the selection color.
+    QIcon icon;
+    for (const auto mode : {QIcon::Normal, QIcon::Active, QIcon::Selected})
+        icon.addPixmap(thumbnail, mode);
     cache.insert(cache_key, icon);
     return icon;
 }
@@ -4511,6 +4629,88 @@ bool appraisal_area_has_derived_category_authority(const DocumentSnapshot& snaps
         // Invalid scope cannot safely restore an editable legacy category.
     }
     return appraisal_property_has_declarations(snapshot, property);
+}
+
+// Explicit appraisal facts implied by the area type chosen when an area is
+// drawn (FB-011). They are stored as ordinary declarations and listed in the
+// owner's appraisal_fact_defaults record, so Details and Edit facts can show
+// they came from the area type; every value stays editable. A fact the type
+// does not imply is left Undeclared and keeps withholding totals. Facts that
+// cannot change a non-dwelling use's category are declared Unknown, never
+// guessed. ANSI observation evidence (and the ANSI-derived grade and ceiling)
+// is never defaulted.
+struct AppraisalClassificationDefaults {
+    std::optional<std::string> grade; // Floor-level fact; implied by the type.
+    bool grade_from_floor{};          // The type does not imply a grade.
+    std::vector<std::pair<std::string, std::string>> area;
+};
+
+std::optional<AppraisalClassificationDefaults> appraisal_classification_defaults(
+    std::string_view classification, bool ansi) {
+    const auto category = parse_appraisal_category(classification);
+    if (!category || *category == AppraisalAreaCategory::none) return std::nullopt;
+    using C = AppraisalAreaCategory;
+    AppraisalClassificationDefaults result;
+    const auto dwelling = [&](const char* grade, const char* finish, const char* access, const char* ceiling) {
+        result.grade = grade;
+        result.area = {{"finish", finish}, {"access", access}};
+        if (ceiling != nullptr) result.area.emplace_back("ceiling_eligibility", ceiling);
+        result.area.emplace_back("area_use", "dwelling");
+    };
+    const auto other_use = [&](std::string use) {
+        result.grade_from_floor = true;
+        result.area = {{"finish", "unknown"}, {"access", "unknown"}, {"ceiling_eligibility", "unknown"},
+                       {"area_use", std::move(use)}};
+    };
+    switch (*category) {
+    case C::above_grade_finished: dwelling("above", "finished", "direct_interior", "standard"); break;
+    case C::above_grade_unfinished: dwelling("above", "unfinished", "unknown", "unknown"); break;
+    case C::below_grade_finished: dwelling("below", "finished", "direct_interior", "standard"); break;
+    case C::below_grade_unfinished: dwelling("below", "unfinished", "unknown", "unknown"); break;
+    case C::above_grade_nonstandard_finished: dwelling("above", "finished", "direct_interior", "nonstandard"); break;
+    case C::below_grade_nonstandard_finished: dwelling("below", "finished", "direct_interior", "nonstandard"); break;
+    // Noncontinuous access does not imply ceiling eligibility; it stays Undeclared.
+    case C::noncontinuous_finished: dwelling("above", "finished", "noncontinuous", nullptr); break;
+    // ADU and detached identities are ANSI evidence and stay explicit.
+    case C::adu_above_grade_finished: case C::detached_other_above_grade_finished:
+    case C::adu_above_grade_nonstandard_finished: case C::detached_other_above_grade_nonstandard_finished:
+        dwelling("above", "finished", "direct_interior", nullptr); break;
+    case C::adu_below_grade_finished: case C::detached_other_below_grade_finished:
+    case C::adu_below_grade_nonstandard_finished: case C::detached_other_below_grade_nonstandard_finished:
+        dwelling("below", "finished", "direct_interior", nullptr); break;
+    case C::adu_above_grade_unfinished: case C::detached_other_above_grade_unfinished:
+        dwelling("above", "unfinished", "unknown", nullptr); break;
+    case C::adu_below_grade_unfinished: case C::detached_other_below_grade_unfinished:
+        dwelling("below", "unfinished", "unknown", nullptr); break;
+    default: other_use(std::string(appraisal_category_name(*category))); break;
+    }
+    result.area.emplace_back("boundary_role", "measured_area");
+    if (ansi) {
+        result.grade.reset();
+        result.grade_from_floor = false;
+        std::erase_if(result.area, [](const auto& fact) { return fact.first == "ceiling_eligibility"; });
+    }
+    return result;
+}
+
+// The floor's declared reporting level, when one exists, is the user's own
+// grade declaration for that floor. Names and elevations are not evidence.
+std::optional<std::string> appraisal_declared_floor_level_grade(const Entity& property, const std::string& floor_id) {
+    const auto stored = property.properties.find("appraisal_reporting");
+    if (stored == property.properties.end()) return std::nullopt;
+    try {
+        std::optional<std::string> grade;
+        for (const auto& unit : parse_appraisal_reporting_settings(*stored).living_units)
+            for (const auto& level : unit.levels) {
+                if (level.floor_id != floor_id || !level.grade_level_type) continue;
+                const std::string value = *level.grade_level_type == "above_grade" ? "above" : "below";
+                if (grade && *grade != value) return std::nullopt;
+                grade = value;
+            }
+        return grade;
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
 }
 
 PlanAreaPresentation effective_plan_area_presentation(
@@ -6857,7 +7057,7 @@ public:
             });
             dialog.setExportRequested([&](const QString& property,Revision revision){
                 if(!unchanged(revision)) return;
-                auto path=QFileDialog::getSaveFileName(&dialog,QStringLiteral("Export appraisal report"),QStringLiteral("appraisal-report.pdf"),QStringLiteral("PDF files (*.pdf)"));
+                auto path=QFileDialog::getSaveFileName(&dialog,QStringLiteral("Export appraisal report"),defaultOutputPath(QStringLiteral(" appraisal report.pdf")),QStringLiteral("PDF files (*.pdf)"));
                 if(path.isEmpty()) return;
                 if(QFileInfo(path).suffix().isEmpty()) path+=QStringLiteral(".pdf");
                 if(!unchanged(revision)) return;
@@ -12316,7 +12516,14 @@ public:
             ++m_linework_drawing->input_generation;
             m_linework_drawing->input_preferences = {};
         }
+        const bool previous_metric = m_metric_units;
         m_metric_units = metric;
+        if (previous_metric != metric) {
+            // One unit system per view: drawing fields and the component
+            // library (names, nominal sizes) follow the project's market.
+            refreshDrawingDefaultFields(previous_metric);
+            populateSymbolLibrary();
+        }
         if (m_unitsCombo) {
             QSignalBlocker blocker(m_unitsCombo);
             m_unitsCombo->setCurrentIndex(metric ? 1 : 0);
@@ -12346,7 +12553,9 @@ public:
         const QString hoverText = pick(tokens.ink, "#000000");
         const QString ink = pick(tokens.ink, "#ffffff");
         const QString muted = pick(tokens.ink_muted, "#ffffff");
-        const QString faint = pick(tokens.ink_faint, "#ffffff");
+        // High contrast keeps disabled commands distinct from enabled white
+        // ones: a mid gray that still reads at 8:1 on black.
+        const QString faint = pick(tokens.ink_faint, "#a6a6a6");
         const QString border = pick(tokens.border, "#ffffff");
         const QString controlBorder = pick(tokens.border_control, "#ffffff");
         const QString accent = pick(tokens.accent, "#ffff00");
@@ -12369,12 +12578,28 @@ public:
         // Toolbar SVG icons paint checked (accent-filled) buttons in BrightText.
         palette.setColor(QPalette::BrightText, QColor(onAccent));
         palette.setColor(QPalette::Link, QColor(accentText));
+        // Fusion draws bevels and tab-bar base lines from these roles; keep
+        // them on the border token instead of the light standard palette.
+        for (const auto role : {QPalette::Light, QPalette::Midlight, QPalette::Mid, QPalette::Dark})
+            palette.setColor(role, QColor(border));
+        palette.setColor(QPalette::Shadow, QColor(frame));
         palette.setColor(QPalette::ToolTipBase, QColor(inset));
         palette.setColor(QPalette::ToolTipText, QColor(ink));
         palette.setColor(QPalette::Disabled, QPalette::Text, QColor(faint));
         palette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(faint));
         palette.setColor(QPalette::Disabled, QPalette::WindowText, QColor(faint));
+        // A style sheet snapshots each widget's palette when it polishes and
+        // restores that snapshot when it unpolishes. Replacing the sheet in
+        // place would therefore restore the previous theme's palette over the
+        // new one (blank toolbar glyphs, system link and focus colors). Drop
+        // the old sheet first so the new palette is the one it snapshots.
+        if (!owner->styleSheet().isEmpty()) owner->setStyleSheet(QString());
         owner->setPalette(palette);
+        // Widgets under a window with a style sheet do not inherit its
+        // palette; they start from the application palette. Publish the theme
+        // there too, so links, selection and focus use theme tokens rather
+        // than the system accent.
+        QApplication::setPalette(palette);
         // Metrics follow the design system: 28px controls (24px dense),
         // 40px toolbar, 24px status bar, radius 4/6/10, 13px body text.
         QString stylesheet = QStringLiteral(R"(
@@ -12409,6 +12634,8 @@ public:
                 background: $accent; color: $onAccent; border-color: $accent; }
             QPushButton:focus, QToolButton:focus, QComboBox:focus, QLineEdit:focus,
             QAbstractSpinBox:focus { border: 2px solid $accent; }
+            QToolBar QToolButton:focus, QWidget#canvasStatusControls QToolButton:focus {
+                border: 2px solid $accent; }
             QPushButton:disabled, QToolButton:disabled { color: $faint; background: transparent; border-color: $border; }
             QComboBox, QLineEdit, QAbstractSpinBox, QDialog#surveyCalculator QPlainTextEdit { color: $ink; background: $inset;
                 border: 1px solid $controlBorder; border-radius: 6px; padding: 0 8px; min-height: 26px;
@@ -12428,7 +12655,11 @@ public:
             QAbstractSpinBox::up-arrow:disabled, QAbstractSpinBox::up-arrow:off { image: url($spinUpDisabledArrow); }
             QAbstractSpinBox::down-arrow:disabled, QAbstractSpinBox::down-arrow:off { image: url($spinDownDisabledArrow); }
             QComboBox { padding-right: 24px; }
-            QComboBox::drop-down { border: 0; width: 24px; }
+            QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: center right;
+                border: 0; width: 24px; }
+            QComboBox::down-arrow { image: url($comboArrow); width: 10px; height: 10px; }
+            QComboBox::down-arrow:disabled { image: url($comboDisabledArrow); }
+            QComboBox::down-arrow:on { image: url($comboOpenArrow); }
             QToolBar QComboBox { font-size: 12px; border-radius: 6px; padding: 0 16px 0 8px; min-height: 26px; max-height: 26px; }
             QToolBar QComboBox::drop-down { width: 14px; }
             QComboBox QAbstractItemView, QMenu { background: $panel; color: $ink;
@@ -12461,7 +12692,24 @@ public:
             QDialog#boundaryGeometryDialog QLabel, QDialog#boundaryGeometryDialog QCheckBox {
                 color: $ink; background: transparent; }
             QWidget#appraisalFactsContent, QWidget#appraisalFactsViewport { background: $panel; }
-            QLabel#appraisalDetailsGla { font-family: $fontMono; font-size: 20px; font-weight: 600; }
+            QLabel#appraisalDetailsGla { font-family: $fontSans; font-size: 15px; font-weight: 600; }
+            QLabel#appraisalDetailsGla[figure="true"] { font-family: $fontMono; font-size: 20px; }
+            QLabel#areaClassStatus { color: $muted; background: transparent; }
+            QToolButton#advancedSectionToggle, QToolButton#appraisalDetailsBasisToggle,
+                QToolButton#appraisalDetailsProvenanceToggle { background: transparent; color: $muted;
+                border: 2px solid transparent; padding: 0 4px; font-weight: 600; }
+            QToolButton#advancedSectionToggle:hover, QToolButton#appraisalDetailsBasisToggle:hover,
+                QToolButton#appraisalDetailsProvenanceToggle:hover { background: $hover; color: $hoverText; }
+            QToolButton#advancedSectionToggle:checked, QToolButton#appraisalDetailsBasisToggle:checked,
+                QToolButton#appraisalDetailsProvenanceToggle:checked { background: transparent; color: $ink;
+                border-color: transparent; }
+            QToolButton#advancedSectionToggle:focus, QToolButton#appraisalDetailsBasisToggle:focus,
+                QToolButton#appraisalDetailsProvenanceToggle:focus { border-color: $accent; }
+            QListWidget#symbolLibraryItems::item { background: $inset; color: $ink;
+                border: 1px solid $border; border-radius: 6px; }
+            QListWidget#symbolLibraryItems::item:hover { background: $hover; color: $hoverText; }
+            QListWidget#symbolLibraryItems::item:selected { background: $selection; color: $selectedText;
+                border: 2px solid $accent; }
             QWidget#appraisalDetailsPanel QPushButton { padding: 0 8px; min-height: 22px; }
 
             QWidget#navigatorPanel { border: 1px solid $border; border-radius: 10px; }
@@ -12476,7 +12724,8 @@ public:
             QTreeWidget::item { min-height: 24px; border-radius: 6px; padding: 2px 6px; }
             QTreeWidget::item:hover { background: $hover; color: $hoverText; }
             QTreeWidget::item:selected { background: $selection; color: $selectedText; }
-            QTreeWidget::item:focus { border: 1px solid $accent; }
+            QTreeWidget::item:focus, QListWidget::item:focus, QTableWidget::item:focus,
+                QTableView::item:focus { border: 2px solid $accent; }
             QHeaderView::section { background: $panel; color: $muted; font-size: 12px; font-weight: 500;
                 border: 0; border-bottom: 1px solid $border; padding: 4px 8px; }
             QTabWidget#workspaceTabs::pane { border: 0; background: transparent; }
@@ -12486,6 +12735,8 @@ public:
             QTabBar::tab:selected { color: $ink; border-bottom: 2px solid $accent;
                 border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
             QTabBar::tab:hover { color: $hoverText; background: $hover; }
+            QTabBar { outline: 0; }
+            QTabBar::tab:focus { color: $ink; border: 2px solid $accent; }
             QWidget#measurementPlanCanvas, QWidget#architecturalPlanCanvas {
                 border: 1px solid $border; border-radius: 10px; }
             QGroupBox { color: $ink; background: $panel; border: 1px solid $border;
@@ -12518,9 +12769,14 @@ public:
         // Spin-box chevrons use the muted ink token; disabled/limit states use
         // the faint token. Without a written image the rules are dropped so
         // the style's own arrows remain.
+        // Combo boxes use the same chevron so a drop-down never reads as a
+        // plain text field; it points up while the list is open.
         const auto spin_arrow = contrast ? QColor(Qt::white) : tokens.ink_muted;
-        const auto spin_arrow_faint = contrast ? QColor(Qt::white) : tokens.ink_faint;
-        const std::array<std::pair<QString, QString>, 4> spin_arrows{{
+        const auto spin_arrow_faint = contrast ? QColor(faint) : tokens.ink_faint;
+        const std::array<std::pair<QString, QString>, 7> spin_arrows{{
+            {QStringLiteral("$comboDisabledArrow"), themed_spin_arrow_path(false, spin_arrow_faint)},
+            {QStringLiteral("$comboOpenArrow"), themed_spin_arrow_path(true, spin_arrow)},
+            {QStringLiteral("$comboArrow"), themed_spin_arrow_path(false, spin_arrow)},
             {QStringLiteral("$spinUpDisabledArrow"), themed_spin_arrow_path(true, spin_arrow_faint)},
             {QStringLiteral("$spinDownDisabledArrow"), themed_spin_arrow_path(false, spin_arrow_faint)},
             {QStringLiteral("$spinUpArrow"), themed_spin_arrow_path(true, spin_arrow)},
@@ -12538,8 +12794,43 @@ public:
         owner->setStyleSheet(stylesheet);
         owner->setProperty("workspaceTheme", QString::fromStdString(workspace_theme_name(theme)));
         m_theme = theme;
+        // Preferences describe the theme in effect; "Match system" stays
+        // chosen while it still resolves to this theme.
+        if (resolve_workspace_theme(m_preferences.theme, QGuiApplication::styleHints()->colorScheme()) != theme)
+            m_preferences.theme = theme == WorkspaceTheme::light ? Preferences::Theme::light
+                : theme == WorkspaceTheme::high_contrast ? Preferences::Theme::high_contrast
+                                                         : Preferences::Theme::dark;
+        syncThemeChoices();
+        apply_native_title_bars();
         applyCanvasBackgrounds();
         if (m_navigator) refreshNavigator();
+    }
+
+    // The header's theme choice is a preference: apply it, then persist it
+    // so Preferences and the next session show the same theme.
+    void chooseTheme(WorkspaceTheme theme) {
+        applyTheme(theme);
+        m_preferences.theme = theme == WorkspaceTheme::light ? Preferences::Theme::light
+            : theme == WorkspaceTheme::high_contrast ? Preferences::Theme::high_contrast
+                                                     : Preferences::Theme::dark;
+        QSettings settings;
+        m_preferences.save(settings);
+        settings.sync();
+    }
+
+    // Theme menus mark the theme in effect.
+    void syncThemeChoices() {
+        for (auto* action : owner->findChildren<QAction*>()) {
+            const auto id = action->objectName();
+            const auto theme = id == QStringLiteral("themeLight") ? std::optional{WorkspaceTheme::light}
+                : id == QStringLiteral("themeDark") ? std::optional{WorkspaceTheme::dark}
+                : id == QStringLiteral("themeHighContrast") ? std::optional{WorkspaceTheme::high_contrast}
+                                                         : std::nullopt;
+            if (!theme) continue;
+            const QSignalBlocker blocker(action);
+            action->setCheckable(true);
+            action->setChecked(*theme == m_theme);
+        }
     }
 
     // Workspace plan canvases follow the active theme. Called by applyTheme
@@ -12548,6 +12839,7 @@ public:
         const auto background = screenCanvasBackground();
         if (m_measurementCanvas) m_measurementCanvas->setCanvasBackground(background);
         if (m_architecturalCanvas) m_architecturalCanvas->setCanvasBackground(background);
+        if (m_nativeModelView) m_nativeModelView->setBackgroundColor(background);
     }
 
     // Design tokens for on-screen drawing surfaces of the active theme. High
@@ -12680,7 +12972,12 @@ public:
             const auto view = view_name == "elevation" ? BuildingViewKind::elevation
                 : view_name == "section" ? BuildingViewKind::section : BuildingViewKind::plan;
             m_workspace = workspace;
+            const bool previous_metric = m_metric_units;
             m_metric_units = profile.at("metric").get<bool>();
+            if (previous_metric != m_metric_units) {
+                refreshDrawingDefaultFields(previous_metric);
+                populateSymbolLibrary();
+            }
             m_grid_enabled = profile.at("grid").get<bool>();
             m_snap_enabled = profile.at("snap").get<bool>();
             m_overview_map_enabled = profile.value("overview", true);
@@ -13027,7 +13324,7 @@ public:
             decimal_places->setEnabled(false);
             decimal_places->setToolTip(QStringLiteral("ANSI totals use whole square feet; dimensions use tenths of a foot."));
             help->setText(QStringLiteral("This property uses the ANSI Z765 profile, so GLA and every area display in whole square feet. "
-                "Choose another policy in Setup to set decimal places."));
+                "Choose another policy in Appraisal setup to set decimal places."));
             buttons->button(QDialogButtonBox::Save)->setEnabled(false);
         } else if (!buttons->button(QDialogButtonBox::Save)->isEnabled()) {
             decimal_places->setEnabled(false);
@@ -22709,11 +23006,12 @@ public:
         const auto modal_context = captureModalContext();
         const auto original_session = m_boundary_session
             ? std::optional{m_boundary_session->view()} : std::nullopt;
+        std::optional<QString> staged_setup;
         try {
             if (mode == BoundaryAuthoringMode::define_first && classification.trimmed().isEmpty()) {
                 const auto selected = chooseBoundaryClassification(*context, !subtract_target.isEmpty());
                 if (!selected) return false;
-                classification = *selected;
+                classification = subtract_target.isEmpty() ? stagedAreaType(*context, *selected, staged_setup) : *selected;
                 if (!modalContextUnchanged(modal_context)) return false;
                 if (original_session.has_value() != m_boundary_session.has_value() ||
                     (original_session && !(m_boundary_session->view() == *original_session))) {
@@ -22745,6 +23043,7 @@ public:
                 candidate.set_classification(classification.trimmed().toStdString());
             clearPreview();
             m_boundary_session = std::move(candidate);
+            m_auto_setup_classification = staged_setup;
             m_boundary_source = m_document->snapshot();
             m_boundary_context = *context;
             m_boundary_document = m_document;
@@ -23328,16 +23627,42 @@ public:
     struct WallChainMeasurementCompletion {
         QString measurement_id;
         QString diagnostic;
+        bool created{false};
     };
+
+    // The generic measurement workflow's default living-area class. Appraisal
+    // eligibility never comes from a class; it uses "measurement" plus facts.
+    static std::string defaultLivingAreaClassification(const json& property_properties) {
+        const auto profile=read_calculation_profile(property_properties);
+        const auto living=[&](const std::string& name) {
+            const auto found=profile.classifications.find(name);
+            return found!=profile.classifications.end() && found->second.living_total;
+        };
+        if (living("living")) return "living";
+        if (const auto* first=area_type_for_code("GLA1"); first && living(std::string(first->classification)))
+            return std::string(first->classification);
+        for (const auto& [name,rule] : profile.classifications)
+            if (rule.living_total && name!="unqualified") return name;
+        return {};
+    }
 
     static std::pair<QString,std::vector<EntityChange>> prepareAutomaticWallMeasurement(
         const DocumentSnapshot& candidate, const DrawingContext& context,
-        const QStringList& chain_ids, const std::string& closing_wall_id) {
+        const QStringList& chain_ids, const std::string& closing_wall_id, bool appraisal_setup_pending = false) {
         const auto& property=candidate.entities().at(context.property_id);
         const auto policy=property.properties.find("appraisal_policy");
-        if (calculation_workflow_name(property.properties)!="appraisal" ||
-            policy==property.properties.end() || !policy->is_object() ||
+        const bool appraisal=calculation_workflow_name(property.properties)=="appraisal";
+        // A declared non-exterior appraisal basis keeps explicit measurement.
+        if (appraisal && policy!=property.properties.end() && policy->is_object() &&
+            policy->contains("measurement_basis") &&
             read_string(*policy,"measurement_basis")!=std::optional<std::string>{"exterior"}) return {};
+        // While appraisal setup is pending the area commits as "measurement";
+        // recordAreaTypeDefaults then sets up appraisal and records the
+        // Living area facts, exactly as a drawn Living area does.
+        const auto classification=(appraisal || appraisal_setup_pending) ? std::string("measurement")
+                                            : defaultLivingAreaClassification(property.properties);
+        if (classification.empty())
+            throw std::invalid_argument("The calculation profile has no living-area classification.");
         const auto inactive = constraint_phase_scope(candidate.entities()).inactive_owner_ids;
         const auto organization=organize_project(candidate);
         std::vector<std::string> requested;
@@ -23390,18 +23715,59 @@ public:
                     "physical",derived.boundary,{}, {1,1}},
                 MeasurementArea{entity->id,context.building_id,context.floor_id,"physical",geometry,{}, {1,1}}},physical);
         }
-        return encodeExteriorWallMeasurement(derived,context,QStringLiteral("measurement"));
+        return encodeExteriorWallMeasurement(derived,context,QString::fromStdString(classification));
     }
 
-    void showWallChainMeasurementCompletion(const WallChainMeasurementCompletion& completion) {
+    void showWallChainMeasurementCompletion(const WallChainMeasurementCompletion& completion, bool select = true) {
+        if (completion.created && !completion.measurement_id.isEmpty()) {
+            // An area measured from a closed wall loop is a Living area: record
+            // its type facts (and residential setup on a fresh project) so GLA
+            // follows without manual Setup or Edit facts steps.
+            try {
+                const auto source=authoringSnapshot();
+                const auto found=source.entities().find(completion.measurement_id.toStdString());
+                if (found!=source.entities().end()) {
+                    const auto context=organize_project(source).drawing_context(found->first);
+                    const bool unclassified=read_string(found->second.properties,"classification").value_or("")=="measurement" &&
+                        !read_string(found->second.properties,"appraisal_category");
+                    if (context && unclassified)
+                        recordAreaTypeDefaults(context->property_id,{found->first},
+                                               std::optional<QString>{QStringLiteral("above_grade_finished")});
+                }
+            } catch (const std::exception&) {}
+        }
         if (!completion.measurement_id.isEmpty()) {
-            (void)selectEntity(completion.measurement_id);
+            if (select) (void)selectEntity(completion.measurement_id);
             m_wall_measurement_notice.setRemainingTime(8000);
-            owner->statusBar()->showMessage(QStringLiteral("Wall chain finished. Exterior measurement is current; appraisal facts determine qualification."),8000);
+            QString message=QStringLiteral("Wall chain finished. Exterior measurement is current; appraisal facts determine qualification.");
+            try {
+                const auto source=authoringSnapshot();
+                const auto& area=source.entities().at(completion.measurement_id.toStdString());
+                const auto context=organize_project(source).drawing_context(area.id);
+                const auto& property=source.entities().at(context.value().property_id).properties;
+                const auto text=format_dimension_area(std::abs(signed_area(read_boundary(area.properties))),m_metric_units);
+                if (calculation_workflow_name(property)=="appraisal")
+                    message=read_string(area.properties,"appraisal_category")==std::optional<std::string>{"above_grade_finished"}
+                        ? QStringLiteral("%1 · Living area · %2")
+                              .arg(completion.created ? QStringLiteral("Area created from walls") : QStringLiteral("Exterior measurement is current"),text)
+                        : QStringLiteral("%1 · %2 · appraisal facts determine GLA")
+                              .arg(completion.created ? QStringLiteral("Area created from walls") : QStringLiteral("Exterior measurement is current"),text);
+                else {
+                    const auto profile=read_calculation_profile(property);
+                    const auto rule=profile.classifications.find(read_string(area.properties,"classification").value_or(""));
+                    const bool living=rule!=profile.classifications.end() && rule->second.living_total;
+                    message=QStringLiteral("%1 · %2%3")
+                        .arg(completion.created ? QStringLiteral("Area created from walls") : QStringLiteral("Exterior measurement is current"),
+                             living ? QStringLiteral("GLA ") : QString{},text);
+                }
+            } catch (const std::exception&) {}
+            owner->statusBar()->showMessage(message,8000);
         } else if (!completion.diagnostic.isEmpty()) {
             m_wall_measurement_notice.setRemainingTime(12000);
-            owner->statusBar()->showMessage(QStringLiteral("Walls kept. Automatic exterior measurement was not created: %1")
-                .arg(completion.diagnostic),12000);
+            auto reason=completion.diagnostic.trimmed();
+            while (reason.endsWith(QLatin1Char('.'))) reason.chop(1);
+            owner->statusBar()->showMessage(QStringLiteral("Walls kept. Automatic exterior measurement was not created: %1. "
+                "Use Draw ▸ Measure exterior from walls… to measure them.").arg(reason),12000);
         }
     }
 
@@ -24629,6 +24995,7 @@ public:
         buttons->setObjectName(QStringLiteral("roomDimensionButtons"));
         layout->addWidget(buttons);
         auto* apply = buttons->button(QDialogButtonBox::Apply);
+        apply->setDefault(true); // Enter applies; Cancel never discards on Enter.
 
         const auto selected_anchor = [anchor] {
             return static_cast<RoomFootprintAnchor>(anchor->currentData().toInt());
@@ -24763,7 +25130,8 @@ public:
                                std::optional<ConstructionReplayContext> original_context = std::nullopt,
                                json extensions = json::object(),
                                const std::optional<QStringList>& closing_chain = std::nullopt,
-                               WallChainMeasurementCompletion* measurement_completion = nullptr) {
+                               WallChainMeasurementCompletion* measurement_completion = nullptr,
+                               bool infer_connected_exterior = false) {
         try {
             const auto start = baseline.start;
             const auto end = baseline.end;
@@ -24783,8 +25151,8 @@ public:
                 setError(QStringLiteral("Wall endpoints must be finite and distinct."));
                 return {};
             }
-            double thickness = m_preferences.wall_thickness_m;
-            double height = m_preferences.wall_height_m;
+            double thickness = drawingDefaults().wall_thickness_m;
+            double height = drawingDefaults().wall_height_m;
             try {
                 const auto unit = m_metric_units ? Unit::metre : Unit::foot;
                 if (m_wall_draw_thickness) thickness = parse_quantity(m_wall_draw_thickness->text().toStdString(), unit).metres;
@@ -24898,14 +25266,78 @@ public:
                     // retaining a valid wall. Final command admission remains atomic.
                     try {
                         auto [measurement,changes]=prepareAutomaticWallMeasurement(
-                            completed_walls,*drawing_context,*closing_chain,entity_id);
+                            completed_walls,*drawing_context,*closing_chain,entity_id,
+                            appraisalSetupPending(source,drawing_context->property_id));
                         completion.measurement_id=std::move(measurement);
                         command.entity_changes.insert(command.entity_changes.end(),
                             std::make_move_iterator(changes.begin()),std::make_move_iterator(changes.end()));
                     } catch (const std::exception& error) {
                         completion.diagnostic=QString::fromUtf8(error.what());
                     }
+                } else if (infer_connected_exterior) {
+                    // A wall joining existing walls at both ends may complete a
+                    // shell drawn in several chains. This inference is silent:
+                    // partitions and open networks simply keep their walls.
+                    const auto same_layer=[&](const Entity& entity) {
+                        return entity.type=="wall" &&
+                            read_string(entity.properties,"floor_id")==std::optional<std::string>{drawing_context->floor_id} &&
+                            read_string(entity.properties,"layer_id")==std::optional<std::string>{drawing_context->layer_id};
+                    };
+                    const auto joined=[&](Vec2 point) {
+                        for (const auto& [old_id,entity] : source.entities()) {
+                            if (!visible.contains(old_id) || !same_layer(entity)) continue;
+                            const auto old_baseline=read_required_segment(entity.properties,"baseline");
+                            if (old_baseline && ((old_baseline->start.x==point.x && old_baseline->start.y==point.y) ||
+                                                 (old_baseline->end.x==point.x && old_baseline->end.y==point.y))) return true;
+                        }
+                        return false;
+                    };
+                    if (joined(start) && joined(end)) {
+                        try {
+                            const auto completed_walls=Document::preview_command(source,Command{command});
+                            std::vector<std::pair<std::string,Segment>> network;
+                            for (const auto& [old_id,entity] : completed_walls.entities()) {
+                                if ((old_id!=entity_id && !visible.contains(old_id)) || !same_layer(entity)) continue;
+                                if (const auto old_baseline=read_required_segment(entity.properties,"baseline"))
+                                    network.emplace_back(old_id,*old_baseline);
+                            }
+                            const auto touches=[](const Segment& left, const Segment& right) {
+                                for (const auto a : {left.start,left.end}) for (const auto b : {right.start,right.end})
+                                    if (a.x==b.x && a.y==b.y) return true;
+                                return false;
+                            };
+                            std::vector<bool> reached(network.size(),false);
+                            std::vector<std::size_t> pending;
+                            for (std::size_t i=0;i<network.size();++i)
+                                if (network[i].first==entity_id) { reached[i]=true; pending.push_back(i); }
+                            QStringList component;
+                            while (!pending.empty()) {
+                                const auto current=pending.back(); pending.pop_back();
+                                for (std::size_t i=0;i<network.size();++i)
+                                    if (!reached[i] && touches(network[current].second,network[i].second)) {
+                                        reached[i]=true; pending.push_back(i);
+                                        component.push_back(QString::fromStdString(network[i].first));
+                                    }
+                            }
+                            if (component.size()>=2) {
+                                auto [measurement,changes]=prepareAutomaticWallMeasurement(
+                                    completed_walls,*drawing_context,component,entity_id,
+                                    appraisalSetupPending(source,drawing_context->property_id));
+                                if (!changes.empty()) {
+                                    completion.measurement_id=std::move(measurement);
+                                    command.entity_changes.insert(command.entity_changes.end(),
+                                        std::make_move_iterator(changes.begin()),std::make_move_iterator(changes.end()));
+                                }
+                            }
+                        } catch (const std::exception&) {
+                            completion = {};
+                        }
+                    }
                 }
+                completion.created = !completion.measurement_id.isEmpty() &&
+                    std::any_of(command.entity_changes.begin(),command.entity_changes.end(),[&](const EntityChange& change) {
+                        return change.kind==EntityChangeKind::upsert && change.entity.id==completion.measurement_id.toStdString();
+                    });
                 const auto authored = augmentAuthoredCommand(Command{command}, source);
                 const auto verified=Document::preview_command(source, authored);
                 if (!completion.measurement_id.isEmpty()) {
@@ -40869,6 +41301,23 @@ public:
                 floor.properties["appraisal_facts"] = std::move(floor_facts);
             }
             boundary.properties["appraisal_facts"] = declarations.at("appraisal_facts");
+            // A fact recorded from the area type stays flagged only while it
+            // keeps that value; a changed or cleared fact is the user's own.
+            const auto keep_current_defaults = [](Entity& owner) {
+                if (!owner.properties.contains("appraisal_fact_defaults")) return;
+                auto record = owner.properties.at("appraisal_fact_defaults");
+                owner.properties.erase("appraisal_fact_defaults");
+                const auto facts = owner.properties.value("appraisal_facts", json::object());
+                if (!record.is_object() || !record.contains("facts") || !record.at("facts").is_object() || !facts.is_object()) return;
+                json kept = json::object();
+                for (const auto& [key, value] : record.at("facts").items())
+                    if (facts.contains(key) && facts.at(key) == value) kept[key] = value;
+                if (kept.empty()) return;
+                record["facts"] = std::move(kept);
+                owner.properties["appraisal_fact_defaults"] = std::move(record);
+            };
+            keep_current_defaults(floor);
+            keep_current_defaults(boundary);
             const auto declared = read_appraisal_declarations(updated_property.properties, floor.properties, boundary.properties);
             if (declarations.contains("deduction_ids")) {
                 boundary.properties["deduction_ids"] = declarations.at("deduction_ids");
@@ -40964,8 +41413,8 @@ public:
         dialog.setWindowTitle(QStringLiteral("Edit appraisal facts"));
         styleDialog(dialog);
         auto* layout = new QVBoxLayout(&dialog);
-        auto* note = new QLabel(QStringLiteral("Record what you observed for this area. Names and elevations are not evidence. "
-            "Floor grade applies to every area on this floor. Missing facts withhold totals."), &dialog);
+        auto* note = new QLabel(QStringLiteral("Record what you observed for this area. Vertex does not infer facts from an area's name or floor height. "
+            "Floor grade applies to every area on this floor. GLA is withheld until every fact is recorded."), &dialog);
         note->setWordWrap(true);
         layout->addWidget(note);
         auto* scroll = new QScrollArea(&dialog); scroll->setWidgetResizable(true); scroll->setFrameShape(QFrame::NoFrame);
@@ -41003,16 +41452,23 @@ public:
             return found == labels.end() ? QStringLiteral("Unrecognized value") : found->second;
         };
         const bool ansi = policy_token("policy_kind") == QStringLiteral("ansi_z765_2021");
-        auto* property_group = new QGroupBox(QStringLiteral("Property (set in Appraisal setup)"), content);
+        // One compact row: the property declarations in words and the route
+        // to Setup, which owns them.
+        auto* property_group = new QWidget(content);
         property_group->setObjectName(QStringLiteral("appraisalFactsProperty"));
+        property_group->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
         auto* property_form = new QFormLayout(property_group);
+        property_form->setContentsMargins(0, 0, 0, 0);
         property_form->setRowWrapPolicy(QFormLayout::WrapLongRows);
         auto* summary = new QLabel(QStringLiteral("%1 · %2 · %3 basis").arg(
             policy_label(policy_token("policy_kind")), policy_label(policy_token("property_kind")),
             policy_label(policy_token("measurement_basis"))), property_group);
         summary->setObjectName(QStringLiteral("appraisalFactsPolicySummary"));
         summary->setWordWrap(true);
-        property_form->addRow(QStringLiteral("Policy"), summary);
+        auto* property_row = new QHBoxLayout;
+        property_row->setContentsMargins(0, 0, 0, 0);
+        property_row->addWidget(summary, 1);
+        property_form->addRow(QStringLiteral("Property"), property_row);
         const auto increment_token = policy.is_object() && policy.contains("ansi") && policy.at("ansi").is_object() &&
             policy.at("ansi").contains("acquisition_increment") && policy.at("ansi").at("acquisition_increment").is_string()
             ? policy.at("ansi").at("acquisition_increment").get<std::string>() : std::string{};
@@ -41028,11 +41484,34 @@ public:
         change_setup->setObjectName(QStringLiteral("appraisalFactsOpenSetup")); change_setup->setAutoDefault(false);
         change_setup->setToolTip(QStringLiteral("Close Edit facts without saving and open Appraisal setup."));
         QObject::connect(change_setup, &QPushButton::clicked, &dialog, [&] { open_setup = true; dialog.reject(); });
-        property_form->addRow(change_setup);
+        property_row->addWidget(change_setup, 0, Qt::AlignTop);
         content_layout->addWidget(property_group);
-        auto* form = new QFormLayout; form->setRowWrapPolicy(QFormLayout::WrapLongRows); content_layout->addLayout(form);
         const auto facts = selected->properties.value("appraisal_facts", json::object());
         const auto level = snapshot.entities().at(*floor_id).properties.value("appraisal_facts", json::object());
+        // Facts recorded from the area type are named, so they read as
+        // defaults to confirm rather than as observations.
+        QStringList defaulted;
+        for (const auto* owner_properties : {&snapshot.entities().at(*floor_id).properties, &selected->properties}) {
+            const auto record = owner_properties->value("appraisal_fact_defaults", json::object());
+            const auto current = owner_properties->value("appraisal_facts", json::object());
+            if (!record.is_object() || !record.contains("facts") || !record.at("facts").is_object() || !current.is_object()) continue;
+            // Listed in the form's order.
+            for (const auto& [key, name] : std::initializer_list<std::pair<const char*, const char*>>{
+                {"grade", "floor grade"}, {"finish", "finish"}, {"access", "access"},
+                {"ceiling_eligibility", "ceiling eligibility"}, {"area_use", "area use"}, {"boundary_role", "boundary role"}}) {
+                const auto& recorded = record.at("facts");
+                if (recorded.contains(key) && current.contains(key) && current.at(key) == recorded.at(key))
+                    defaulted.push_back(QString::fromLatin1(name));
+            }
+        }
+        if (!defaulted.isEmpty()) {
+            auto* defaults_note = new QLabel(QStringLiteral("From classification: %1. Change any value that does not match this area.")
+                .arg(defaulted.join(QStringLiteral(", "))), content);
+            defaults_note->setObjectName(QStringLiteral("appraisalFactsDefaultsNote"));
+            defaults_note->setWordWrap(true);
+            content_layout->addWidget(defaults_note);
+        }
+        auto* form = new QFormLayout; form->setRowWrapPolicy(QFormLayout::WrapLongRows); content_layout->addLayout(form);
         const auto combo = [&](const QString& label, const char* key, const json& source,
                                std::initializer_list<const char*> values) {
             auto* box = new QComboBox(&dialog);
@@ -41071,6 +41550,7 @@ public:
         auto* role = combo(QStringLiteral("Boundary role"), "boundary_role", facts, {"measured_area", "open_to_below", "stair_footprint", "other_void"});
         auto* ansi_group = new QGroupBox(QStringLiteral("ANSI floor and area evidence"), content);
         ansi_group->setObjectName(QStringLiteral("ansiAreaEvidence")); content_layout->addWidget(ansi_group);
+        content_layout->addStretch(1);
         auto* ansi_form = new QFormLayout(ansi_group);
         ansi_form->setRowWrapPolicy(QFormLayout::WrapLongRows);
         const auto area_evidence = facts.value("ansi", json::object());
@@ -41242,7 +41722,7 @@ public:
             else error->setText(m_last_error);
             } catch (const std::exception& exception) { error->setText(QString::fromUtf8(exception.what())); }
         });
-        dialog.resize(620, 780);
+        dialog.resize(620, ansi ? 780 : 600);
         dialog.exec();
         if (open_setup) showAppraisalSetup(id_from(property->id));
     }
@@ -41640,7 +42120,11 @@ public:
             }
             syncToolControls();
             clearError();
+            // Feedback about the previous project must not survive the open.
+            if (m_symbol_library_status) m_symbol_library_status->clear();
             refresh();
+            m_measurementCanvas->clearSnapCue();
+            m_architecturalCanvas->clearSnapCue();
             noteRecentProject(path);
             return true;
         } catch (const std::exception& error) {
@@ -42125,7 +42609,7 @@ public:
     bool saveProject() {
         if (m_file_path.empty()) {
             const auto selected = QFileDialog::getSaveFileName(
-            owner, QStringLiteral("Save project"), {}, QStringLiteral("Vertex project (*.bldproj)"));
+            owner, QStringLiteral("Save project"), defaultOutputPath(QStringLiteral(".bldproj")), QStringLiteral("Vertex project (*.bldproj)"));
             if (selected.isEmpty()) {
                 return false;
             }
@@ -42710,6 +43194,46 @@ public:
         }
     }
 
+    // Title block content for the sketch sheet: property, address, area
+    // summary in appraisal terms and today's date. Letter, or A4 for metric
+    // projects and metric locales.
+    [[nodiscard]] SketchPdfSheet sketchPdfSheet(const DocumentSnapshot& snapshot) const {
+        SketchPdfSheet sheet;
+        sheet.page_size = m_metric_units || QLocale::system().measurementSystem() == QLocale::MetricSystem
+            ? QPageSize::A4 : QPageSize::Letter;
+        sheet.date_text = QLocale::system().toString(QDate::currentDate(), QLocale::ShortFormat);
+        std::string property_id;
+        if (const auto property = propertyEntity()) property_id = property->id;
+        for (const auto& [id, entity] : snapshot.entities()) {
+            if (entity.type != "property") continue;
+            if (!property_id.empty() && id != property_id) continue;
+            property_id = id;
+            const auto subject = entity.properties.value("subject", json::object());
+            const auto read_subject = [&](std::string_view key) -> QString {
+                if (subject.is_object()) if (const auto value = read_string(subject, key)) return QString::fromStdString(*value).trimmed();
+                if (const auto value = read_string(entity.properties, key)) return QString::fromStdString(*value).trimmed();
+                return {};
+            };
+            sheet.title = read_subject("name");
+            sheet.address = read_subject("address");
+            break;
+        }
+        if (sheet.title.isEmpty() && !m_file_path.empty())
+            sheet.title = QFileInfo(QString::fromStdWString(m_file_path.wstring())).completeBaseName();
+        if (sheet.title.isEmpty()) sheet.title = QStringLiteral("Untitled property");
+        try {
+            for (const auto& report : appraisalReportsForSnapshot(snapshot)) {
+                if (report.property_id != property_id) continue;
+                sheet.area_lines = appraisal_area_summary_lines(report, m_metric_units, &sheet.area_note);
+                break;
+            }
+        } catch (const std::exception&) {
+            sheet.area_lines = {QStringLiteral("GLA\tUnavailable")};
+            sheet.area_note = QStringLiteral("Open the appraisal report to see why totals are unavailable.");
+        }
+        return sheet;
+    }
+
     bool exportSketchPdf(const QString& path) {
         if (path.trimmed().isEmpty()) {
             setError(QStringLiteral("Choose a sketch PDF destination."));
@@ -42728,16 +43252,47 @@ public:
             }
             const auto snapshot = m_document->snapshot();
             QString diagnostic;
-            auto recording = canvas->recordSketchContent(80.0, &diagnostic);
-            if (!recording) {
+            // Probe once to learn the drawing's proportions, then record at the
+            // largest standard scale whose painted extent fits the sheet.
+            auto probe = canvas->recordSketchContent(80.0, &diagnostic);
+            if (!probe) {
                 setError(QStringLiteral("Sketch PDF export blocked: %1").arg(diagnostic));
+                return false;
+            }
+            auto sheet = sketchPdfSheet(snapshot);
+            sheet.landscape = probe->ink_bounds.width() >= probe->ink_bounds.height();
+            const auto layout = sketch_pdf_layout(sheet.page_size, sheet.landscape);
+            std::optional<CanvasSketchContentRecording> recording;
+            double drawing_ratio = 0.0;
+            const auto probe_metres = QSizeF(probe->ink_bounds.width(), probe->ink_bounds.height()) / 80.0;
+            for (const auto& candidate : sketch_standard_scales(m_metric_units)) {
+                const auto paper_mm_per_metre = 1000.0 / candidate.ratio;
+                // Skip scales the geometry alone cannot fit; text is paper-sized.
+                if (probe_metres.width() * paper_mm_per_metre > layout.drawing_mm.width() * 1.5 ||
+                    probe_metres.height() * paper_mm_per_metre > layout.drawing_mm.height() * 1.5) continue;
+                auto attempt = canvas->recordSketchContent(paper_mm_per_metre * probe->pixels_per_mm, &diagnostic);
+                if (!attempt) {
+                    setError(QStringLiteral("Sketch PDF export blocked: %1").arg(diagnostic));
+                    return false;
+                }
+                if (attempt->ink_bounds.width() / attempt->pixels_per_mm <= layout.drawing_mm.width() &&
+                    attempt->ink_bounds.height() / attempt->pixels_per_mm <= layout.drawing_mm.height()) {
+                    recording = std::move(attempt);
+                    drawing_ratio = candidate.ratio;
+                    sheet.scale_text = candidate.label;
+                    break;
+                }
+            }
+            if (!recording) {
+                setError(QStringLiteral("Sketch PDF export blocked: the drawing is too large for a %1 page at any standard scale. Hide floors or layers you do not need, then export again.")
+                    .arg(QPageSize(sheet.page_size).name()));
                 return false;
             }
             const auto bounds = recording->ink_bounds;
             const auto model_center = recording->model_center;
             const auto pixels_per_mm = recording->pixels_per_mm;
             const auto model_scale = recording->model_scale;
-            const auto pdf_bytes = make_sketch_pdf(std::move(*recording), &diagnostic);
+            const auto pdf_bytes = make_sketch_pdf(std::move(*recording), sheet, &diagnostic);
             if (pdf_bytes.isEmpty()) {
                 setError(QStringLiteral("Sketch PDF export failed: %1").arg(diagnostic));
                 return false;
@@ -42749,7 +43304,7 @@ public:
             // This output is the current visible canvas, not the selected
             // sheet graph. Bind its actual projection and fixed composition.
             const json descriptor{
-                {"kind", "content-only-vector-sketch"}, {"version", 1},
+                {"kind", "titled-vector-sketch-sheet"}, {"version", 2},
                 {"workspace", m_workspace == Workspace::measurement ? "measurement" : "architectural"},
                 {"active_layer_id", m_active_layer_id.toStdString()},
                 {"architectural_view", architectural_view_name(m_architectural_view_kind)},
@@ -42759,11 +43314,17 @@ public:
                 {"ink_bounds_px", {bounds.x(), bounds.y(), bounds.width(), bounds.height()}},
                 {"model_center_m", {model_center.x, model_center.y}},
                 {"pixels_per_metre", model_scale}, {"pixels_per_mm", pixels_per_mm},
-                {"padding_mm", sketch_content_padding_mm}, {"architectural_scale_certified", false}
+                {"page_size", QPageSize(sheet.page_size).key().toStdString()},
+                {"landscape", sheet.landscape},
+                {"drawing_scale_ratio", drawing_ratio}, {"drawing_scale", sheet.scale_text.toStdString()},
+                {"title_block", {{"title", sheet.title.toStdString()}, {"address", sheet.address.toStdString()},
+                                 {"areas", sheet.area_lines.join(QLatin1Char('\n')).toStdString()},
+                                 {"date", sheet.date_text.toStdString()}}},
+                {"architectural_scale_certified", true}
             };
             inputs.views.resources.push_back(fingerprint_resource(
                 "sketch-content-composition", descriptor.dump(),
-                json{{"renderer", "PlanCanvas"}, {"descriptor_version", 1}}));
+                json{{"renderer", "PlanCanvas"}, {"descriptor_version", 2}}));
             const auto fingerprint = make_output_fingerprint(snapshot, inputs);
             const auto payload = json{
                 {"schema", "vertex.output-fingerprint.v1"}, {"output_kind", "sketch-pdf"},
@@ -46748,7 +47309,7 @@ public:
             const auto semantic_visibility = visible_project_entities_with_phase(source, ProjectViewFilter{});
             const auto report = build_appraisal_document_report(source, property_id,
                 m_metric_units ? AreaUnit::square_metre : AreaUnit::square_foot, &semantic_visibility);
-            if (!report.configured) throw std::invalid_argument("Enable appraisal calculations in Setup first.");
+            if (!report.configured) throw std::invalid_argument("Enable appraisal calculations in Appraisal setup first.");
             AppraisalReportingDialog dialog(source, report, owner, &semantic_visibility);
             if (owner->testAttribute(Qt::WA_DontShowOnScreen)) dialog.setAttribute(Qt::WA_DontShowOnScreen);
             styleDialog(dialog);
@@ -46852,7 +47413,7 @@ public:
             auto* basis = combo("appraisalSetupMeasurementBasis",QStringLiteral("Measurement basis"),"measurement_basis","exterior",
                 {{"Exterior","exterior"},{"Interior perimeter","interior_perimeter"},{"Plans","plans"},{"Unknown","unknown"}});
             auto* precision = new QSpinBox(&dialog);precision->setObjectName(QStringLiteral("appraisalSetupPrecision"));precision->setRange(0,6);
-            unsigned initial_precision = 2;
+            unsigned initial_precision = 1; // design system: 1,842.5 sf
             // Read the stored display precision independently of the policy:
             // ANSI always displays whole square feet, but the stored value
             // returns when another policy is chosen.
@@ -46944,9 +47505,12 @@ public:
         }
     }
 
+    // With capture, the changes are returned there instead of being applied,
+    // so they can join another command.
     bool setCalculationWorkflow(const QString& requested_workflow,
         std::optional<json> appraisal_policy = std::nullopt,
-        std::optional<unsigned> decimal_places = std::nullopt) {
+        std::optional<unsigned> decimal_places = std::nullopt,
+        std::vector<EntityChange>* capture = nullptr) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
             return false;
@@ -47053,6 +47617,7 @@ public:
                 }
                 if (changed) changes.push_back(EntityChange::upsert(std::move(boundary)));
             }
+            if (capture != nullptr) { *capture = std::move(changes); clearError(); return true; }
             applyDocumentCommand(ApplyEntityChanges{
                 .expected_revision = snapshot.revision(),
                 .entity_changes = std::move(changes),
@@ -47485,15 +48050,25 @@ public:
         const auto category = selected_category.startsWith(QLatin1Char('@'))
             ? std::string{} : selected_category.toStdString();
         auto filtered = filter_symbol_catalog(desktop_placeable_symbol_catalog(), query, category);
+        if (!m_metric_units && !query.empty()) {
+            // Imperial projects show US nominal names ("36\" base cabinet");
+            // searching for them finds the component too.
+            const auto wanted = QString::fromStdString(query);
+            for (const auto& candidate : filter_symbol_catalog(desktop_placeable_symbol_catalog(), {}, category)) {
+                if (std::any_of(filtered.begin(), filtered.end(), [&](const auto& kept) { return kept.id == candidate.id; }))
+                    continue;
+                if (catalog_symbol_name(candidate, false).contains(wanted, Qt::CaseInsensitive))
+                    filtered.push_back(candidate);
+            }
+        }
         if (walls_and_openings)
             std::erase_if(filtered, [](const auto& definition) { return !is_hosted_opening_symbol(definition); });
-        std::stable_sort(filtered.begin(), filtered.end(), [](const auto& left, const auto& right) {
+        const bool metric = m_metric_units;
+        std::stable_sort(filtered.begin(), filtered.end(), [metric](const auto& left, const auto& right) {
             if (left.svg_asset.has_value() != right.svg_asset.has_value())
                 return left.svg_asset.has_value();
-            const auto left_name = QString::fromStdString(
-                left.name.empty() ? left.family : left.name);
-            const auto right_name = QString::fromStdString(
-                right.name.empty() ? right.family : right.name);
+            const auto left_name = catalog_symbol_name(left, metric);
+            const auto right_name = catalog_symbol_name(right, metric);
             const auto order = QString::compare(left_name, right_name, Qt::CaseInsensitive);
             return order == 0 ? left.id < right.id : order < 0;
         });
@@ -47514,23 +48089,21 @@ public:
                        }); nominal != filtered.end()) {
                 definition = &*nominal;
             }
-            const auto label = library_display_name(QString::fromStdString(
-                definition->name.empty() ? definition->family : definition->name));
+            const auto label = library_display_name(catalog_symbol_name(*definition, m_metric_units));
             auto* entry = new QListWidgetItem(label, m_symbol_list);
             entry->setIcon(symbol_library_thumbnail(*definition));
             entry->setData(Qt::UserRole, QString::fromStdString(definition->id));
             entry->setData(symbol_family_role, QString::fromStdString(definition->family));
             entry->setTextAlignment(Qt::AlignHCenter | Qt::AlignTop);
             entry->setSizeHint(m_symbol_list->gridSize() - QSize(design::space_1, design::space_1));
+            const auto axis = catalog_market_axis_scale(*definition, m_metric_units);
+            const auto size_text = catalog_size_text(definition->width_metres * axis.width,
+                                                     definition->depth_metres * axis.depth, m_metric_units);
             const auto size_description =
                 definition->svg_asset.has_value() &&
                         !definition->svg_asset->dimensions_are_nominal
-                    ? QStringLiteral("Default size: %1 × %2 m — adjust to suit")
-                          .arg(QString::number(definition->width_metres, 'g', 4))
-                          .arg(QString::number(definition->depth_metres, 'g', 4))
-                    : QStringLiteral("Nominal size: %1 × %2 m")
-                          .arg(QString::number(definition->width_metres, 'g', 4))
-                          .arg(QString::number(definition->depth_metres, 'g', 4));
+                    ? QStringLiteral("Default size: %1 — adjust to suit").arg(size_text)
+                    : QStringLiteral("Nominal size: %1").arg(size_text);
             const auto placement = is_hosted_opening_symbol(*definition)
                 ? QStringLiteral("Wall opening: drag onto a wall, or double-click then click a wall. Cuts the host wall.")
                 : QStringLiteral("Drag onto the plan, or double-click then click to place.");
@@ -47565,12 +48138,15 @@ public:
         int selected_index = -1;
         for (const auto& definition : desktop_placeable_symbol_catalog()) {
             if (definition.family != family) continue;
-            auto label = QStringLiteral("%1 × %2 m")
-                             .arg(QString::number(definition.width_metres, 'g', 4))
-                             .arg(QString::number(definition.depth_metres, 'g', 4));
+            // One unit system per view: sizes follow the project's market
+            // (imperial nominal 3' 0" × 2' 0", metric 0.9 m × 0.6 m).
+            const auto axis = catalog_market_axis_scale(definition, m_metric_units);
+            auto label = catalog_size_text(definition.width_metres * axis.width,
+                                           definition.depth_metres * axis.depth, m_metric_units);
             if (is_hosted_opening_symbol(definition)) {
-                label = QStringLiteral("Opening width %1 m — adjustable")
-                    .arg(QString::number(catalog_opening_width(definition), 'g', 4));
+                label = QStringLiteral("Opening width %1 — adjustable")
+                    .arg(drawingFieldText(market_opening_width(definition, catalog_opening_width(definition),
+                                                               m_metric_units)));
             } else if (definition.svg_asset.has_value() &&
                 !definition.svg_asset->dimensions_are_nominal) {
                 label += QStringLiteral(" — Default size; adjust to suit");
@@ -47853,7 +48429,9 @@ public:
 
     bool prepareHostedOpening(const SymbolDefinition& definition, double scale = 1.0) {
         if (!is_hosted_opening_symbol(definition)) return false;
-        const auto width = catalog_opening_width(definition) * scale;
+        // Imperial projects place the US nominal opening (a 910 mm leaf is a
+        // 3' 0" door), never a soft-converted 2' 11 13/16".
+        const auto width = market_opening_width(definition, catalog_opening_width(definition), m_metric_units) * scale;
         if (!std::isfinite(width) || width <= 0.0) {
             setError(QStringLiteral("Catalog opening width is invalid."));
             return false;
@@ -47897,9 +48475,9 @@ public:
         {
             const QSignalBlocker side_blocker(m_opening_draw_bay_side);
             m_opening_draw_bay_side->setCurrentIndex(m_pending_opening_profile->window_open_left ? 0 : 1);
-            m_opening_draw_bay_projection->setText(QString::fromStdString(
-                json(bow ? m_pending_opening_profile->window_bow_projection_m :
-                    m_pending_opening_profile->window_bay_projection_m).dump()) + QStringLiteral(" m"));
+            m_opening_draw_bay_projection->setText(drawingFieldText(
+                bow ? m_pending_opening_profile->window_bow_projection_m :
+                    m_pending_opening_profile->window_bay_projection_m));
         }
         m_opening_draw_bay_projection->setVisible(projecting);
         m_opening_draw_bay_projection_label->setVisible(projecting);
@@ -47940,10 +48518,11 @@ public:
         m_opening_draw_angle->setToolTip(awning
             ? QStringLiteral("Top-hinged sash: 0 degrees closes it; 90 degrees raises it horizontally toward the opening side.")
             : QStringLiteral("Casement swing angle around its jamb."));
-        m_opening_draw_width->setText(QString::fromStdString(json(width).dump()) + QStringLiteral(" m"));
-        m_corner_draw_second_width->setText(QString::fromStdString(json(width).dump()) + QStringLiteral(" m"));
-        m_opening_draw_height->setText(metreFieldText(window ? m_preferences.window_height_m : m_preferences.door_height_m));
-        m_opening_draw_sill->setText(window ? metreFieldText(m_preferences.window_sill_m) : QStringLiteral("0 m"));
+        const auto defaults = drawingDefaults();
+        m_opening_draw_width->setText(drawingFieldText(width));
+        m_corner_draw_second_width->setText(drawingFieldText(width));
+        m_opening_draw_height->setText(drawingFieldText(window ? defaults.window_height_m : defaults.door_height_m));
+        m_opening_draw_sill->setText(drawingFieldText(window ? defaults.window_sill_m : 0.0));
         auto* opening_form = qobject_cast<QFormLayout*>(m_opening_draw_fields->layout());
         opening_form->setRowVisible(m_corner_draw_second_width, m_pending_opening_kind == QStringLiteral("corner_window"));
         if (auto* label = qobject_cast<QLabel*>(opening_form->labelForField(m_opening_draw_height)))
@@ -47953,11 +48532,11 @@ public:
         for (auto* field : {m_skylight_draw_frame, m_skylight_draw_curb, m_skylight_draw_glazing})
             opening_form->setRowVisible(field, skylight);
         if (skylight) {
-            m_opening_draw_width->setText(QString::fromStdString(json(definition.width_metres * scale).dump()) + QStringLiteral(" m"));
-            m_opening_draw_height->setText(QString::fromStdString(json(definition.depth_metres * scale).dump()) + QStringLiteral(" m"));
-            m_skylight_draw_frame->setText(QString::fromStdString(json(0.06 * scale).dump()) + QStringLiteral(" m"));
-            m_skylight_draw_curb->setText(QString::fromStdString(json(0.15 * scale).dump()) + QStringLiteral(" m"));
-            m_skylight_draw_glazing->setText(QString::fromStdString(json(0.024 * scale).dump()) + QStringLiteral(" m"));
+            m_opening_draw_width->setText(drawingFieldText(definition.width_metres * scale));
+            m_opening_draw_height->setText(drawingFieldText(definition.depth_metres * scale));
+            m_skylight_draw_frame->setText(drawingFieldText(0.06 * scale));
+            m_skylight_draw_curb->setText(drawingFieldText(0.15 * scale));
+            m_skylight_draw_glazing->setText(drawingFieldText(0.024 * scale));
         }
         {
             const QSignalBlocker blocker(m_opening_style);
@@ -47966,7 +48545,7 @@ public:
                 if (candidate.category != definition.category || !is_hosted_opening_symbol(candidate) ||
                     catalog_opening_kind(candidate) != m_pending_opening_kind) continue;
                 m_opening_style->addItem(symbol_library_thumbnail(candidate),
-                    QString::fromStdString(candidate.name), QString::fromStdString(candidate.id));
+                    catalog_symbol_name(candidate, m_metric_units), QString::fromStdString(candidate.id));
             }
             m_opening_style->setCurrentIndex(m_opening_style->findData(m_pending_opening_symbol_id));
             m_opening_style->setEnabled(true);
@@ -47979,7 +48558,7 @@ public:
             : m_pending_opening_kind == QStringLiteral("corner_window")
             ? QStringLiteral("%1 • click where two visible walls meet. Esc cancels.")
             : QStringLiteral("%1 • click an existing wall to place. Esc cancels."))
-            .arg(QString::fromStdString(definition.name)));
+            .arg(catalog_symbol_name(definition, m_metric_units)));
         syncToolControls();
         clearError();
         // Changing a preset from the sidebar has no current canvas target.
@@ -48023,6 +48602,51 @@ public:
             !sourceEditAuthorityCurrent(*m_symbol_placement_authority) || !publication ||
             fullSnapshotDigest(*publication)!=m_symbol_placement_authority->source_digest)
             throw std::invalid_argument("The component source, selection, layer or view changed. Cancel and start again.");
+    }
+
+    // A new hinged door swings into the room its wall bounds rather than out
+    // of it: the swing side is whichever side of the opening lies inside more
+    // closed areas on the host's floor (a room inside a site boundary counts
+    // two against the site's one). A wall with rooms on both sides, or none,
+    // keeps the catalog default. Other mechanisms keep their own side rules.
+    static std::optional<DoorOperation> inwardDoorOperation(const DocumentSnapshot& source,
+        const Entity& owner, const Wall& host, double offset, double width,
+        std::optional<DoorOperation> operation) {
+        if (!operation || (operation->kind != DoorOperationKind::hinged &&
+                           operation->kind != DoorOperationKind::double_hinged)) return operation;
+        try {
+            const auto span = hosted_opening_span(host.baseline, offset, width);
+            const auto dx = span.end.x - span.start.x, dy = span.end.y - span.start.y;
+            const auto length = std::hypot(dx, dy);
+            if (!std::isfinite(length) || length <= 1e-9) return operation;
+            // The door operation's "left" is left of the host baseline direction.
+            const Vec2 left{-dy / length, dx / length};
+            const Vec2 middle{(span.start.x + span.end.x) / 2.0, (span.start.y + span.end.y) / 2.0};
+            const auto reach = std::max(std::isfinite(host.thickness) ? host.thickness : 0.0, 0.0) / 2.0 + 0.15;
+            const Vec2 left_point{middle.x + left.x * reach, middle.y + left.y * reach};
+            const Vec2 right_point{middle.x - left.x * reach, middle.y - left.y * reach};
+            const auto floor = read_string(owner.properties, "floor_id");
+            int left_areas = 0, right_areas = 0;
+            for (const auto& [id, entity] : source.entities()) {
+                (void)id;
+                if (!is_closed_boundary_entity(entity.type)) continue;
+                if (floor) {
+                    const auto area_floor = read_string(entity.properties, "floor_id");
+                    if (area_floor && *area_floor != *floor) continue;
+                }
+                try {
+                    const auto boundary = boundary_geometry(decode_identified_boundary_entity(entity));
+                    left_areas += PlanCanvas::containsAreaPoint(boundary, left_point) ? 1 : 0;
+                    right_areas += PlanCanvas::containsAreaPoint(boundary, right_point) ? 1 : 0;
+                } catch (const std::exception&) {
+                    // An unreadable area never decides a swing.
+                }
+            }
+            if (left_areas != right_areas) operation->swing_left = left_areas > right_areas;
+        } catch (const std::exception&) {
+            // Without a usable span the catalog default stands.
+        }
+        return operation;
     }
 
     static std::optional<VisibleOpeningHost> visibleOpeningHostAt(
@@ -48216,13 +48840,18 @@ public:
         return result;
     }
 
+    // `metric` selects the market: an imperial project places a component
+    // with a US nominal equivalent at that size (a 900 mm base cabinet lands
+    // as 3' 0" × 2' 0", not 2' 11 7/16" × 1' 11 5/8").
     static std::pair<SymbolInstance,CanvasEntity> symbolPlacementArtwork(
-        const SymbolDefinition& definition,double scale,const std::string& layer_id) {
+        const SymbolDefinition& definition,double scale,const std::string& layer_id,bool metric=true) {
         if (!std::isfinite(scale) || scale<=0.0 || scale>100.0)
             throw std::invalid_argument("Component scale must be greater than zero and no more than 100.");
         SymbolInstance symbol;
         symbol.id=new_id("symbol-preview");symbol.symbol_id=definition.id;symbol.definition=definition;
         symbol.placement.scale=scale;symbol.placement.layer_id=layer_id;symbol.model_plan=true;
+        const auto market=catalog_market_axis_scale(definition,metric);
+        symbol.width_scale=market.width;symbol.depth_scale=market.depth;
         CanvasEntity geometry{QStringLiteral("placement-preview"),QStringLiteral("symbol"),{},0,false};
         geometry.model_plan=symbol.model_plan;
         for (const auto& stroke:transformed_symbol_preview(definition,symbol))
@@ -48234,7 +48863,7 @@ public:
         geometry.fill_opacity=symbol.style.fill_opacity;geometry.line_pattern=QString::fromStdString(symbol.style.line_pattern);
         geometry.hatch_pattern=QString::fromStdString(symbol.style.fill_pattern);
         geometry.filled=symbol.style.fill_pattern!="none" && geometry.fill_color.isValid();
-        geometry.resize_frame=CanvasSelectionFrame{{},0,definition.width_metres*scale,definition.depth_metres*scale};
+        geometry.resize_frame=CanvasSelectionFrame{{},0,definition.width_metres*scale*market.width,definition.depth_metres*scale*market.depth};
         if(definition.svg_asset) {
             const auto& asset=*definition.svg_asset;
             CanvasSvgSymbol svg;
@@ -48243,7 +48872,7 @@ public:
             svg.artwork_sha256=QCryptographicHash::hash(svg.document,QCryptographicHash::Sha256).toHex();
             svg.view_box=QRectF(asset.view_box[0],asset.view_box[1],asset.view_box[2],asset.view_box[3]);
             svg.footprint_view_box=QRectF(asset.footprint_view_box[0],asset.footprint_view_box[1],asset.footprint_view_box[2],asset.footprint_view_box[3]);
-            svg.width_metres=definition.width_metres*scale;svg.depth_metres=definition.depth_metres*scale;
+            svg.width_metres=definition.width_metres*scale*market.width;svg.depth_metres=definition.depth_metres*scale*market.depth;
             geometry.svg_symbol=std::move(svg);
         }
         return {std::move(symbol),std::move(geometry)};
@@ -48265,7 +48894,7 @@ public:
         const auto definition=std::find_if(catalog.begin(),catalog.end(),[&](const auto& value){return value.id==id.toStdString();});
         if(definition==catalog.end() || is_hosted_opening_symbol(*definition))
             throw std::invalid_argument("Choose a furniture component from the library.");
-        auto [symbol,geometry]=symbolPlacementArtwork(*definition,scale,context->layer_id);
+        auto [symbol,geometry]=symbolPlacementArtwork(*definition,scale,context->layer_id,m_metric_units);
         const auto site_frame=site ? std::optional{siteAnnotationCreationFrame(*source,*context)} : std::nullopt;
         AnnotationState addition;addition.symbols.push_back(symbol);
         const auto encoded=encode_annotation_state(addition,desktop_symbol_catalog());
@@ -48337,7 +48966,9 @@ public:
         const auto span=hosted_opening_span(host.baseline,opening.offset,opening.width);
         CanvasEntity geometry{QStringLiteral("opening-placement-preview"),QStringLiteral("opening"),
             input.bare_opening ? wall_plan_footprint(span,{},host.thickness)
-                : openingPlacementPlan(host,opening,input.assembly,input.operation,*input.plan_cache),0,false};
+                : openingPlacementPlan(host,opening,input.assembly,
+                    inwardDoorOperation(*input.source,placement->owner,placement->wall,opening.offset,opening.width,input.operation),
+                    *input.plan_cache),0,false};
         geometry.stroke_color=QColor(Qt::black);geometry.dark_stroke_color=QColor(210,226,239);
         geometry.output_stroke_width_mm=.25;
         retain_opening_plan_controls(geometry,{span.start,span.end,host.thickness,
@@ -48643,7 +49274,7 @@ public:
             capture.catalog_id=id;capture.scale=scale;
             if (!site) capture.plan_frame=canvasTransformPlanFrame(*source);
             if (site && !hosted) capture.site_frame=siteAnnotationCreationFrame(*source,*context);
-            if (!hosted) capture.artwork=symbolPlacementArtwork(*definition,scale,context->layer_id).second;
+            if (!hosted) capture.artwork=symbolPlacementArtwork(*definition,scale,context->layer_id,m_metric_units).second;
             else {
                 HostedLibraryDragInput input;
                 input.source=source;input.visible=canvas->entities();input.layer_id=context->layer_id;
@@ -48654,9 +49285,11 @@ public:
                 const bool window=kind==QStringLiteral("window") || kind==QStringLiteral("corner_window");
                 input.corner_window=kind==QStringLiteral("corner_window");
                 input.corner_pick_radius=18.0/canvas->viewScale();
-                input.width=catalog_opening_width(*definition)*scale;
+                input.width=market_opening_width(*definition,catalog_opening_width(*definition),m_metric_units)*scale;
                 input.second_width=input.width;
-                input.sill=window ? .9 : 0.0;input.height=window ? 1.2 : 2.1;
+                const auto defaults=drawingDefaults();
+                input.sill=window ? defaults.window_sill_m : 0.0;
+                input.height=window ? defaults.window_height_m : defaults.door_height_m;
                 input.station_increment=canvas->placementLengthIncrementMetres();
                 input.assembly=catalog_opening_assembly(kind,id);
                 input.bare_opening=kind==QStringLiteral("opening") && input.assembly.kind!=OpeningAssemblyKind::passage;
@@ -48831,7 +49464,7 @@ public:
                 }
                 if (m_symbol_library_status)
                     m_symbol_library_status->setText(QStringLiteral("%1 placed in its host.")
-                        .arg(QString::fromStdString(definition->name)));
+                        .arg(catalog_symbol_name(*definition, m_metric_units)));
                 return;
             }
             if(m_pending_symbol_id!=id || m_pending_symbol_scale!=scale) {
@@ -49472,8 +50105,51 @@ public:
         return precision;
     }
 
-    [[nodiscard]] static QString metreFieldText(double metres) {
-        return QString::number(metres, 'g', 12) + QStringLiteral(" m");
+    // Drawing-panel field text in the active unit system (always parseable).
+    // A coarse display step chosen in Preferences never rounds the size that
+    // will be placed: fields keep 1/16" and 1 mm.
+    [[nodiscard]] QString drawingFieldText(double metres) const {
+        auto precision = units::display_precision();
+        precision.imperial_denominator = 16;
+        precision.metric_step_mm = 1.0;
+        return units::length_input_text(metres, m_metric_units, precision);
+    }
+
+    // Drawing defaults for the active unit system: a default the person never
+    // chose follows the project's market (imperial 3' 0" × 6' 8" doors, metric
+    // 900 × 2100 mm), even when the toolbar units differ from Preferences.
+    [[nodiscard]] Preferences drawingDefaults() const {
+        return m_preferences.withMarketDrawingDefaults(
+            m_metric_units ? Preferences::Units::metric : Preferences::Units::imperial);
+    }
+
+    // Re-shows the wall and opening drawing fields after a unit-system change:
+    // untouched market defaults switch market, typed values keep their length.
+    void refreshDrawingDefaultFields(bool previous_metric) {
+        const auto defaults = drawingDefaults();
+        const auto previous_unit = previous_metric ? Unit::metre : Unit::foot;
+        const auto rewrite = [&](QLineEdit* field, double Preferences::*member) {
+            if (!field) return;
+            try {
+                auto metres = parse_quantity(field->text().toStdString(), previous_unit).metres;
+                if (member && Preferences::untouchedDrawingDefault(member, metres)) metres = defaults.*member;
+                if (std::isfinite(metres)) field->setText(drawingFieldText(metres));
+            } catch (const std::exception&) {
+                // Unparseable text stays for the person to correct.
+            }
+        };
+        rewrite(m_wall_draw_thickness, &Preferences::wall_thickness_m);
+        rewrite(m_wall_draw_height, &Preferences::wall_height_m);
+        const bool window = m_pending_opening_kind == QStringLiteral("window");
+        const bool door = m_pending_opening_kind.isEmpty() || m_pending_opening_kind == QStringLiteral("door");
+        rewrite(m_opening_draw_width, window ? &Preferences::window_width_m
+                                             : door ? &Preferences::door_width_m : nullptr);
+        rewrite(m_opening_draw_height, window ? &Preferences::window_height_m
+                                              : door ? &Preferences::door_height_m : nullptr);
+        rewrite(m_opening_draw_sill, window ? &Preferences::window_sill_m : nullptr);
+        for (auto* field : {m_corner_draw_second_width, m_opening_draw_bay_projection,
+                            m_skylight_draw_frame, m_skylight_draw_curb, m_skylight_draw_glazing})
+            rewrite(field, nullptr);
     }
 
     void loadSavedPreferences() {
@@ -49491,7 +50167,7 @@ public:
     }
 
     void applyPreferences(const Preferences& preferences) {
-        const auto previous = m_preferences;
+        const auto previous = drawingDefaults();
         m_preferences = preferences;
         // Display precision first so a units change below already redraws
         // with it; otherwise a precision-only change refreshes the readouts.
@@ -49517,14 +50193,15 @@ public:
         if (m_overview_map_enabled != preferences.overview_map_enabled) setOverviewMap(preferences.overview_map_enabled);
         // Drawing defaults: only a changed default rewrites its field, so a
         // value already typed into the drawing panel is otherwise kept.
-        if (m_wall_draw_thickness && preferences.wall_thickness_m != previous.wall_thickness_m)
-            m_wall_draw_thickness->setText(format_length(preferences.wall_thickness_m, m_metric_units));
-        if (m_wall_draw_height && preferences.wall_height_m != previous.wall_height_m)
-            m_wall_draw_height->setText(format_length(preferences.wall_height_m, m_metric_units));
+        const auto current = drawingDefaults();
+        if (m_wall_draw_thickness && current.wall_thickness_m != previous.wall_thickness_m)
+            m_wall_draw_thickness->setText(drawingFieldText(current.wall_thickness_m));
+        if (m_wall_draw_height && current.wall_height_m != previous.wall_height_m)
+            m_wall_draw_height->setText(drawingFieldText(current.wall_height_m));
         if (m_pending_opening_kind.isEmpty() && m_opening_draw_width && m_opening_draw_height &&
-            (preferences.door_width_m != previous.door_width_m || preferences.door_height_m != previous.door_height_m)) {
-            m_opening_draw_width->setText(metreFieldText(preferences.door_width_m));
-            m_opening_draw_height->setText(metreFieldText(preferences.door_height_m));
+            (current.door_width_m != previous.door_width_m || current.door_height_m != previous.door_height_m)) {
+            m_opening_draw_width->setText(drawingFieldText(current.door_width_m));
+            m_opening_draw_height->setText(drawingFieldText(current.door_height_m));
         }
     }
 
@@ -50645,9 +51322,9 @@ public:
             {QStringLiteral("Toggle snap"), [this] { toggleSnap(); }},
             {QStringLiteral("Toggle overview map"), [this] { toggleOverviewMap(); }},
             {QStringLiteral("Fit view"), [this] { fitView(); }},
-            {QStringLiteral("Light theme"), [this] { applyTheme(WorkspaceTheme::light); }},
-            {QStringLiteral("Dark theme"), [this] { applyTheme(WorkspaceTheme::dark); }},
-            {QStringLiteral("High contrast theme"), [this] { applyTheme(WorkspaceTheme::high_contrast); }},
+            {QStringLiteral("Light theme"), [this] { chooseTheme(WorkspaceTheme::light); }},
+            {QStringLiteral("Dark theme"), [this] { chooseTheme(WorkspaceTheme::dark); }},
+            {QStringLiteral("High contrast theme"), [this] { chooseTheme(WorkspaceTheme::high_contrast); }},
             {QStringLiteral("Export selected sheet PDF"), [this] { exportFromDialog(); }},
             {QStringLiteral("Export sketch PDF"), [this] { exportSketchFromDialog(); }},
             {QStringLiteral("Toggle sketch composition guide"), [this] {
@@ -50657,12 +51334,12 @@ public:
             {QStringLiteral("Export drawing set PDF"), [this] { exportDrawingSetFromDialog(); }},
             {QStringLiteral("Export SVG"), [this] {
                 const auto selected = QFileDialog::getSaveFileName(
-                    owner, QStringLiteral("Export SVG"), {}, QStringLiteral("SVG document (*.svg)"));
+                    owner, QStringLiteral("Export SVG"), defaultOutputPath(QStringLiteral(".svg")), QStringLiteral("SVG document (*.svg)"));
                 if (!selected.isEmpty()) exportDraftSvg(selected);
             }},
             {QStringLiteral("Export image"), [this] {
                 const auto selected = QFileDialog::getSaveFileName(
-                    owner, QStringLiteral("Export image"), {},
+                    owner, QStringLiteral("Export image"), defaultOutputPath(QStringLiteral(" sketch.png")),
                     QStringLiteral("PNG image (*.png)"));
                 if (!selected.isEmpty()) exportDraftImage(selected);
             }},
@@ -50677,7 +51354,7 @@ public:
             }},
             {QStringLiteral("Export DXF"), [this] {
                 const auto selected = QFileDialog::getSaveFileName(
-                    owner, QStringLiteral("Export DXF"), {}, QStringLiteral("DXF drawing (*.dxf)"));
+                    owner, QStringLiteral("Export DXF"), defaultOutputPath(QStringLiteral(".dxf")), QStringLiteral("DXF drawing (*.dxf)"));
                 if (!selected.isEmpty()) exportDxf(selected);
             }},
             {QStringLiteral("Import IFC"), [this] {
@@ -50687,7 +51364,7 @@ public:
             }},
             {QStringLiteral("Export IFC"), [this] {
                 const auto selected = QFileDialog::getSaveFileName(
-                    owner, QStringLiteral("Export IFC"), {}, QStringLiteral("IFC model (*.ifc)"));
+                    owner, QStringLiteral("Export IFC"), defaultOutputPath(QStringLiteral(".ifc")), QStringLiteral("IFC model (*.ifc)"));
                 if (!selected.isEmpty()) exportIfc(selected);
             }},
             {QStringLiteral("Imported sources / export original file"), [this] { showImportedSources(); }},
@@ -56130,6 +56807,7 @@ private:
 
     void buildUi() {
         QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+        WindowChromeFilter::install();
         owner->setObjectName(QStringLiteral("vertexMainWindow"));
         owner->resize(1480, 900);
         owner->setMinimumSize(1080, 700);
@@ -56366,17 +57044,17 @@ private:
                          [this] { exportDrawingSetFromDialog(); });
         auto* export_dxf_action = make_action("exportDxf", QStringLiteral("Export DXF…"), [this] {
             const auto selected = QFileDialog::getSaveFileName(
-                owner, QStringLiteral("Export DXF"), {}, QStringLiteral("DXF drawing (*.dxf)"));
+                owner, QStringLiteral("Export DXF"), defaultOutputPath(QStringLiteral(".dxf")), QStringLiteral("DXF drawing (*.dxf)"));
             if (!selected.isEmpty()) exportDxf(selected);
         });
         auto* export_ifc_action = make_action("exportIfc", QStringLiteral("Export IFC…"), [this] {
             const auto selected = QFileDialog::getSaveFileName(
-                owner, QStringLiteral("Export IFC"), {}, QStringLiteral("IFC model (*.ifc)"));
+                owner, QStringLiteral("Export IFC"), defaultOutputPath(QStringLiteral(".ifc")), QStringLiteral("IFC model (*.ifc)"));
             if (!selected.isEmpty()) exportIfc(selected);
         });
         auto* export_svg_action = make_action("exportSvg", QStringLiteral("Export SVG…"), [this] {
             const auto selected = QFileDialog::getSaveFileName(
-                owner, QStringLiteral("Export SVG"), {}, QStringLiteral("SVG document (*.svg)"));
+                owner, QStringLiteral("Export SVG"), defaultOutputPath(QStringLiteral(".svg")), QStringLiteral("SVG document (*.svg)"));
             if (!selected.isEmpty()) exportDraftSvg(selected);
         });
         auto* import_dxf_action = make_action("importDxf", QStringLiteral("DXF drawing…"), [this] {
@@ -56608,10 +57286,38 @@ private:
         import_menu->addAction(import_dxf_action);
         import_menu->addAction(import_ifc_action);
         import_menu->addAction(import_pinc_action);
-        export_menu->addAction(export_sheet_pdf_action);
+        auto* export_report_action = make_action("exportAppraisalReportPdf", QStringLiteral("Appraisal report PDF…"),
+                         [this] { exportAppraisalReportFromDialog(); });
+        export_report_action->setToolTip(QStringLiteral("Export the appraisal area report with GLA and area totals as a PDF"));
         export_menu->addAction(sketch_pdf_action);
+        export_menu->addAction(export_report_action);
+        export_menu->addAction(export_sheet_pdf_action);
         export_menu->addAction(export_set_action);
         export_menu->addSeparator();
+        // Sheet output needs a drawing sheet; say why instead of failing.
+        export_menu->setToolTipsVisible(true);
+        QObject::connect(export_menu, &QMenu::aboutToShow, owner,
+                         [this, export_sheet_pdf_action, export_set_action, export_report_action] {
+            bool has_sheets = false;
+            bool has_property = false;
+            try {
+                const auto snapshot = m_document->snapshot();
+                const auto record = decode_sheet_model(snapshot);
+                has_sheets = record && !record->model.sheets().empty();
+                has_property = std::any_of(snapshot.entities().begin(), snapshot.entities().end(),
+                    [](const auto& entry) { return entry.second.type == "property"; });
+            } catch (const std::exception&) {}
+            const auto reason = QStringLiteral("No drawing sheets yet. Add one with Output > Sheet layout manager, or use Export sketch PDF.");
+            for (auto* action : {export_sheet_pdf_action, export_set_action}) {
+                action->setEnabled(has_sheets);
+                action->setToolTip(has_sheets ? QString{} : reason);
+                action->setStatusTip(has_sheets ? QString{} : reason);
+            }
+            export_report_action->setEnabled(has_property);
+            export_report_action->setToolTip(has_property
+                ? QStringLiteral("Export the appraisal area report with GLA and area totals as a PDF")
+                : QStringLiteral("This project has no property to report on."));
+        });
         export_menu->addAction(export_dxf_action);
         export_menu->addAction(export_ifc_action);
         export_menu->addAction(export_svg_action);
@@ -56714,10 +57420,15 @@ private:
 
         auto* theme_menu = new QMenu(QStringLiteral("Theme"), owner);
         theme_menu->setObjectName(QStringLiteral("themeChoices"));
-        const auto add_theme_action = [this, theme_menu](QString label, const char* id, WorkspaceTheme theme) {
+        auto* theme_group = new QActionGroup(theme_menu);
+        theme_group->setExclusive(true);
+        const auto add_theme_action = [this, theme_menu, theme_group](QString label, const char* id, WorkspaceTheme theme) {
             auto* action = theme_menu->addAction(std::move(label));
             action->setObjectName(QString::fromLatin1(id));
-            QObject::connect(action, &QAction::triggered, owner, [this, theme] { applyTheme(theme); });
+            action->setActionGroup(theme_group);
+            action->setCheckable(true);
+            action->setChecked(theme == m_theme);
+            QObject::connect(action, &QAction::triggered, owner, [this, theme] { chooseTheme(theme); });
         };
         add_theme_action(QStringLiteral("Light"), "themeLight", WorkspaceTheme::light);
         add_theme_action(QStringLiteral("Dark"), "themeDark", WorkspaceTheme::dark);
@@ -56980,6 +57691,11 @@ private:
                              }
                          });
         initializeShortcuts();
+        // Header commands are reachable from the keyboard: Tab moves through
+        // them (a click still leaves focus on the canvas).
+        for (auto* button : toolbar->findChildren<QToolButton*>())
+            if (button->objectName() != QStringLiteral("qt_toolbar_ext_button"))
+                button->setFocusPolicy(Qt::TabFocus);
         applyTheme(m_theme); // Design system: dark is the primary (default) theme.
 
         auto* central = new QWidget(owner);
@@ -57449,7 +58165,14 @@ private:
                         [&](const auto& candidate) { return candidate.id == preset; });
                     if (definition != catalog.end()) {
                         if (!selectEntity({}, false)) return;
-                        (void)prepareHostedOpening(*definition);
+                        // The plain Door/Window tools start at the drawing
+                        // defaults for the project's market (Preferences);
+                        // choosing a catalog style applies that style's size.
+                        if (prepareHostedOpening(*definition)) {
+                            const auto defaults = drawingDefaults();
+                            const bool window = kind == QStringLiteral("Window");
+                            m_opening_draw_width->setText(drawingFieldText(window ? defaults.window_width_m : defaults.door_width_m));
+                        }
                         return;
                     }
                 }
@@ -57469,9 +58192,10 @@ private:
                     m_opening_draw_bay_side_label->hide();
                     m_pending_opening_profile.reset();
                     const bool window = kind == QStringLiteral("Window");
-                    m_opening_draw_width->setText(metreFieldText(window ? m_preferences.window_width_m : m_preferences.door_width_m));
-                    m_opening_draw_height->setText(metreFieldText(window ? m_preferences.window_height_m : m_preferences.door_height_m));
-                    m_opening_draw_sill->setText(window ? metreFieldText(m_preferences.window_sill_m) : QStringLiteral("0 m"));
+                    const auto defaults = drawingDefaults();
+                    m_opening_draw_width->setText(drawingFieldText(window ? defaults.window_width_m : defaults.door_width_m));
+                    m_opening_draw_height->setText(drawingFieldText(window ? defaults.window_height_m : defaults.door_height_m));
+                    m_opening_draw_sill->setText(drawingFieldText(window ? defaults.window_sill_m : 0.0));
                     auto* form = qobject_cast<QFormLayout*>(m_opening_draw_fields->layout());
                     if (auto* label = qobject_cast<QLabel*>(form->labelForField(m_opening_draw_height))) label->setText(QStringLiteral("Height"));
                     m_opening_draw_height->setAccessibleName(QStringLiteral("Height"));
@@ -57504,8 +58228,8 @@ private:
         auto* wall_form = new QFormLayout(m_wall_draw_fields);
         wall_form->setContentsMargins(0, 0, 0, 0);
         wall_form->setVerticalSpacing(3);
-        m_wall_draw_thickness = dimension_field(wall_form, QStringLiteral("Thickness"), "wallDrawThickness", QStringLiteral("140 mm"));
-        m_wall_draw_height = dimension_field(wall_form, QStringLiteral("Height"), "wallDrawHeight", QStringLiteral("8 ft"));
+        m_wall_draw_thickness = dimension_field(wall_form, QStringLiteral("Thickness"), "wallDrawThickness", drawingFieldText(drawingDefaults().wall_thickness_m));
+        m_wall_draw_height = dimension_field(wall_form, QStringLiteral("Height"), "wallDrawHeight", drawingFieldText(drawingDefaults().wall_height_m));
         architecture_layout->addWidget(m_wall_draw_fields);
         QObject::connect(m_wall_draw_thickness, &QLineEdit::textChanged, owner, [this] {
             if (m_pending_wall_start) refreshWallPreview(m_last_cursor);
@@ -57526,14 +58250,14 @@ private:
                 [&](const auto& candidate) { return candidate.id == id; });
             if (definition != catalog.end()) (void)prepareHostedOpening(*definition);
         });
-        m_opening_draw_width = dimension_field(opening_form, QStringLiteral("Width"), "openingDrawWidth", QStringLiteral("0.9 m"));
-        m_corner_draw_second_width = dimension_field(opening_form, QStringLiteral("Second leg"), "cornerWindowSecondWidth", QStringLiteral("1 m"));
+        m_opening_draw_width = dimension_field(opening_form, QStringLiteral("Width"), "openingDrawWidth", drawingFieldText(drawingDefaults().door_width_m));
+        m_corner_draw_second_width = dimension_field(opening_form, QStringLiteral("Second leg"), "cornerWindowSecondWidth", drawingFieldText(drawingDefaults().window_width_m));
         opening_form->setRowVisible(m_corner_draw_second_width, false);
-        m_opening_draw_height = dimension_field(opening_form, QStringLiteral("Height"), "openingDrawHeight", QStringLiteral("2.1 m"));
-        m_opening_draw_sill = dimension_field(opening_form, QStringLiteral("Sill"), "openingDrawSill", QStringLiteral("0 m"));
-        m_skylight_draw_frame = dimension_field(opening_form, QStringLiteral("Frame"), "skylightDrawFrame", QStringLiteral("60 mm"));
-        m_skylight_draw_curb = dimension_field(opening_form, QStringLiteral("Curb height"), "skylightDrawCurb", QStringLiteral("150 mm"));
-        m_skylight_draw_glazing = dimension_field(opening_form, QStringLiteral("Glazing"), "skylightDrawGlazing", QStringLiteral("24 mm"));
+        m_opening_draw_height = dimension_field(opening_form, QStringLiteral("Height"), "openingDrawHeight", drawingFieldText(drawingDefaults().door_height_m));
+        m_opening_draw_sill = dimension_field(opening_form, QStringLiteral("Sill"), "openingDrawSill", drawingFieldText(0.0));
+        m_skylight_draw_frame = dimension_field(opening_form, QStringLiteral("Frame"), "skylightDrawFrame", drawingFieldText(0.06));
+        m_skylight_draw_curb = dimension_field(opening_form, QStringLiteral("Curb height"), "skylightDrawCurb", drawingFieldText(0.15));
+        m_skylight_draw_glazing = dimension_field(opening_form, QStringLiteral("Glazing"), "skylightDrawGlazing", drawingFieldText(0.024));
         for (auto* field : {m_skylight_draw_frame, m_skylight_draw_curb, m_skylight_draw_glazing}) {
             opening_form->setRowVisible(field, false);
             QObject::connect(field, &QLineEdit::textChanged, owner, [this] { resetOpeningPlacementHover(); });
@@ -59213,6 +59937,9 @@ private:
         // style every widget created since) runs before the canvases exist,
         // so give the plan canvases the active theme's background now.
         applyCanvasBackgrounds();
+        // Header buttons take Tab focus, so name the canvas as the window's
+        // initial focus rather than letting the first header button take it.
+        if (m_measurementCanvas) m_measurementCanvas->setFocus(Qt::OtherFocusReason);
     }
 
     void connectCanvas(PlanCanvas* canvas) {
@@ -59326,6 +60053,15 @@ private:
                 m_pending_symbol_id.isEmpty() && m_pending_opening_kind.isEmpty() &&
                 !m_text_placement_context && !m_plan_label_context && !m_armed_area_class &&
                 !m_drawing_parked && !m_drawing_travel_armed;
+        });
+        canvas->setVertexStartsDrawingRequested([this, canvas] {
+            // Only the Measure workspace's Area / Measured lines Draw choices
+            // trace existing corners; Wall keeps the ordinary idle pick.
+            return canvas == m_measurementCanvas && m_workspace == Workspace::measurement &&
+                m_tool == CanvasTool::select && m_document->is_editable() &&
+                (m_creation_mode == DrawingMode::measurement || m_creation_mode == DrawingMode::measured_lines) &&
+                m_pending_symbol_id.isEmpty() && m_pending_opening_kind.isEmpty() &&
+                !m_text_placement_context && !m_plan_label_context && !m_armed_area_class;
         });
         canvas->setPendingDimensionTargetRequested([this, canvas] {
             return pendingDimensionTarget(canvas);
@@ -61917,15 +62653,28 @@ private:
                     // path and must not suppress the rest of the floor title.
                 }
             }
+            if (floor_bounds) {
+                // Dimension text can sit outside its line; keep it below the title.
+                for (const auto& label : labels) {
+                    if (label.selection_type != QStringLiteral("dimension") ||
+                        !std::isfinite(label.position.x) || !std::isfinite(label.position.y)) continue;
+                    const auto context = organization.drawing_context(label.id.toStdString());
+                    if (!context || context->floor_id != active->floor_id) continue;
+                    floor_bounds->maximum.y = std::max(floor_bounds->maximum.y, label.position.y);
+                }
+            }
             const auto floor = organization.nodes.find(active->floor_id);
             if (floor_bounds && floor != organization.nodes.end()) {
+                // Anchor above everything drawn on the floor, including
+                // dimension lines and their text, so the title never sits on
+                // a dimension. Horizontally it stays over the primary area.
                 const auto title_bounds = primary_area_bounds.value_or(*floor_bounds);
+                const auto floor_height = floor_bounds->maximum.y - floor_bounds->minimum.y;
                 auto title = normalized_plan_name(QString::fromStdString(
                     floor->second.name.empty() ? std::string("Floor") : floor->second.name));
                 CanvasLabel floor_label{id_from(active->floor_id),
-                    {title_bounds.maximum.x,
-                     title_bounds.maximum.y +
-                         std::max(0.28, (title_bounds.maximum.y - title_bounds.minimum.y) * 0.025)},
+                    {std::midpoint(title_bounds.minimum.x, title_bounds.maximum.x),
+                     floor_bounds->maximum.y + std::max(0.45, floor_height * 0.04)},
                     std::move(title), false};
                 floor_label.paper_height_mm = 3.2;
                 floor_label.text_height_metres = 0.25;
@@ -65943,8 +66692,8 @@ private:
             if (definition == catalog.end())
                 definition = std::find_if(catalog.begin(), catalog.end(),
                     [&](const auto& candidate) { return candidate.family == symbol_id; });
-            const auto name = library_display_name(QString::fromStdString(definition == catalog.end()
-                ? symbol_id : definition->name.empty() ? definition->family : definition->name));
+            const auto name = library_display_name(definition == catalog.end()
+                ? QString::fromStdString(symbol_id) : catalog_symbol_name(*definition, m_metric_units));
             symbol_names.emplace(symbol_id, name);
             return name;
         };
@@ -66492,14 +67241,14 @@ private:
                 }
                 if (!entity_classification.has_value() || entity_classification->empty()) {
                     throw std::invalid_argument(
-                        "Boundary " + id +
-                        (appraisal_workflow
-                             ? " has no appraisal category; assign one before calculating totals"
-                             : " has no measurement classification; assign one before calculating totals"));
+                        appraisal_source_label(snapshot, id).toStdString() +
+                        " has no area type. Choose one in Details to include it in totals.");
                 }
                 if (!display_profile.classifications.contains(*entity_classification)) {
-                    throw std::invalid_argument("Classification '" + *entity_classification +
-                                                "' has no calculation profile rule; assign it before calculating totals");
+                    throw std::invalid_argument(
+                        appraisal_source_label(snapshot, id).toStdString() + " uses the area type \"" +
+                        areaPaletteClassLabel(id_from(*entity_classification)).toStdString() +
+                        "\", which the area rules do not cover. Add a rule with Edit profile under Area workflow, or choose another area type.");
                 }
                 auto deductions = collect_deductions(id, entity, *floor_id, scope_name);
                 areas.push_back(MeasurementArea{id,
@@ -66851,7 +67600,7 @@ private:
                 const auto* rounding=m_appraisal_details->findChild<QLabel*>(QStringLiteral("appraisalDetailsRounding"));
                 m_appraisal_gla_shortcut->setToolTip((available ? QStringLiteral("Open the current property GLA, dimensions and deductions.") :
                     report->configured ? QStringLiteral("GLA withheld. Open Details to resolve the measurement and declaration issues.") :
-                    QStringLiteral("GLA withheld. Open Details and use Setup to declare the appraisal policy and each area's facts."))+
+                    QStringLiteral("GLA withheld. Open Details and use Appraisal setup to declare the appraisal policy and each area's facts."))+
                     (status ? QLatin1Char('\n')+status->text() : QString{})+
                     (available && rounding && !rounding->text().isEmpty() ? QLatin1Char('\n')+rounding->text() : QString{}));
             }
@@ -68012,6 +68761,18 @@ private:
                     return framed ? QStringLiteral("Selected: Cased opening") : QStringLiteral("Selected: Bare opening");
                 }
             }
+            // Areas read as "Area 2 · First floor", never as an internal type.
+            if (is_closed_boundary_entity(found->second.type) || found->second.type == "room")
+                return QStringLiteral("Selected: %1").arg(appraisal_source_label(snapshot, id));
+            static const std::map<std::string, QString, std::less<>> friendly{
+                {"measurement_linework", QStringLiteral("Measured line")},
+                {"annotation_line", QStringLiteral("Line")},
+                {"reference_asset", QStringLiteral("Reference image")},
+                {"building_object", QStringLiteral("Object")},
+                {"wall", QStringLiteral("Wall")},
+            };
+            if (const auto known = friendly.find(found->second.type); known != friendly.end())
+                return QStringLiteral("Selected: %1").arg(known->second);
             auto type = QString::fromStdString(found->second.type);
             type.replace(QLatin1Char('_'), QLatin1Char(' '));
             if (!type.isEmpty()) type[0] = type[0].toUpper();
@@ -68052,9 +68813,9 @@ private:
                 // validation path; selection feedback still gets a fallback.
             }
         }
-        auto fallback = QString::fromStdString(id);
-        if (fallback.startsWith(QStringLiteral("dimension"), Qt::CaseInsensitive))
-            fallback = QStringLiteral("Dimension");
+        // Never show a raw identifier in the badge.
+        const auto fallback = QString::fromStdString(id).startsWith(QStringLiteral("dimension"), Qt::CaseInsensitive)
+            ? QStringLiteral("Dimension") : QStringLiteral("1 item");
         return QStringLiteral("Selected: %1").arg(fallback);
     }
 
@@ -68686,47 +69447,189 @@ private:
         const auto snapshot = m_document->snapshot();
         const auto property = snapshot.entities().find(context.property_id);
         if (property == snapshot.entities().end()) throw std::invalid_argument("drawing property is missing");
-        const auto profile = calculation_workflow_name(property->second.properties) == "appraisal"
-            ? appraisal_display_profile(property->second.properties)
+        // A property without appraisal declarations offers the appraisal area
+        // types; the residential setup is applied with the new area.
+        const bool pending_setup = !allow_exclusions && appraisalSetupPending(snapshot, context.property_id);
+        const bool appraisal = pending_setup || calculation_workflow_name(property->second.properties) == "appraisal";
+        const auto profile = pending_setup ? builtin_appraisal_profile()
+            : appraisal ? appraisal_display_profile(property->second.properties)
             : read_calculation_profile(property->second.properties);
-        QStringList choices;
-        for (const auto& [name, rule] : profile.classifications) {
-            (void)rule;
-            choices.push_back(QString::fromStdString(name));
-        }
-        const bool declared_appraisal = allow_exclusions && calculation_workflow_name(property->second.properties) == "appraisal" &&
-            property->second.properties.contains("appraisal_policy");
-        const std::map<QString, QString> exclusions{
-            {QStringLiteral("Open to below"), QStringLiteral("role:open_to_below")},
-            {QStringLiteral("Stair footprint"), QStringLiteral("role:stair_footprint")},
-            {QStringLiteral("Other void"), QStringLiteral("role:other_void")}};
-        if (declared_appraisal)
-            for (const auto& [label, role] : exclusions) {
-                (void)role;
-                choices.push_back(label);
-            }
-        if (!ask_when_obvious && !allow_exclusions) {
-            if (choices.size() == 1) return choices.front();
-            if (m_boundary_classification_chosen && choices.contains(m_last_boundary_classification))
-                return m_last_boundary_classification;
-        }
-        QInputDialog dialog(owner);
+        const auto policy = property->second.properties.value("appraisal_policy", json::object());
+        const bool commercial = !pending_setup && policy.is_object() &&
+            policy.value("policy_kind", json()) == "light_commercial_declared";
+        QDialog dialog(owner);
         dialog.setObjectName(QStringLiteral("boundaryClassificationDialog"));
         dialog.setWindowTitle(QStringLiteral("Define area"));
-        dialog.setLabelText(QStringLiteral("Area classification (controls area totals):"));
-        dialog.setComboBoxItems(choices);
-        dialog.setComboBoxEditable(true);
-        auto initial = m_last_boundary_classification;
-        if (!allow_exclusions && initial.startsWith(QStringLiteral("role:"))) initial = QStringLiteral("measurement");
+        styleDialog(dialog);
+        const bool light_surface = dialog.palette().color(QPalette::Base).lightness() >= 128;
+        const auto& tokens = design::for_surface(light_surface);
+        auto choices = areaTypeChoices(profile, appraisal, commercial, tokens);
+        const bool declared_appraisal = allow_exclusions && calculation_workflow_name(property->second.properties) == "appraisal" &&
+            property->second.properties.contains("appraisal_policy");
         if (declared_appraisal)
-            for (const auto& [label, role] : exclusions)
-                if (initial == role) initial = label;
-        dialog.setTextValue(initial);
-        if (dialog.exec() != QDialog::Accepted) return std::nullopt;
-        const auto selected = dialog.textValue().trimmed();
-        if (selected.isEmpty()) throw std::invalid_argument("choose a nonempty area classification");
-        if (declared_appraisal && exclusions.contains(selected)) return exclusions.at(selected);
+            for (const auto& [role, label] : std::initializer_list<std::pair<const char*, const char*>>{
+                {"role:open_to_below", "Open to below"}, {"role:stair_footprint", "Stair footprint"},
+                {"role:other_void", "Other void"}})
+                choices.push_back({QString::fromLatin1(role), QString::fromLatin1(label), QColor(Qt::transparent)});
+        if (choices.empty()) throw std::invalid_argument("the calculation profile has no area types");
+        const auto listed = [&](const QString& key) {
+            return std::any_of(choices.begin(), choices.end(), [&](const auto& choice) { return choice.key == key; });
+        };
+        if (!ask_when_obvious && !allow_exclusions) {
+            if (choices.size() == 1) return choices.front().key;
+            if (m_boundary_classification_chosen && listed(m_last_boundary_classification))
+                return m_last_boundary_classification;
+        }
+        // Default to the last type used, else Living area.
+        auto initial = m_last_boundary_classification;
+        if ((!allow_exclusions && initial.startsWith(QStringLiteral("role:"))) || !listed(initial))
+            initial = listed(QStringLiteral("above_grade_finished")) ? QStringLiteral("above_grade_finished")
+                : listed(QStringLiteral("living")) ? QStringLiteral("living") : choices.front().key;
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* prompt = new QLabel(pending_setup
+            ? QStringLiteral("Choose the area type. Appraisal is set up with residential defaults when the area is created.")
+            : QStringLiteral("Choose the area type. It sets the area's fill and its facts."), &dialog);
+        prompt->setObjectName(QStringLiteral("boundaryClassificationPrompt"));
+        prompt->setWordWrap(true);
+        layout->addWidget(prompt);
+        auto* list = new QListWidget(&dialog);
+        list->setObjectName(QStringLiteral("boundaryClassificationList"));
+        list->setAccessibleName(QStringLiteral("Area type"));
+        list->setSelectionMode(QAbstractItemView::SingleSelection);
+        list->setUniformItemSizes(true);
+        list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        for (const auto& choice : choices) {
+            auto* item = new QListWidgetItem(areaTypeChip(choice.fill), choice.label, list);
+            item->setData(Qt::UserRole, choice.key);
+            if (choice.key == initial) list->setCurrentItem(item);
+        }
+        const int rows = std::min<int>(list->count(), 12);
+        list->setMinimumHeight(rows * std::max(list->sizeHintForRow(0), 20) + 2 * list->frameWidth() + 4);
+        layout->addWidget(list);
+        auto* buttons = new QDialogButtonBox(&dialog);
+        buttons->setObjectName(QStringLiteral("boundaryClassificationButtons"));
+        auto* create = buttons->addButton(ask_when_obvious ? QStringLiteral("Draw area") : QStringLiteral("Create area"),
+                                          QDialogButtonBox::AcceptRole);
+        create->setObjectName(QStringLiteral("boundaryClassificationAccept"));
+        create->setDefault(true);
+        buttons->addButton(QDialogButtonBox::Cancel);
+        layout->addWidget(buttons);
+        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] { if (list->currentItem()) dialog.accept(); });
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        QObject::connect(list, &QListWidget::itemActivated, &dialog, [&](QListWidgetItem* item) {
+            if (item) { list->setCurrentItem(item); dialog.accept(); }
+        });
+        list->setFocus(Qt::OtherFocusReason);
+        dialog.resize(360, dialog.sizeHint().height());
+        if (dialog.exec() != QDialog::Accepted || !list->currentItem()) return std::nullopt;
+        const auto selected = list->currentItem()->data(Qt::UserRole).toString();
+        if (selected.isEmpty()) throw std::invalid_argument("choose an area type");
         return selected;
+    }
+
+    // True when the property has no appraisal declarations at all (no policy
+    // and no declared area facts). The first area drawn there sets appraisal
+    // up with the residential defaults; ANSI is never chosen automatically.
+    bool appraisalSetupPending(const DocumentSnapshot& snapshot, const std::string& property_id) const {
+        const auto property = snapshot.entities().find(property_id);
+        if (property == snapshot.entities().end() || property->second.type != "property") return false;
+        try {
+            (void)calculation_workflow_name(property->second.properties);
+            return !appraisal_property_has_declarations(snapshot, property->second);
+        } catch (const std::exception&) {
+            return false;
+        }
+    }
+
+    struct AreaTypeChoice { QString key, label; QColor fill; };
+
+    static QIcon areaTypeChip(const QColor& fill) {
+        QPixmap chip(12, 12);
+        chip.fill(Qt::transparent);
+        QPainter painter(&chip);
+        painter.setRenderHint(QPainter::Antialiasing);
+        QColor outline = fill;
+        if (outline.alpha() == 0) outline = QColor(128, 128, 128);
+        outline.setAlpha(255);
+        painter.setPen(QPen(outline, 1.0));
+        painter.setBrush(fill);
+        painter.drawRoundedRect(QRectF(1.5, 1.5, 9, 9), design::radius_sm / 2.0, design::radius_sm / 2.0);
+        painter.end();
+        return QIcon(chip);
+    }
+
+    // Labels in sentence case; acronyms such as ADU and GLA stay as written.
+    static QString areaTypeSentenceCase(QString label) {
+        static const QRegularExpression title(QStringLiteral("^[A-Z][a-z]+$"));
+        auto words = label.split(QLatin1Char(' '));
+        for (qsizetype index = 1; index < words.size(); ++index)
+            if (title.match(words[index]).hasMatch()) words[index] = words[index].toLower();
+        return words.join(QLatin1Char(' '));
+    }
+
+    // Plain area types with their design-system area fills, most used first.
+    // The stored classification keys are unchanged.
+    std::vector<AreaTypeChoice> areaTypeChoices(const CalculationProfile& profile, bool appraisal, bool commercial,
+                                                const design::ThemeColors& tokens) const {
+        std::vector<AreaTypeChoice> result;
+        std::set<QString> listed;
+        const auto add = [&](const QString& key, const QString& label, const QColor& fill) {
+            if (!profile.classifications.contains(key.toStdString()) || !listed.insert(key).second) return;
+            result.push_back({key, label, fill});
+        };
+        if (appraisal) {
+            for (const auto& [key, label, fill] : std::initializer_list<std::tuple<const char*, const char*, QColor>>{
+                {"above_grade_finished", "Living area", tokens.area_gla},
+                {"garage", "Garage", tokens.area_garage}, {"carport", "Carport", tokens.area_garage},
+                {"porch", "Porch", tokens.area_porch}, {"deck", "Deck", tokens.area_porch},
+                {"patio", "Patio", tokens.area_porch},
+                {"below_grade_finished", "Basement — finished", tokens.area_basement},
+                {"below_grade_unfinished", "Basement — unfinished", tokens.area_basement},
+                {"other_non_living", "Other area", tokens.area_other},
+                {"above_grade_unfinished", "Unfinished space", tokens.area_other},
+                {"above_grade_nonstandard_finished", "Finished — nonstandard ceiling", tokens.area_other},
+                {"below_grade_nonstandard_finished", "Basement — nonstandard ceiling", tokens.area_basement},
+                {"noncontinuous_finished", "Finished — separate access", tokens.area_other}})
+                add(QString::fromLatin1(key), QString::fromUtf8(label), fill);
+            if (commercial)
+                for (const auto& [key, label] : std::initializer_list<std::pair<const char*, const char*>>{
+                    {"commercial_occupiable", "Commercial — occupiable"},
+                    {"commercial_common", "Commercial — common"},
+                    {"commercial_service", "Commercial — service"}})
+                    add(QString::fromLatin1(key), QString::fromUtf8(label), tokens.area_other);
+            for (const auto& [name, rule] : profile.classifications) {
+                (void)rule;
+                const auto category = parse_appraisal_category(name);
+                if (!category || name.starts_with("commercial_")) continue;
+                const bool below = name.find("below_grade") != std::string::npos;
+                add(QString::fromStdString(name), sketch::desktop::appraisal_category_label(*category), below ? tokens.area_basement : tokens.area_other);
+            }
+            return result;
+        }
+        const std::map<std::string, const char*> labels{
+            {"living", "Living area"}, {"room", "Room"}, {"measurement", "Measured area"}, {"survey", "Site survey"},
+            {"interior", "Interior"}, {"exterior", "Exterior"}, {"party", "Party wall"}};
+        const auto fill = [&](const std::string& key, const ClassificationRule& rule) {
+            if (rule.living_total) return tokens.area_gla;
+            if (key == "finished_basement" || key == "unfinished_basement") return tokens.area_basement;
+            if (key == "garage" || key == "detached_garage" || key == "carport") return tokens.area_garage;
+            if (key == "porch" || key == "patio" || key == "deck" || key == "balcony") return tokens.area_porch;
+            return tokens.area_other;
+        };
+        const auto label = [&](const std::string& key) {
+            if (const auto found = labels.find(key); found != labels.end()) return QString::fromLatin1(found->second);
+            return areaTypeSentenceCase(areaPaletteClassLabel(QString::fromStdString(key)));
+        };
+        for (const auto* key : {"living", "garage", "porch", "deck", "patio", "finished_basement", "unfinished_basement", "measurement"})
+            if (const auto found = profile.classifications.find(key); found != profile.classifications.end())
+                add(QString::fromLatin1(key), label(key), fill(key, found->second));
+        std::vector<AreaTypeChoice> rest;
+        for (const auto& [key, rule] : profile.classifications)
+            if (key != "unqualified" && !listed.contains(QString::fromStdString(key)))
+                rest.push_back({QString::fromStdString(key), label(key), fill(key, rule)});
+        std::sort(rest.begin(), rest.end(), [](const auto& left, const auto& right) { return left.label < right.label; });
+        result.insert(result.end(), rest.begin(), rest.end());
+        return result;
     }
 
     void refreshBoundaryPreview(bool semantic_change = true) {
@@ -68820,18 +69723,18 @@ private:
             }
         }
         const auto mode = state.mode == BoundaryAuthoringMode::draw_first
-            ? QStringLiteral("Draw First") : QStringLiteral("Define First");
+            ? QStringLiteral("Area") : QStringLiteral("Dimensioned area");
         switch (state.phase) {
         case BoundaryAuthoringPhase::awaiting_classification:
-            preview.instruction = mode + QStringLiteral("  •  Choose an area classification"); break;
+            preview.instruction = mode + QStringLiteral("  ·  Choose an area type"); break;
         case BoundaryAuthoringPhase::awaiting_anchor:
-            preview.instruction = mode + QStringLiteral("  •  Click to place the first node  •  Esc cancels"); break;
+            preview.instruction = mode + QStringLiteral("  ·  Click to place the first corner. Press Esc to cancel."); break;
         case BoundaryAuthoringPhase::awaiting_dimension:
-            preview.instruction = mode + QStringLiteral("  •  Click or Enter to place this edge's dimension  •  H horizontal / V vertical  •  Space omits  •  Ctrl+Z undoes"); break;
+            preview.instruction = mode + QStringLiteral("  ·  Click or press Enter to place this edge's dimension. H or V aligns it, Space skips it, Ctrl+Z undoes."); break;
         case BoundaryAuthoringPhase::drawing:
-            preview.instruction = mode + QStringLiteral("  •  Click to place each node  •  X/Y align, Enter accepts  •  A closes  •  D precise input"); break;
+            preview.instruction = mode + QStringLiteral("  ·  Click to place each corner. X or Y aligns, Enter accepts, A closes, D types a length."); break;
         case BoundaryAuthoringPhase::completed:
-            preview.instruction = mode + QStringLiteral("  •  Enter defines and adds the area  •  Ctrl+Z revises it"); break;
+            preview.instruction = mode + QStringLiteral("  ·  Press Enter to add the area. Ctrl+Z revises it."); break;
         case BoundaryAuthoringPhase::cancelled: break;
         }
         if (m_boundary_subtract_target) {
@@ -70776,9 +71679,10 @@ private:
                     m_selected_id = id_from(placement->owner.id);
                     std::optional<DoorOperation> door_operation;
                     if (m_pending_opening_kind == QStringLiteral("door")) {
-                        door_operation = m_pending_opening_symbol_id.isEmpty()
-                            ? std::optional<DoorOperation>{DoorOperation{}}
-                            : m_pending_opening_door_operation;
+                        door_operation = inwardDoorOperation(snapshot, placement->owner, placement->wall, offset, width,
+                            m_pending_opening_symbol_id.isEmpty()
+                                ? std::optional<DoorOperation>{DoorOperation{}}
+                                : m_pending_opening_door_operation);
                     }
                     const auto id = createHostedOpening(m_pending_opening_kind,
                         QString::number(offset, 'g', 17) + QStringLiteral(" m"),
@@ -71014,8 +71918,18 @@ private:
                 switch (candidate.phase()) {
                 case BoundaryAuthoringPhase::awaiting_anchor:
                     (void)candidate.anchor(point); break;
-                case BoundaryAuthoringPhase::drawing:
-                    (void)candidate.add_line_to(point); break;
+                case BoundaryAuthoringPhase::drawing: {
+                    (void)candidate.add_line_to(point);
+                    // Clicking the original node closes an eligible chain
+                    // (FB-001); Enter remains the keyboard equivalent.
+                    const auto chain = candidate.active_chain();
+                    if (!original_input && candidate.phase() == BoundaryAuthoringPhase::drawing &&
+                        chain && chain->segments.size() >= 3 &&
+                        chain->segments.back().segment.end.x == chain->anchor.x &&
+                        chain->segments.back().segment.end.y == chain->anchor.y)
+                        finish_closed_dimension = true;
+                    break;
+                }
                 case BoundaryAuthoringPhase::awaiting_dimension: {
                     (void)candidate.place_manual_dimension(point,
                         presentation ? presentation : pendingDimensionPresentation());
@@ -71111,11 +72025,15 @@ private:
                         default_geometry_tolerance_metres};
                     const bool closes=m_wall_chain_has_segments && m_wall_chain_anchor &&
                         point.x==m_wall_chain_anchor->x && point.y==m_wall_chain_anchor->y;
-                    const auto closing_chain=closes
+                    // Measured areas belong to the Measure workspace; Design walls
+                    // stay physical until measured explicitly (canvas contract).
+                    const bool measure_workspace=m_workspace==Workspace::measurement;
+                    const auto closing_chain=closes && measure_workspace
                         ? std::optional<QStringList>{liveWallChainOwners(source)} : std::nullopt;
                     id = createPhysicalWall(Segment{*m_pending_wall_start, point, 0.0},
                         QStringLiteral("interior"), expected_revision, std::move(original_input),
-                        replay_context,json::object(),closing_chain,&measurement_completion);
+                        replay_context,json::object(),closing_chain,&measurement_completion,
+                        measure_workspace && !closes);
                 } catch (const std::exception& error) {
                     setError(QStringLiteral("Wall chain: %1").arg(QString::fromUtf8(error.what())));
                     return;
@@ -71163,6 +72081,7 @@ private:
                     clearError();
                     refreshWallPreview(point);
                     owner->statusBar()->showMessage(QStringLiteral("Click the next wall end • Esc finishes the chain"));
+                    if (measurement_completion.created) showWallChainMeasurementCompletion(measurement_completion,false);
                 } else {
                     setTool(CanvasTool::select);
                 }
@@ -71232,7 +72151,7 @@ private:
                 if (!modalContextUnchanged(modal_context) || !m_boundary_session ||
                     !(m_boundary_session->view() == original_state)) return;
                 auto classified = *m_boundary_session;
-                classified.classify_last_chain(classification->toStdString());
+                classified.classify_last_chain(stagedAreaType(*m_boundary_context, *classification, m_auto_setup_classification).toStdString());
                 if (!install_candidate(std::move(classified))) return;
                 m_last_boundary_classification = *classification;
                 m_boundary_classification_chosen = true;
@@ -71290,17 +72209,163 @@ private:
                 auto edit = m_project_workspace->prepare_finish_boundary();
                 commitWorkspaceEdit(edit);
             }
+            std::vector<std::string> created_ids;
             if (committed_id.isEmpty()) {
                 committed_id = QString::fromStdString(preview.created_boundary_ids().front());
+                created_ids = preview.created_boundary_ids();
             }
+            const auto area_property_id = m_boundary_context->property_id;
+            const auto staged_setup = std::exchange(m_auto_setup_classification, std::nullopt);
             m_selected_id = committed_id;
             clearPreview(false);
             m_tool = CanvasTool::select;
             syncToolControls();
             clearError();
             refresh();
+            if (!created_ids.empty()) recordAreaTypeDefaults(area_property_id, created_ids, staged_setup);
         } catch (const std::exception& error) {
             setError(QStringLiteral("Finish boundary: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
+    // While appraisal setup is pending, a chosen appraisal category is held
+    // back and the area commits with the neutral measurement classification;
+    // recordAreaTypeDefaults applies the category with the setup.
+    QString stagedAreaType(const DrawingContext& context, const QString& chosen, std::optional<QString>& staged) const {
+        const auto category = parse_appraisal_category(chosen.toStdString());
+        if (!category || *category == AppraisalAreaCategory::none ||
+            !appraisalSetupPending(authoringSnapshot(), context.property_id)) return chosen;
+        staged = chosen;
+        return QStringLiteral("measurement");
+    }
+
+    // After an area is drawn, record the explicit facts its area type implies
+    // (flagged in appraisal_fact_defaults) and, when the property had no
+    // appraisal declarations, set appraisal up with the residential defaults.
+    // One undoable command after the area's own command. Declared facts are
+    // never overwritten; facts the type does not imply stay Undeclared.
+    void recordAreaTypeDefaults(const std::string& property_id, const std::vector<std::string>& created_ids,
+                                const std::optional<QString>& staged) {
+        try {
+            const auto snapshot = authoringSnapshot();
+            const auto stored_property = snapshot.entities().find(property_id);
+            if (stored_property == snapshot.entities().end() || stored_property->second.type != "property") return;
+            std::map<std::string, Entity, std::less<>> changed;
+            const auto current = [&](const std::string& id) -> Entity& {
+                auto found = changed.find(id);
+                if (found == changed.end()) found = changed.emplace(id, snapshot.entities().at(id)).first;
+                return found->second;
+            };
+            bool set_up = false;
+            const auto active_property = propertyEntity();
+            if (staged && active_property && active_property->id == property_id && appraisalSetupPending(snapshot, property_id)) {
+                std::vector<EntityChange> setup;
+                const json residential{{"policy_kind", "residential_declared"}, {"version", 1},
+                                       {"property_kind", "detached_single_family"}, {"measurement_basis", "exterior"}};
+                if (!setCalculationWorkflow(QStringLiteral("appraisal"), residential, std::nullopt, &setup))
+                    throw std::invalid_argument(m_last_error.toStdString());
+                for (auto& change : setup)
+                    if (change.kind == EntityChangeKind::upsert) changed.insert_or_assign(change.entity.id, change.entity);
+                for (const auto& id : created_ids) {
+                    if (!snapshot.entities().contains(id)) continue;
+                    auto& boundary = current(id);
+                    if (read_string(boundary.properties, "appraisal_category") ||
+                        read_string(boundary.properties, "classification").value_or("") != "measurement") continue;
+                    boundary.properties["measurement_classification"] = "measurement";
+                    boundary.properties["appraisal_category"] = staged->toStdString();
+                }
+                set_up = true;
+            }
+            if (staged && !set_up && calculation_workflow_name(stored_property->second.properties) == "appraisal") {
+                for (const auto& id : created_ids) {
+                    if (!snapshot.entities().contains(id)) continue;
+                    auto& boundary = current(id);
+                    if (read_string(boundary.properties, "appraisal_category") ||
+                        read_string(boundary.properties, "classification").value_or("") != "measurement") continue;
+                    boundary.properties["measurement_classification"] = "measurement";
+                    boundary.properties["appraisal_category"] = staged->toStdString();
+                }
+            }
+            const auto& property = changed.contains(property_id) ? changed.at(property_id) : stored_property->second;
+            QStringList kept;
+            QString defaulted_type;
+            if (calculation_workflow_name(property.properties) == "appraisal" && property.properties.contains("appraisal_policy")) {
+                const auto& policy = property.properties.at("appraisal_policy");
+                const bool ansi = policy.is_object() && policy.value("policy_kind", json()) == "ansi_z765_2021";
+                for (const auto& id : created_ids) {
+                    if (!snapshot.entities().contains(id)) continue;
+                    auto& boundary = current(id);
+                    // Interactive commits may keep the chosen token in the
+                    // shared classification field; read it as Appraisal does.
+                    const auto category = area_classification_for_workflow(boundary.properties, "appraisal");
+                    const auto defaults = category ? appraisal_classification_defaults(*category, ansi) : std::nullopt;
+                    if (!defaults) continue;
+                    auto facts = boundary.properties.value("appraisal_facts", json::object());
+                    if (!facts.is_object()) continue;
+                    json recorded = json::object();
+                    for (const auto& [key, value] : defaults->area)
+                        if (!facts.contains(key)) { facts[key] = value; recorded[key] = value; }
+                    if (!recorded.empty()) {
+                        boundary.properties["appraisal_facts"] = facts;
+                        boundary.properties["appraisal_fact_defaults"] = json{{"version", 1}, {"source", "classification"},
+                            {"classification", *category}, {"facts", recorded}};
+                        defaulted_type = QString::fromStdString(*category);
+                    }
+                    if (!defaults->grade && !defaults->grade_from_floor) continue;
+                    const auto floor_id = read_string(boundary.properties, "floor_id");
+                    if (!floor_id || !snapshot.entities().contains(*floor_id) || snapshot.entities().at(*floor_id).type != "floor") continue;
+                    auto& floor = current(*floor_id);
+                    auto level = floor.properties.value("appraisal_facts", json::object());
+                    if (!level.is_object()) continue;
+                    const auto floor_name = QString::fromStdString(read_string(floor.properties, "name").value_or("this floor"));
+                    if (level.contains("grade")) {
+                        if (defaults->grade && level.at("grade").is_string() && level.at("grade").get<std::string>() != *defaults->grade)
+                            kept.push_back(QStringLiteral("%1 stays %2 grade").arg(floor_name,
+                                QString::fromStdString(level.at("grade").get<std::string>())));
+                        continue;
+                    }
+                    const auto declared_level = appraisal_declared_floor_level_grade(property, *floor_id);
+                    if (defaults->grade && declared_level && *declared_level != *defaults->grade) {
+                        kept.push_back(QStringLiteral("%1 grade left undeclared: its reporting level is %2 grade")
+                            .arg(floor_name, QString::fromStdString(*declared_level)));
+                        continue;
+                    }
+                    const auto grade = defaults->grade ? *defaults->grade : declared_level.value_or("above");
+                    level["grade"] = grade;
+                    floor.properties["appraisal_facts"] = level;
+                    floor.properties["appraisal_fact_defaults"] = json{{"version", 1}, {"source", "classification"},
+                        {"facts", {{"grade", grade}}}};
+                }
+            }
+            ApplyEntityChanges command{snapshot.revision(), {}, {},
+                set_up ? "Set up appraisal and record area facts" : "Record area facts from area type"};
+            for (auto& [id, entity] : changed)
+                if (entity != snapshot.entities().at(id)) command.entity_changes.push_back(EntityChange::upsert(entity));
+            if (command.entity_changes.empty()) return;
+            // Every recorded declaration must still read as a valid declaration.
+            for (const auto& id : created_ids) {
+                if (!changed.contains(id)) continue;
+                const auto& boundary = changed.at(id);
+                const auto floor_id = read_string(boundary.properties, "floor_id").value_or("");
+                const auto& floor = changed.contains(floor_id) ? changed.at(floor_id) : snapshot.entities().at(floor_id);
+                (void)read_appraisal_declarations(property.properties, floor.properties, boundary.properties);
+            }
+            (void)Document::preview_command(snapshot, command);
+            if (!applyDocumentCommand(command)) throw std::invalid_argument(m_last_error.toStdString());
+            clearError();
+            refresh();
+            QStringList notes;
+            if (set_up) notes.push_back(QStringLiteral("Appraisal set up with residential defaults · change in Appraisal setup"));
+            if (!defaulted_type.isEmpty()) {
+                QString label = defaulted_type;
+                for (const auto& choice : areaTypeChoices(builtin_appraisal_profile(), true, true, design::dark_theme()))
+                    if (choice.key == defaulted_type) label = choice.label;
+                notes.push_back(QStringLiteral("%1 facts from classification · edit facts in Details").arg(label));
+            }
+            notes.append(kept);
+            if (!notes.isEmpty()) owner->statusBar()->showMessage(notes.join(QStringLiteral(". ")), 12000);
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Area created; its facts were not recorded: %1").arg(QString::fromUtf8(error.what())));
         }
     }
 
@@ -71901,10 +72966,13 @@ private:
                 receipt.kind == BoundaryConstructionKind::line_closure ? anchor : std::nullopt,
                 default_geometry_tolerance_metres};
             const bool closes=has_segments && anchor && edge.end.x==anchor->x && edge.end.y==anchor->y;
-            const auto closing_chain=closes ? std::optional<QStringList>{liveWallChainOwners(current)} : std::nullopt;
+            const bool measure_workspace=m_workspace==Workspace::measurement;
+            const auto closing_chain=closes && measure_workspace
+                ? std::optional<QStringList>{liveWallChainOwners(current)} : std::nullopt;
             WallChainMeasurementCompletion measurement_completion;
             const auto id = createPhysicalWall(edge, QStringLiteral("interior"), context.revision,
-                receipt, replay_context,json::object(),closing_chain,&measurement_completion);
+                receipt, replay_context,json::object(),closing_chain,&measurement_completion,
+                measure_workspace && !closes);
             if (id.isEmpty()) return;
             const auto preferences = dialog.acceptedPreferences();
             if (m_selected_id == id) (void)selectEntity({}, false);
@@ -71927,6 +72995,7 @@ private:
             if (preferences) m_wall_input_preferences = *preferences;
             refreshWallPreview(edge.end);
             clearError();
+            if (measurement_completion.created) showWallChainMeasurementCompletion(measurement_completion,false);
             restore_canvas_focus();
         } catch (const std::exception& error) {
             setError(QStringLiteral("Precise wall input: %1").arg(QString::fromUtf8(error.what())));
@@ -72148,7 +73217,7 @@ private:
             m_architecturalCanvas->setWallPreview(std::nullopt);
             return;
         }
-        double thickness = m_preferences.wall_thickness_m;
+        double thickness = drawingDefaults().wall_thickness_m;
         try {
             const auto unit = m_metric_units ? Unit::metre : Unit::foot;
             const auto parsed = parse_quantity(m_wall_draw_thickness->text().toStdString(), unit).metres;
@@ -72207,7 +73276,7 @@ private:
 
     void openFromDialog() {
         const auto selected = QFileDialog::getOpenFileName(
-            owner, QStringLiteral("Open project"), {}, QStringLiteral("Vertex project (*.bldproj)"));
+            owner, QStringLiteral("Open project"), defaultProjectFolder(), QStringLiteral("Vertex project (*.bldproj)"));
         if (!selected.isEmpty()) {
             openProject(selected);
         }
@@ -72222,41 +73291,222 @@ private:
                          .arg(QString::fromUtf8(discovered.directory_diagnostic.c_str())));
             return false;
         }
-        QStringList choices;
-        std::vector<QString> paths;
+        struct RecoveryChoice {
+            QString path;          // recovery copy; never shown as the row text
+            QString name;          // project name for people
+            QString source;        // saved project location, tooltip only
+            QDateTime modified;
+            qint64 bytes{};
+        };
+        std::vector<RecoveryChoice> choices;
+        const auto own_copy = recoveryCopyPath();
         for (const auto& candidate : discovered.candidates) {
             if (!candidate.loadable || candidate.duplicate_archive_id ||
                 (startup_only && !recovery_candidate_has_unsaved_work(candidate))) continue;
-            auto label = QString::fromStdWString(candidate.path.wstring());
-            if (candidate.metadata) {
-                label += QStringLiteral("  [session %1]")
-                             .arg(QString::fromStdString(candidate.metadata->archive_id));
+            RecoveryChoice choice;
+            choice.path = QString::fromStdWString(candidate.path.wstring());
+            if (!own_copy.isEmpty() && sameRecentProjectPath(QDir::cleanPath(own_copy), QDir::cleanPath(choice.path)))
+                continue;
+            if (candidate.metadata && candidate.metadata->source_path && !candidate.metadata->source_path->empty()) {
+                choice.source = QDir::toNativeSeparators(QString::fromUtf8(candidate.metadata->source_path->c_str()));
+                choice.name = QFileInfo(choice.source).completeBaseName();
             }
-            choices.push_back(label);
-            paths.push_back(QString::fromStdWString(candidate.path.wstring()));
+            if (choice.name.isEmpty()) choice.name = QStringLiteral("Untitled project");
+            const QFileInfo info(choice.path);
+            choice.modified = info.lastModified();
+            choice.bytes = info.size();
+            choices.push_back(std::move(choice));
         }
-        if (choices.isEmpty()) {
+        std::sort(choices.begin(), choices.end(),
+                  [](const RecoveryChoice& left, const RecoveryChoice& right) { return left.modified > right.modified; });
+        if (choices.empty()) {
             if (inform_if_empty) {
                 QMessageBox::information(owner, QStringLiteral("Recover project"),
-                                         QStringLiteral("No valid local recovery copies were found."));
+                                         QStringLiteral("No recovery copies were found. Unsaved work is copied here automatically while you edit."));
             }
             return false;
         }
-        if (startup_only && choices.size() == 1) {
-            const auto answer = QMessageBox::question(
-                owner, QStringLiteral("Recover previous work"),
-                QStringLiteral("An unsaved local recovery copy is available:\n%1\n\nRecover it now?")
-                    .arg(choices.front()),
-                QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
-            return answer == QMessageBox::Yes && openProject(paths.front());
+
+        // A real dialog, not a path picker: project name, last edit and size;
+        // Recover / Discard (confirmed inside the dialog) / Later.
+        QDialog dialog(owner);
+        dialog.setObjectName(QStringLiteral("recoveryChooser"));
+        dialog.setWindowTitle(startup_only ? QStringLiteral("Recover unsaved work") : QStringLiteral("Recover project"));
+        auto* layout = new QVBoxLayout(&dialog);
+        layout->setContentsMargins(16, 16, 16, 16);
+        layout->setSpacing(8);
+        auto* intro = new QLabel(startup_only
+            ? QStringLiteral("Vertex kept copies of work that was not saved. Recover a copy to keep working on it, or discard copies you no longer need.")
+            : QStringLiteral("Choose a recovery copy to open. Recovered work opens as an unsaved project; save it to keep it."), &dialog);
+        intro->setObjectName(QStringLiteral("recoveryChooserIntro"));
+        intro->setWordWrap(true);
+        layout->addWidget(intro);
+        auto* list = new QTreeWidget(&dialog);
+        list->setObjectName(QStringLiteral("recoveryChooserList"));
+        list->setColumnCount(3);
+        list->setHeaderLabels({QStringLiteral("Project"), QStringLiteral("Last edited"), QStringLiteral("Size")});
+        list->setRootIsDecorated(false);
+        list->setUniformRowHeights(true);
+        list->setAllColumnsShowFocus(true);
+        list->setSelectionMode(QAbstractItemView::SingleSelection);
+        list->setAccessibleName(QStringLiteral("Recovery copies"));
+        const auto locale = QLocale::system();
+        for (const auto& choice : choices) {
+            auto* item = new QTreeWidgetItem(list, {
+                choice.name,
+                choice.modified.isValid() ? locale.toString(choice.modified, QLocale::ShortFormat) : QStringLiteral("Unknown"),
+                locale.formattedDataSize(choice.bytes, 1)});
+            item->setData(0, Qt::UserRole, choice.path);
+            item->setTextAlignment(2, Qt::AlignRight | Qt::AlignVCenter);
+            item->setToolTip(0, choice.source.isEmpty()
+                ? QStringLiteral("Never saved as a project file")
+                : QStringLiteral("Saved project: %1").arg(choice.source));
         }
-        bool accepted = false;
-        const auto selected = QInputDialog::getItem(
-            owner, QStringLiteral("Recover project"),
-            QStringLiteral("Choose a local recovery copy:"), choices, 0, false, &accepted);
-        if (!accepted || selected.isEmpty()) return false;
-        const auto index = choices.indexOf(selected);
-        return index >= 0 && index < static_cast<int>(paths.size()) && openProject(paths[index]);
+        list->header()->setStretchLastSection(false);
+        list->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+        list->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+        list->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+        list->setCurrentItem(list->topLevelItem(0));
+        layout->addWidget(list, 1);
+
+        // Inline discard confirmation keeps the decision in this dialog.
+        auto* confirm = new QWidget(&dialog);
+        confirm->setObjectName(QStringLiteral("recoveryDiscardConfirm"));
+        auto* confirm_layout = new QHBoxLayout(confirm);
+        confirm_layout->setContentsMargins(0, 0, 0, 0);
+        auto* confirm_text = new QLabel(confirm);
+        confirm_text->setObjectName(QStringLiteral("recoveryDiscardConfirmText"));
+        confirm_text->setWordWrap(true);
+        auto* confirm_discard = new QPushButton(QStringLiteral("Discard copy"), confirm);
+        confirm_discard->setObjectName(QStringLiteral("recoveryConfirmDiscard"));
+        auto* confirm_keep = new QPushButton(QStringLiteral("Keep"), confirm);
+        confirm_keep->setObjectName(QStringLiteral("recoveryKeepCopy"));
+        confirm_layout->addWidget(confirm_text, 1);
+        confirm_layout->addWidget(confirm_discard);
+        confirm_layout->addWidget(confirm_keep);
+        confirm->hide();
+        layout->addWidget(confirm);
+        auto* message = new QLabel(&dialog);
+        message->setObjectName(QStringLiteral("recoveryChooserMessage"));
+        message->setWordWrap(true);
+        message->hide();
+        layout->addWidget(message);
+
+        auto* buttons = new QHBoxLayout;
+        auto* discard = new QPushButton(QStringLiteral("Discard…"), &dialog);
+        discard->setObjectName(QStringLiteral("recoveryDiscard"));
+        discard->setToolTip(QStringLiteral("Delete the selected recovery copy (Delete)"));
+        auto* later = new QPushButton(QStringLiteral("Later"), &dialog);
+        later->setObjectName(QStringLiteral("recoveryLater"));
+        later->setToolTip(startup_only
+            ? QStringLiteral("Keep the copies and do not ask again until Vertex restarts. File > Recover opens them any time.")
+            : QStringLiteral("Keep the copies and close"));
+        auto* recover = new QPushButton(QStringLiteral("Recover"), &dialog);
+        recover->setObjectName(QStringLiteral("recoveryRecover"));
+        recover->setDefault(true);
+        recover->setAutoDefault(true);
+        buttons->addWidget(discard);
+        buttons->addStretch(1);
+        buttons->addWidget(later);
+        buttons->addWidget(recover);
+        layout->addLayout(buttons);
+
+        QString selected_path;
+        const auto current_path = [list]() -> QString {
+            const auto* item = list->currentItem();
+            return item ? item->data(0, Qt::UserRole).toString() : QString{};
+        };
+        const auto sync_buttons = [&] {
+            const bool has = list->currentItem() != nullptr;
+            recover->setEnabled(has && !confirm->isVisible());
+            discard->setEnabled(has && !confirm->isVisible());
+            later->setEnabled(!confirm->isVisible());
+            list->setEnabled(!confirm->isVisible());
+        };
+        const auto end_confirm = [&] {
+            confirm->hide();
+            sync_buttons();
+            list->setFocus();
+        };
+        QObject::connect(list, &QTreeWidget::currentItemChanged, &dialog, [&] { sync_buttons(); });
+        QObject::connect(list, &QTreeWidget::itemActivated, &dialog, [&](QTreeWidgetItem*, int) {
+            selected_path = current_path();
+            if (!selected_path.isEmpty()) dialog.accept();
+        });
+        QObject::connect(recover, &QPushButton::clicked, &dialog, [&] {
+            selected_path = current_path();
+            if (!selected_path.isEmpty()) dialog.accept();
+        });
+        QObject::connect(later, &QPushButton::clicked, &dialog, [&] { dialog.reject(); });
+        QObject::connect(discard, &QPushButton::clicked, &dialog, [&] {
+            const auto* item = list->currentItem();
+            if (!item) return;
+            message->hide();
+            confirm_text->setText(QStringLiteral("Discard the recovery copy of %1 from %2? Its unsaved work is deleted and cannot be recovered.")
+                                      .arg(item->text(0), item->text(1)));
+            confirm->show();
+            sync_buttons();
+            confirm_keep->setDefault(true);
+            confirm_keep->setFocus();
+        });
+        QObject::connect(confirm_keep, &QPushButton::clicked, &dialog, [&] {
+            recover->setDefault(true);
+            end_confirm();
+        });
+        QObject::connect(confirm_discard, &QPushButton::clicked, &dialog, [&] {
+            auto* item = list->currentItem();
+            if (!item) { end_confirm(); return; }
+            const auto path = item->data(0, Qt::UserRole).toString();
+            std::error_code error;
+            const bool removed = std::filesystem::remove(filesystem_path(path), error);
+            recover->setDefault(true);
+            if (!removed || error) {
+                message->setText(QStringLiteral("The recovery copy of %1 could not be deleted%2. It was kept; close other Vertex windows and try again.")
+                                     .arg(item->text(0), error ? QStringLiteral(" (%1)").arg(QString::fromLocal8Bit(error.message().c_str())) : QString{}));
+                message->show();
+                end_confirm();
+                return;
+            }
+            const auto name = item->text(0);
+            delete item;
+            owner->statusBar()->showMessage(QStringLiteral("Recovery copy of %1 discarded.").arg(name), 5000);
+            if (list->topLevelItemCount() == 0) { dialog.reject(); return; }
+            list->setCurrentItem(list->topLevelItem(0));
+            message->setText(QStringLiteral("Recovery copy of %1 discarded.").arg(name));
+            message->show();
+            end_confirm();
+        });
+        auto* delete_shortcut = new QShortcut(QKeySequence::Delete, list);
+        delete_shortcut->setContext(Qt::WidgetShortcut);
+        QObject::connect(delete_shortcut, &QShortcut::activated, discard, &QPushButton::click);
+        sync_buttons();
+
+        // Size to the screen the window is on; never wider than the display.
+        const auto* screen = owner->screen() ? owner->screen() : QGuiApplication::primaryScreen();
+        const auto available = screen ? screen->availableGeometry() : QRect(0, 0, 1280, 800);
+        const int width = std::min(std::max(520, available.width() / 3), available.width() - 48);
+        const int rows = std::min<int>(static_cast<int>(choices.size()), 8);
+        const int height = std::min(std::max(260, 200 + rows * 28), available.height() - 48);
+        dialog.resize(width, height);
+        const auto anchor = owner->isVisible() ? owner->frameGeometry().center() : available.center();
+        auto origin = anchor - QPoint(width / 2, height / 2);
+        origin.setX(std::clamp(origin.x(), available.left() + 24, std::max(available.left() + 24, available.right() - width - 24)));
+        origin.setY(std::clamp(origin.y(), available.top() + 24, std::max(available.top() + 24, available.bottom() - height - 24)));
+        dialog.move(origin);
+        list->setFocus();
+
+        const auto result = dialog.exec();
+        if (result != QDialog::Accepted || selected_path.isEmpty()) {
+            if (startup_only) recoveryDeferredThisSession() = true;
+            return false;
+        }
+        return openProject(selected_path);
+    }
+
+    // "Later" at startup holds for the rest of this application session.
+    [[nodiscard]] static bool& recoveryDeferredThisSession() {
+        static bool deferred = false;
+        return deferred;
     }
 
 public:
@@ -72271,6 +73521,7 @@ public:
         } else if (projectDirty()) {
             return false;
         }
+        if (recoveryDeferredThisSession()) return false;
         return recoverFromDialog(true, false);
     }
 
@@ -78537,9 +79788,44 @@ public:
     }
 
 private:
+    // Save/export dialogs start in the project's folder (Documents for an
+    // unsaved project) with "<project><suffix>", e.g. "Maple St sketch.pdf".
+    [[nodiscard]] QString defaultProjectFolder() const {
+        if (!m_file_path.empty()) {
+            const auto folder = QFileInfo(QString::fromStdWString(m_file_path.wstring())).absolutePath();
+            if (QFileInfo(folder).isDir()) return folder;
+        }
+        if (const auto recent = storedRecentProjects(); !recent.isEmpty()) {
+            const auto folder = QFileInfo(recent.front()).absolutePath();
+            if (QFileInfo(folder).isDir() && !recoveryCopyLocation(recent.front())) return folder;
+        }
+        return QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    }
+
+    [[nodiscard]] QString defaultOutputPath(const QString& suffix) const {
+        QString name;
+        if (!m_file_path.empty()) name = QFileInfo(QString::fromStdWString(m_file_path.wstring())).completeBaseName();
+        if (name.isEmpty()) {
+            try {
+                if (const auto property = propertyEntity()) {
+                    const auto subject = property->properties.value("subject", json::object());
+                    if (subject.is_object()) if (const auto value = read_string(subject, "name")) name = QString::fromStdString(*value);
+                    if (name.trimmed().isEmpty()) if (const auto value = read_string(property->properties, "name")) name = QString::fromStdString(*value);
+                }
+            } catch (const std::exception&) {}
+        }
+        // Keep the name valid as a file name on Windows.
+        static const QRegularExpression invalid(QStringLiteral(R"([<>:"/\\|?*\x00-\x1f])"));
+        name = name.replace(invalid, QStringLiteral(" ")).simplified();
+        if (name.isEmpty() || name == QStringLiteral("Untitled property")) name = QStringLiteral("Untitled");
+        auto folder = m_file_path.empty() ? QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+                                          : defaultProjectFolder();
+        return QDir(folder).filePath(name + suffix);
+    }
+
     void saveAsFromDialog() {
         const auto selected = QFileDialog::getSaveFileName(
-            owner, QStringLiteral("Save project as"), {}, QStringLiteral("Vertex project (*.bldproj)"));
+            owner, QStringLiteral("Save project as"), defaultOutputPath(QStringLiteral(".bldproj")), QStringLiteral("Vertex project (*.bldproj)"));
         if (!selected.isEmpty()) {
             saveProjectAs(selected);
         }
@@ -78547,13 +79833,22 @@ private:
 
     void exportSketchFromDialog() {
         const auto selected = QFileDialog::getSaveFileName(
-            owner, QStringLiteral("Export sketch PDF"), {}, QStringLiteral("PDF document (*.pdf)"));
+            owner, QStringLiteral("Export sketch PDF"), defaultOutputPath(QStringLiteral(" sketch.pdf")), QStringLiteral("PDF document (*.pdf)"));
         if (!selected.isEmpty()) exportSketchPdf(selected);
+    }
+
+    void exportAppraisalReportFromDialog() {
+        auto selected = QFileDialog::getSaveFileName(
+            owner, QStringLiteral("Export appraisal report"), defaultOutputPath(QStringLiteral(" appraisal report.pdf")),
+            QStringLiteral("PDF document (*.pdf)"));
+        if (selected.isEmpty()) return;
+        if (QFileInfo(selected).suffix().isEmpty()) selected += QStringLiteral(".pdf");
+        (void)exportAppraisalReportPdf(selected, {}, std::nullopt);
     }
 
     void exportFromDialog() {
         const auto selected = QFileDialog::getSaveFileName(
-            owner, QStringLiteral("Export selected sheet PDF"), {}, QStringLiteral("PDF document (*.pdf)"));
+            owner, QStringLiteral("Export selected sheet PDF"), defaultOutputPath(QStringLiteral(" sheet.pdf")), QStringLiteral("PDF document (*.pdf)"));
         if (!selected.isEmpty()) {
             exportDraftPdf(selected);
         }
@@ -78561,7 +79856,7 @@ private:
 
     void exportDrawingSetFromDialog() {
         const auto selected = QFileDialog::getSaveFileName(
-            owner, QStringLiteral("Export drawing set PDF"), {}, QStringLiteral("PDF document (*.pdf)"));
+            owner, QStringLiteral("Export drawing set PDF"), defaultOutputPath(QStringLiteral(" drawings.pdf")), QStringLiteral("PDF document (*.pdf)"));
         if (!selected.isEmpty()) {
             exportDrawingSetPdf(selected);
         }
@@ -78569,7 +79864,7 @@ private:
 
     void exportImageFromDialog() {
         const auto selected = QFileDialog::getSaveFileName(
-            owner, QStringLiteral("Export image"), {}, QStringLiteral("PNG image (*.png)"));
+            owner, QStringLiteral("Export image"), defaultOutputPath(QStringLiteral(" sketch.png")), QStringLiteral("PNG image (*.png)"));
         if (!selected.isEmpty()) {
             exportDraftImage(selected);
         }
@@ -78962,6 +80257,11 @@ private:
     // Set once a drawn area has been classified in this window; later drawn
     // areas reuse that classification instead of prompting again.
     bool m_boundary_classification_chosen{false};
+    // Area type chosen while the property still had no appraisal declarations.
+    // The area commits with the neutral measurement classification; the
+    // residential setup, this appraisal category and its fact defaults follow
+    // as one command (see recordAreaTypeDefaults).
+    std::optional<QString> m_auto_setup_classification;
     AreaClassPalette* m_area_class_palette{};
     std::optional<QString> m_armed_area_class;
     std::weak_ptr<Document> m_area_class_document;

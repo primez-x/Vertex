@@ -83,15 +83,68 @@ bool contains(const std::array<T, N>& values, T value) {
     return false;
 }
 
+constexpr std::array<double Preferences::*, 7> drawing_default_members{
+    &Preferences::wall_thickness_m, &Preferences::wall_height_m, &Preferences::door_width_m,
+    &Preferences::door_height_m, &Preferences::window_width_m, &Preferences::window_height_m,
+    &Preferences::window_sill_m};
+
+// The single default set shipped before market-specific defaults (metric
+// sizes with an 8 ft wall). Saved copies of it were never chosen.
+Preferences legacy_drawing_defaults() {
+    Preferences value;
+    value.wall_thickness_m = 0.14;
+    value.wall_height_m = 2.4384;
+    value.door_width_m = 0.9;
+    value.door_height_m = 2.1;
+    value.window_width_m = 1.2;
+    value.window_height_m = 1.2;
+    value.window_sill_m = 0.9;
+    return value;
+}
+
+bool same_length(double left, double right) { return std::abs(left - right) <= 1e-9; }
+
 } // namespace
 
+Preferences Preferences::defaults(Units units) {
+    Preferences value;
+    value.units = units;
+    if (units == Units::metric) {
+        value.wall_thickness_m = 0.14;
+        value.wall_height_m = 2.4;
+        value.door_width_m = 0.9;
+        value.door_height_m = 2.1;
+        value.window_width_m = 1.2;
+        value.window_height_m = 1.2;
+        value.window_sill_m = 0.9;
+    }
+    return value;
+}
+
+bool Preferences::untouchedDrawingDefault(double Preferences::*member, double metres) noexcept {
+    static const Preferences imperial = defaults(Units::imperial);
+    static const Preferences metric = defaults(Units::metric);
+    static const Preferences legacy = legacy_drawing_defaults();
+    return same_length(metres, imperial.*member) || same_length(metres, metric.*member) ||
+           same_length(metres, legacy.*member);
+}
+
+Preferences Preferences::withMarketDrawingDefaults(Units target) const {
+    Preferences result = *this;
+    const auto market = defaults(target);
+    for (const auto member : drawing_default_members)
+        if (untouchedDrawingDefault(member, result.*member)) result.*member = market.*member;
+    return result;
+}
+
 Preferences Preferences::load(QSettings& settings) {
-    const auto defaults = Preferences::defaults();
-    Preferences result = defaults;
+    Preferences result = Preferences::defaults();
 
     const auto units = settings.value(key("units")).toString();
     if (units == QStringLiteral("metric")) result.units = Units::metric;
     else if (units == QStringLiteral("imperial")) result.units = Units::imperial;
+    // Missing or invalid drawing defaults fall back to the stored market's.
+    const auto defaults = Preferences::defaults(result.units);
 
     const auto style = settings.value(key("imperialStyle")).toString();
     if (style == QStringLiteral("decimal_feet")) result.imperial_style = ImperialStyle::decimal_feet;
@@ -125,7 +178,9 @@ Preferences Preferences::load(QSettings& settings) {
     if (contains(metric_precisions, metric)) result.metric_precision_mm = metric;
     const auto angle = read_number(settings, "angleSnapDegrees", defaults.angle_snap_degrees);
     if (contains(angle_snaps, angle)) result.angle_snap_degrees = angle;
-    return result;
+    // A saved shipped default (including the pre-market 0.9 m door of an
+    // imperial install) was never chosen: it follows the stored units.
+    return result.withMarketDrawingDefaults(result.units);
 }
 
 void Preferences::save(QSettings& settings) const {
@@ -241,11 +296,20 @@ struct PreferencesDialog::Impl {
     }
 
     // Re-shows every valid length in the newly chosen units; text that does
-    // not parse is left for the person to correct.
+    // not parse is left for the person to correct. Switching units resets a
+    // drawing default the person never changed to the new market's value
+    // (a 3' 0" door becomes 900 mm, not 0.914 m); chosen values are kept.
     void rerenderLengths() {
+        const bool units_changed = rendered_metric != metric();
+        const auto market = Preferences::defaults(metric() ? Preferences::Units::metric
+                                                           : Preferences::Units::imperial);
         for (auto& field : lengths) {
             try {
-                setLength(field, parse(field, rendered_metric));
+                const bool typed = field.edit->text().trimmed() != field.shown;
+                auto metres = parse(field, rendered_metric);
+                if (units_changed && !typed && Preferences::untouchedDrawingDefault(field.member, metres))
+                    metres = market.*(field.member);
+                setLength(field, metres);
             } catch (const std::exception&) {
             }
         }

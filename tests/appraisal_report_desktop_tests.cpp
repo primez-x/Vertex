@@ -149,7 +149,7 @@ void sheet_summary_preserves_per_row_policy_and_status() {
             "nontext policy cells must not be interpreted as ANSI");
         require(content.contains("Unqualified: totals withheld") && content.contains("not ANSI approval / certification"),
             "sheet status must preserve withheld totals and avoid approval implication");
-        require(content.contains("supplemental: 100.00 m²")==metric,
+        require(content.contains("supplemental: 100.0 m²")==metric,
             "metric ANSI sheet row must label its metric quantity as supplemental");
         const auto overflow=render(metric,true);
         require(overflow.contains("more rows") && overflow.contains("complete Appraisal area report"),
@@ -190,6 +190,15 @@ void ansi_report_html_pdf_canonical_units_and_evidence() {
     require(html.contains("UAD 3.6 reporting") && html.contains("Primary all-grade room counts") &&
         html.contains("1 bedrooms") && html.contains("bedroom-explicit") && html.contains("September 2026"),
         "Actual HTML includes versioned fields, explicit room membership and guidance editions");
+    {
+        // The body carries one compact row per area; the per-area arithmetic
+        // tables print in Appendix A, ahead of the provenance appendix.
+        const auto arithmetic=html.indexOf("Appendix A: area arithmetic");
+        const auto provenance=html.indexOf("Appendix: source provenance");
+        require(arithmetic>0 && provenance>arithmetic && html.indexOf("Counted area")>0 &&
+            html.indexOf("Counted area")<arithmetic && html.indexOf("Gross boundary area")>arithmetic,
+            "Report body shows a compact area table and moves per-area arithmetic to the appendix");
+    }
     sketch::desktop::AppraisalReportingDialog editor(source,report);
     auto& contract=child<QComboBox>(editor,"appraisalReportingContract");
     auto& rooms=child<QTableWidget>(editor,"appraisalReportingRooms");
@@ -272,17 +281,17 @@ void actual_report_summary_audit_navigation_and_refresh() {
         report.calculation->calculation.areas.size()==2,"report must show parent80 and garage16 without standalone void contribution");
     report_action(window,[&](auto& dialog) {
         const auto summary=child<QTextBrowser>(dialog,"appraisalReportSummary").toPlainText();
-        require(child<QLabel>(dialog,"appraisalReportState").text().contains("Qualified") && summary.contains("80.00 m²") &&
-            summary.contains("16.00 m²") && summary.contains("96.00 m²") && !summary.contains("100.00 m²"),
+        require(child<QLabel>(dialog,"appraisalReportState").text().contains("Qualified") && summary.contains("80.0 m²") &&
+            summary.contains("16.0 m²") && summary.contains("96.0 m²") && !summary.contains("100.0 m²"),
             "actual summary must separate finished/garage quantities and exclude void from all-category total");
         require(summary.contains(QString::fromStdString(source.document_id())) && summary.contains("property-1"),"summary must expose immutable source provenance");
         for(const auto& phrase:QStringList{"Property policy","Residential declared","Detached single family","Exterior"})
             require(summary.contains(phrase),"summary must disclose policy qualification inputs");
         capture(dialog,"appraisal-report-summary.png");
         auto& tree=child<QTreeWidget>(dialog,"appraisalReportAreas");auto& parent=row(tree,ids.parent);tree.setCurrentItem(&parent);
-        require(tree.topLevelItemCount()==3 && parent.text(2)=="100.00 m²" && parent.text(3)=="20.00 m²" && parent.text(4)=="80.00 m²" &&
-            parent.text(5)=="1/1" && parent.text(6)=="80.00 m²" && parent.childCount()==2,"actual audit row must expose gross, union deduction, factor and physical net");
-        auto& excluded=row(tree,ids.void_id);require(excluded.text(1)=="Deduction only" && excluded.text(4)=="4.00 m²","void's trace must remain inspectable and explicitly excluded");
+        require(tree.topLevelItemCount()==3 && parent.text(2)=="100.0 m²" && parent.text(3)=="20.0 m²" && parent.text(4)=="80.0 m²" &&
+            parent.text(5)=="1/1" && parent.text(6)=="80.0 m²" && parent.childCount()==2,"actual audit row must expose gross, union deduction, factor and physical net");
+        auto& excluded=row(tree,ids.void_id);require(excluded.text(1)=="Deduction only" && excluded.text(4)=="4.0 m²","void's trace must remain inspectable and explicitly excluded");
         const auto detail=child<QTextBrowser>(dialog,"appraisalReportDetail").toPlainText();
         require(detail.contains("Floor grade") && detail.contains("floor-1 / appraisal_facts") && detail.contains("Above"),
             "boundary audit must disclose floor grade and its source");
@@ -293,8 +302,8 @@ void actual_report_summary_audit_navigation_and_refresh() {
     });
     require(window.document().revision()==source.revision() && window.document().snapshot().entities()==source.entities(),"opening/reporting must not change document history or entities");
     require(window.setContainerVisible("floor-1",false),"hide actual floor presentation");
-    report_action(window,[&](auto& dialog){require(child<QTextBrowser>(dialog,"appraisalReportSummary").toPlainText().contains("96.00 m²") &&
-        row(child<QTreeWidget>(dialog,"appraisalReportAreas"),ids.parent).text(4)=="80.00 m²","view presentation hiding must not change semantic appraisal quantities");});
+    report_action(window,[&](auto& dialog){require(child<QTextBrowser>(dialog,"appraisalReportSummary").toPlainText().contains("96.0 m²") &&
+        row(child<QTreeWidget>(dialog,"appraisalReportAreas"),ids.parent).text(4)=="80.0 m²","view presentation hiding must not change semantic appraisal quantities");});
     require(window.setContainerVisible("floor-1",true),"restore actual floor presentation");
     const auto pdf=directory.filePath("retained.pdf");require(window.exportAppraisalReportPdf(pdf),"qualified audit must export");const auto retained=bytes(pdf);
     report_action(window,[&](auto& dialog) {
@@ -361,14 +370,14 @@ void active_design_phase_report_scope() {
     require(window.selectRemodelingAlternative("omit-extra"),"actual phase selector must activate semantic alternative");
     report_action(window,[&](auto& dialog) {
         const auto summary=child<QTextBrowser>(dialog,"appraisalReportSummary").toPlainText();
-        require(summary.contains("Design alternative: Without annex") && summary.contains("96.00 m²") &&
+        require(summary.contains("Design alternative: Without annex") && summary.contains("96.0 m²") &&
             child<QTreeWidget>(dialog,"appraisalReportAreas").topLevelItemCount()==3,
             "report must identify the saved semantic phase and omit its demolished area from traces and totals");
     });
     require(window.selectRemodelingAlternative({}),"restore real baseline phase");
     report_action(window,[&](auto& dialog) {
         const auto summary=child<QTextBrowser>(dialog,"appraisalReportSummary").toPlainText();
-        require(summary.contains("Design alternative: Existing baseline") && summary.contains("100.00 m²") &&
+        require(summary.contains("Design alternative: Existing baseline") && summary.contains("100.0 m²") &&
             child<QTreeWidget>(dialog,"appraisalReportAreas").topLevelItemCount()==4,
             "baseline report must restore the actual annex contribution");
     });
@@ -385,7 +394,7 @@ void undeclared_policy_and_malformed_area_remain_inspectable() {
         auto& tree=child<QTreeWidget>(dialog,"appraisalReportAreas");auto& parent=row(tree,ids.parent);tree.setCurrentItem(&parent);
         require(summary.contains("Undeclared") && summary.contains("totals withheld") && !summary.contains("All measured categories total"),
             "missing policy must not manufacture qualified summary totals");
-        require(tree.topLevelItemCount()==3 && parent.text(1)=="Unqualified" && parent.text(2)=="100.00 m²" && parent.text(4)=="80.00 m²",
+        require(tree.topLevelItemCount()==3 && parent.text(1)=="Unqualified" && parent.text(2)=="100.0 m²" && parent.text(4)=="80.0 m²",
             "missing policy must retain every source and valid gross/deduction diagnostic");
         require(child<QTextBrowser>(dialog,"appraisalReportDetail").toPlainText().contains("undeclared_policy"),
             "individual diagnostic must disclose its missing policy reason");
@@ -410,7 +419,7 @@ void undeclared_policy_and_malformed_area_remain_inspectable() {
     require(window.editSelectedAppraisalFacts(declarations()),"invalid source can be repaired through actual authoring API");
     report_action(window,[&](auto& dialog) {
         require(child<QLabel>(dialog,"appraisalReportState").text().contains("Qualified") &&
-            row(child<QTreeWidget>(dialog,"appraisalReportAreas"),ids.parent).text(4)=="80.00 m²",
+            row(child<QTreeWidget>(dialog,"appraisalReportAreas"),ids.parent).text(4)=="80.0 m²",
             "repair must restore qualification and fresh diagnostic geometry");
     });
 }
@@ -501,7 +510,7 @@ void paginated_pdf_escaping_and_atomic_destination_failures() {
     const auto path=directory.filePath("complete-report.pdf");require(window.exportAppraisalReportPdf(path,"property-1",before.revision()),"complete audit must export to real paginated PDF");
     QPdfDocument pdf;require(pdf.load(path)==QPdfDocument::Error::None && pdf.pageCount()>1,"twenty boundary audit must paginate instead of clipping after page one");
     const auto text=pdf_text(path,true);for(const auto& id:source_ids)require(text.contains(id),"every source ID including final area must survive exported pagination");
-    require(text.contains("foreign-marker") && text.contains("All measured categories total") && text.contains("1,796.00 m²"),"complete PDF must retain escaped names and qualified property total");
+    require(text.contains("foreign-marker") && text.contains("All measured categories total") && text.contains("1,796.0 m²"),"complete PDF must retain escaped names and qualified property total");
     const auto captures=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");if(!captures.isEmpty()) {
         require(QDir().mkpath(captures),"create actual report capture directory");
         QFile retained_pdf(QDir(captures).filePath("appraisal-report-complete.pdf"));const auto actual=bytes(path);

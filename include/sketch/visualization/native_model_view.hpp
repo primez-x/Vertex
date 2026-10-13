@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QColor>
 #include <QWidget>
 #include <QString>
 #include <QStringList>
@@ -98,6 +99,9 @@ public:
     // start their own admission.
     std::function<bool(bool starting)> onSceneInputRequested;
     void fitAll();
+    // Viewport background; follows the workspace canvas theme token.
+    void setBackgroundColor(const QColor& color);
+    [[nodiscard]] QColor backgroundColor() const;
     // Synchronize complete logical selection; IDs without a displayed solid
     // still count toward multi-selection. The last supplied ID is primary.
     // Highlights cover valid visible semantic presentations only. Whole-owner
