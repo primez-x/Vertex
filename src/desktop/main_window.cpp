@@ -23657,8 +23657,8 @@ public:
             policy->contains("measurement_basis") &&
             read_string(*policy,"measurement_basis")!=std::optional<std::string>{"exterior"}) return {};
         // While appraisal setup is pending the area commits as "measurement";
-        // recordAreaTypeDefaults then sets up appraisal and records the
-        // Living area facts, exactly as a drawn Living area does.
+        // appendWallLoopLivingDefaults then adds the residential setup and the
+        // Living area facts to the same wall-closing command.
         const auto classification=(appraisal || appraisal_setup_pending) ? std::string("measurement")
                                             : defaultLivingAreaClassification(property.properties);
         if (classification.empty())
@@ -23719,23 +23719,6 @@ public:
     }
 
     void showWallChainMeasurementCompletion(const WallChainMeasurementCompletion& completion, bool select = true) {
-        if (completion.created && !completion.measurement_id.isEmpty()) {
-            // An area measured from a closed wall loop is a Living area: record
-            // its type facts (and residential setup on a fresh project) so GLA
-            // follows without manual Setup or Edit facts steps.
-            try {
-                const auto source=authoringSnapshot();
-                const auto found=source.entities().find(completion.measurement_id.toStdString());
-                if (found!=source.entities().end()) {
-                    const auto context=organize_project(source).drawing_context(found->first);
-                    const bool unclassified=read_string(found->second.properties,"classification").value_or("")=="measurement" &&
-                        !read_string(found->second.properties,"appraisal_category");
-                    if (context && unclassified)
-                        recordAreaTypeDefaults(context->property_id,{found->first},
-                                               std::optional<QString>{QStringLiteral("above_grade_finished")});
-                }
-            } catch (const std::exception&) {}
-        }
         if (!completion.measurement_id.isEmpty()) {
             if (select) (void)selectEntity(completion.measurement_id);
             m_wall_measurement_notice.setRemainingTime(8000);
@@ -25338,6 +25321,9 @@ public:
                     std::any_of(command.entity_changes.begin(),command.entity_changes.end(),[&](const EntityChange& change) {
                         return change.kind==EntityChangeKind::upsert && change.entity.id==completion.measurement_id.toStdString();
                     });
+                // A wall-loop area is a Living area; its facts join this command.
+                if (completion.created)
+                    appendWallLoopLivingDefaults(source,command,completion.measurement_id,drawing_context->property_id);
                 const auto authored = augmentAuthoredCommand(Command{command}, source);
                 const auto verified=Document::preview_command(source, authored);
                 if (!completion.measurement_id.isEmpty()) {
@@ -47505,6 +47491,102 @@ public:
         }
     }
 
+    // The property and boundary changes that switch or update the calculation
+    // workflow on snapshot. Empty when nothing would change. Throws when the
+    // request is invalid.
+    static std::vector<EntityChange> calculationWorkflowChanges(const DocumentSnapshot& snapshot,
+        const Entity& property, const std::string& workflow, const std::optional<json>& appraisal_policy,
+        std::optional<unsigned> decimal_places) {
+        const auto current = calculation_workflow_name(property.properties);
+        if (current == workflow && !appraisal_policy && !decimal_places) return {};
+        if (appraisal_policy && !appraisal_policy->is_object())
+            throw std::invalid_argument("Appraisal policy must be an object.");
+        if (decimal_places && *decimal_places > 6)
+            throw std::invalid_argument("Area precision must be between 0 and 6 decimal places.");
+        auto updated = property;
+        if (current != workflow && workflow == "appraisal") {
+            updated.properties["measurement_calculation_profile"] =
+                calculation_profile_json(read_calculation_profile(property.properties));
+            updated.properties["calculation_profile"] =
+                calculation_profile_json(builtin_appraisal_profile());
+        } else if (current != workflow) {
+            if (property.properties.contains("measurement_calculation_profile")) {
+                json stored_properties{{"calculation_profile",
+                                        property.properties.at("measurement_calculation_profile")}};
+                updated.properties["calculation_profile"] =
+                    calculation_profile_json(read_calculation_profile(stored_properties));
+            } else {
+                updated.properties["calculation_profile"] =
+                    calculation_profile_json(default_calculation_profile());
+            }
+        }
+        updated.properties["calculation_workflow"] = workflow;
+        if (appraisal_policy) updated.properties["appraisal_policy"] = *appraisal_policy;
+        if (decimal_places && current == workflow && workflow == "appraisal" &&
+            updated.properties.contains("calculation_profile") && updated.properties.at("calculation_profile").is_object()) {
+            // Appraisal precision (Setup is authoritative): change only the
+            // display decimals and advance the display revision, keeping
+            // fixed rules and any extension metadata exactly as stored.
+            const auto stored = read_appraisal_display_configuration(updated.properties);
+            const auto& configuration = updated.properties.at("calculation_profile");
+            const bool same = configuration.contains("decimal_places") && configuration.at("decimal_places").is_number_unsigned() &&
+                configuration.at("decimal_places").get<unsigned>() == *decimal_places;
+            if (!same) {
+                if (stored.version == std::numeric_limits<unsigned>::max())
+                    throw std::invalid_argument("Area display revision cannot advance further.");
+                updated.properties["calculation_profile"]["decimal_places"] = *decimal_places;
+                updated.properties["calculation_profile"]["version"] = stored.version + 1;
+            }
+        } else if (decimal_places) {
+            auto profile = read_calculation_profile(updated.properties);
+            profile.decimal_places = *decimal_places;
+            updated.properties["calculation_profile"] = calculation_profile_json(profile);
+        }
+        if (updated.properties == property.properties) return {};
+        std::vector<EntityChange> changes;
+        changes.push_back(EntityChange::upsert(std::move(updated)));
+        for (const auto& [id, source] : snapshot.entities()) {
+            (void)id;
+            if (current == workflow || !is_closed_boundary_entity(source.type)) continue;
+            auto boundary = source;
+            bool changed = false;
+            auto measurement = read_string(boundary.properties,
+                                           "measurement_classification");
+            const auto shared = read_string(boundary.properties, "classification");
+            if (!measurement.has_value() || measurement->empty()) {
+                if (shared.has_value() && !shared->empty() &&
+                    !parse_appraisal_category(*shared).has_value()) {
+                    measurement = shared;
+                } else {
+                    // Areas created while Appraisal is active have no
+                    // earlier measurement classification. The documented
+                    // neutral measurement rule keeps that workflow usable
+                    // without inferring any appraisal meaning.
+                    measurement = std::string{"measurement"};
+                }
+                boundary.properties["measurement_classification"] = *measurement;
+                changed = true;
+            }
+            if (!read_string(boundary.properties, "appraisal_category").has_value() &&
+                shared.has_value() &&
+                parse_appraisal_category(*shared).has_value()) {
+                // Interactive boundary authoring predates the split
+                // workflow fields and commits the chosen appraisal token
+                // as classification. Preserve it before Measurement
+                // restores the independent measurement meaning.
+                boundary.properties["appraisal_category"] = *shared;
+                changed = true;
+            }
+            if (workflow != "appraisal" &&
+                (!shared.has_value() || *shared != *measurement)) {
+                boundary.properties["classification"] = *measurement;
+                changed = true;
+            }
+            if (changed) changes.push_back(EntityChange::upsert(std::move(boundary)));
+        }
+        return changes;
+    }
+
     // With capture, the changes are returned there instead of being applied,
     // so they can join another command.
     bool setCalculationWorkflow(const QString& requested_workflow,
@@ -47526,97 +47608,10 @@ public:
             return false;
         }
         try {
-            const auto current = calculation_workflow_name(property->properties);
-            if (current == workflow && !appraisal_policy && !decimal_places) {
-                clearError();
-                return true;
-            }
-            if (appraisal_policy && !appraisal_policy->is_object())
-                throw std::invalid_argument("Appraisal policy must be an object.");
-            if (decimal_places && *decimal_places > 6)
-                throw std::invalid_argument("Area precision must be between 0 and 6 decimal places.");
             const auto snapshot = m_document->snapshot();
-            auto updated = *property;
-            if (current != workflow && workflow == "appraisal") {
-                updated.properties["measurement_calculation_profile"] =
-                    calculation_profile_json(read_calculation_profile(property->properties));
-                updated.properties["calculation_profile"] =
-                    calculation_profile_json(builtin_appraisal_profile());
-            } else if (current != workflow) {
-                if (property->properties.contains("measurement_calculation_profile")) {
-                    json stored_properties{{"calculation_profile",
-                                            property->properties.at("measurement_calculation_profile")}};
-                    updated.properties["calculation_profile"] =
-                        calculation_profile_json(read_calculation_profile(stored_properties));
-                } else {
-                    updated.properties["calculation_profile"] =
-                        calculation_profile_json(default_calculation_profile());
-                }
-            }
-            updated.properties["calculation_workflow"] = workflow;
-            if (appraisal_policy) updated.properties["appraisal_policy"] = *appraisal_policy;
-            if (decimal_places && current == workflow && workflow == "appraisal" &&
-                updated.properties.contains("calculation_profile") && updated.properties.at("calculation_profile").is_object()) {
-                // Appraisal precision (Setup is authoritative): change only the
-                // display decimals and advance the display revision, keeping
-                // fixed rules and any extension metadata exactly as stored.
-                const auto stored = read_appraisal_display_configuration(updated.properties);
-                const auto& configuration = updated.properties.at("calculation_profile");
-                const bool same = configuration.contains("decimal_places") && configuration.at("decimal_places").is_number_unsigned() &&
-                    configuration.at("decimal_places").get<unsigned>() == *decimal_places;
-                if (!same) {
-                    if (stored.version == std::numeric_limits<unsigned>::max())
-                        throw std::invalid_argument("Area display revision cannot advance further.");
-                    updated.properties["calculation_profile"]["decimal_places"] = *decimal_places;
-                    updated.properties["calculation_profile"]["version"] = stored.version + 1;
-                }
-            } else if (decimal_places) {
-                auto profile = read_calculation_profile(updated.properties);
-                profile.decimal_places = *decimal_places;
-                updated.properties["calculation_profile"] = calculation_profile_json(profile);
-            }
-            if (updated.properties == property->properties) { clearError(); return true; }
-            std::vector<EntityChange> changes;
-            changes.push_back(EntityChange::upsert(std::move(updated)));
-            for (const auto& [id, source] : snapshot.entities()) {
-                (void)id;
-                if (current == workflow || !is_closed_boundary_entity(source.type)) continue;
-                auto boundary = source;
-                bool changed = false;
-                auto measurement = read_string(boundary.properties,
-                                               "measurement_classification");
-                const auto shared = read_string(boundary.properties, "classification");
-                if (!measurement.has_value() || measurement->empty()) {
-                    if (shared.has_value() && !shared->empty() &&
-                        !parse_appraisal_category(*shared).has_value()) {
-                        measurement = shared;
-                    } else {
-                        // Areas created while Appraisal is active have no
-                        // earlier measurement classification. The documented
-                        // neutral measurement rule keeps that workflow usable
-                        // without inferring any appraisal meaning.
-                        measurement = std::string{"measurement"};
-                    }
-                    boundary.properties["measurement_classification"] = *measurement;
-                    changed = true;
-                }
-                if (!read_string(boundary.properties, "appraisal_category").has_value() &&
-                    shared.has_value() &&
-                    parse_appraisal_category(*shared).has_value()) {
-                    // Interactive boundary authoring predates the split
-                    // workflow fields and commits the chosen appraisal token
-                    // as classification. Preserve it before Measurement
-                    // restores the independent measurement meaning.
-                    boundary.properties["appraisal_category"] = *shared;
-                    changed = true;
-                }
-                if (workflow != "appraisal" &&
-                    (!shared.has_value() || *shared != *measurement)) {
-                    boundary.properties["classification"] = *measurement;
-                    changed = true;
-                }
-                if (changed) changes.push_back(EntityChange::upsert(std::move(boundary)));
-            }
+            const auto current = calculation_workflow_name(property->properties);
+            auto changes = calculationWorkflowChanges(snapshot, *property, workflow, appraisal_policy, decimal_places);
+            if (changes.empty()) { clearError(); return true; }
             if (capture != nullptr) { *capture = std::move(changes); clearError(); return true; }
             applyDocumentCommand(ApplyEntityChanges{
                 .expected_revision = snapshot.revision(),
@@ -72239,134 +72234,181 @@ private:
         return QStringLiteral("measurement");
     }
 
-    // After an area is drawn, record the explicit facts its area type implies
-    // (flagged in appraisal_fact_defaults) and, when the property had no
-    // appraisal declarations, set appraisal up with the residential defaults.
-    // One undoable command after the area's own command. Declared facts are
-    // never overwritten; facts the type does not imply stay Undeclared.
+    // The explicit facts an area type implies for newly created areas, computed
+    // on snapshot (the committed document or a candidate that already holds
+    // the areas). When the property had no appraisal declarations and a type
+    // is staged, the residential appraisal setup is included. Defaults are
+    // flagged in appraisal_fact_defaults; declared facts are never
+    // overwritten; facts the type does not imply stay Undeclared.
+    struct AreaTypeDefaultChanges {
+        std::vector<EntityChange> changes;
+        bool set_up{};
+        QString defaulted_type;
+        QStringList kept;
+    };
+
+    AreaTypeDefaultChanges areaTypeDefaultChanges(const DocumentSnapshot& snapshot, const std::string& property_id,
+                                                  const std::vector<std::string>& created_ids,
+                                                  const std::optional<QString>& staged) const {
+        AreaTypeDefaultChanges result;
+        const auto stored_property = snapshot.entities().find(property_id);
+        if (stored_property == snapshot.entities().end() || stored_property->second.type != "property") return result;
+        std::map<std::string, Entity, std::less<>> changed;
+        const auto current = [&](const std::string& id) -> Entity& {
+            auto found = changed.find(id);
+            if (found == changed.end()) found = changed.emplace(id, snapshot.entities().at(id)).first;
+            return found->second;
+        };
+        const auto stage_category = [&] {
+            for (const auto& id : created_ids) {
+                if (!snapshot.entities().contains(id)) continue;
+                auto& boundary = current(id);
+                if (read_string(boundary.properties, "appraisal_category") ||
+                    read_string(boundary.properties, "classification").value_or("") != "measurement") continue;
+                boundary.properties["measurement_classification"] = "measurement";
+                boundary.properties["appraisal_category"] = staged->toStdString();
+            }
+        };
+        const auto active_property = propertyEntity();
+        if (staged && active_property && active_property->id == property_id && appraisalSetupPending(snapshot, property_id)) {
+            const json residential{{"policy_kind", "residential_declared"}, {"version", 1},
+                                   {"property_kind", "detached_single_family"}, {"measurement_basis", "exterior"}};
+            for (auto& change : calculationWorkflowChanges(snapshot, stored_property->second, "appraisal", residential, std::nullopt))
+                if (change.kind == EntityChangeKind::upsert) changed.insert_or_assign(change.entity.id, change.entity);
+            stage_category();
+            result.set_up = true;
+        }
+        if (staged && !result.set_up && calculation_workflow_name(stored_property->second.properties) == "appraisal")
+            stage_category();
+        const auto& property = changed.contains(property_id) ? changed.at(property_id) : stored_property->second;
+        if (calculation_workflow_name(property.properties) == "appraisal" && property.properties.contains("appraisal_policy")) {
+            const auto& policy = property.properties.at("appraisal_policy");
+            const bool ansi = policy.is_object() && policy.value("policy_kind", json()) == "ansi_z765_2021";
+            for (const auto& id : created_ids) {
+                if (!snapshot.entities().contains(id)) continue;
+                auto& boundary = current(id);
+                // Interactive commits may keep the chosen token in the
+                // shared classification field; read it as Appraisal does.
+                const auto category = area_classification_for_workflow(boundary.properties, "appraisal");
+                const auto defaults = category ? appraisal_classification_defaults(*category, ansi) : std::nullopt;
+                if (!defaults) continue;
+                auto facts = boundary.properties.value("appraisal_facts", json::object());
+                if (!facts.is_object()) continue;
+                json recorded = json::object();
+                for (const auto& [key, value] : defaults->area)
+                    if (!facts.contains(key)) { facts[key] = value; recorded[key] = value; }
+                if (!recorded.empty()) {
+                    boundary.properties["appraisal_facts"] = facts;
+                    boundary.properties["appraisal_fact_defaults"] = json{{"version", 1}, {"source", "classification"},
+                        {"classification", *category}, {"facts", recorded}};
+                    result.defaulted_type = QString::fromStdString(*category);
+                }
+                if (!defaults->grade && !defaults->grade_from_floor) continue;
+                const auto floor_id = read_string(boundary.properties, "floor_id");
+                if (!floor_id || !snapshot.entities().contains(*floor_id) || snapshot.entities().at(*floor_id).type != "floor") continue;
+                auto& floor = current(*floor_id);
+                auto level = floor.properties.value("appraisal_facts", json::object());
+                if (!level.is_object()) continue;
+                const auto floor_name = QString::fromStdString(read_string(floor.properties, "name").value_or("this floor"));
+                if (level.contains("grade")) {
+                    if (defaults->grade && level.at("grade").is_string() && level.at("grade").get<std::string>() != *defaults->grade)
+                        result.kept.push_back(QStringLiteral("%1 stays %2 grade").arg(floor_name,
+                            QString::fromStdString(level.at("grade").get<std::string>())));
+                    continue;
+                }
+                const auto declared_level = appraisal_declared_floor_level_grade(property, *floor_id);
+                if (defaults->grade && declared_level && *declared_level != *defaults->grade) {
+                    result.kept.push_back(QStringLiteral("%1 grade left undeclared: its reporting level is %2 grade")
+                        .arg(floor_name, QString::fromStdString(*declared_level)));
+                    continue;
+                }
+                const auto grade = defaults->grade ? *defaults->grade : declared_level.value_or("above");
+                level["grade"] = grade;
+                floor.properties["appraisal_facts"] = level;
+                floor.properties["appraisal_fact_defaults"] = json{{"version", 1}, {"source", "classification"},
+                    {"facts", {{"grade", grade}}}};
+            }
+        }
+        for (auto& [id, entity] : changed)
+            if (entity != snapshot.entities().at(id)) result.changes.push_back(EntityChange::upsert(entity));
+        if (result.changes.empty()) return result;
+        // Every recorded declaration must still read as a valid declaration.
+        for (const auto& id : created_ids) {
+            if (!changed.contains(id)) continue;
+            const auto& boundary = changed.at(id);
+            const auto floor_id = read_string(boundary.properties, "floor_id").value_or("");
+            const auto& floor = changed.contains(floor_id) ? changed.at(floor_id) : snapshot.entities().at(floor_id);
+            (void)read_appraisal_declarations(property.properties, floor.properties, boundary.properties);
+        }
+        return result;
+    }
+
+    void showAreaTypeDefaultNotes(const AreaTypeDefaultChanges& defaults) {
+        QStringList notes;
+        if (defaults.set_up) notes.push_back(QStringLiteral("Appraisal set up with residential defaults · change in Appraisal setup"));
+        if (!defaults.defaulted_type.isEmpty()) {
+            QString label = defaults.defaulted_type;
+            for (const auto& choice : areaTypeChoices(builtin_appraisal_profile(), true, true, design::dark_theme()))
+                if (choice.key == defaults.defaulted_type) label = choice.label;
+            notes.push_back(QStringLiteral("%1 facts from classification · edit facts in Details").arg(label));
+        }
+        notes.append(defaults.kept);
+        if (!notes.isEmpty()) owner->statusBar()->showMessage(notes.join(QStringLiteral(". ")), 12000);
+    }
+
+    // After an area is drawn, record the facts its area type implies (and the
+    // residential setup on a fresh property) as one undoable command after the
+    // area's own command.
     void recordAreaTypeDefaults(const std::string& property_id, const std::vector<std::string>& created_ids,
                                 const std::optional<QString>& staged) {
         try {
             const auto snapshot = authoringSnapshot();
-            const auto stored_property = snapshot.entities().find(property_id);
-            if (stored_property == snapshot.entities().end() || stored_property->second.type != "property") return;
-            std::map<std::string, Entity, std::less<>> changed;
-            const auto current = [&](const std::string& id) -> Entity& {
-                auto found = changed.find(id);
-                if (found == changed.end()) found = changed.emplace(id, snapshot.entities().at(id)).first;
-                return found->second;
-            };
-            bool set_up = false;
-            const auto active_property = propertyEntity();
-            if (staged && active_property && active_property->id == property_id && appraisalSetupPending(snapshot, property_id)) {
-                std::vector<EntityChange> setup;
-                const json residential{{"policy_kind", "residential_declared"}, {"version", 1},
-                                       {"property_kind", "detached_single_family"}, {"measurement_basis", "exterior"}};
-                if (!setCalculationWorkflow(QStringLiteral("appraisal"), residential, std::nullopt, &setup))
-                    throw std::invalid_argument(m_last_error.toStdString());
-                for (auto& change : setup)
-                    if (change.kind == EntityChangeKind::upsert) changed.insert_or_assign(change.entity.id, change.entity);
-                for (const auto& id : created_ids) {
-                    if (!snapshot.entities().contains(id)) continue;
-                    auto& boundary = current(id);
-                    if (read_string(boundary.properties, "appraisal_category") ||
-                        read_string(boundary.properties, "classification").value_or("") != "measurement") continue;
-                    boundary.properties["measurement_classification"] = "measurement";
-                    boundary.properties["appraisal_category"] = staged->toStdString();
-                }
-                set_up = true;
-            }
-            if (staged && !set_up && calculation_workflow_name(stored_property->second.properties) == "appraisal") {
-                for (const auto& id : created_ids) {
-                    if (!snapshot.entities().contains(id)) continue;
-                    auto& boundary = current(id);
-                    if (read_string(boundary.properties, "appraisal_category") ||
-                        read_string(boundary.properties, "classification").value_or("") != "measurement") continue;
-                    boundary.properties["measurement_classification"] = "measurement";
-                    boundary.properties["appraisal_category"] = staged->toStdString();
-                }
-            }
-            const auto& property = changed.contains(property_id) ? changed.at(property_id) : stored_property->second;
-            QStringList kept;
-            QString defaulted_type;
-            if (calculation_workflow_name(property.properties) == "appraisal" && property.properties.contains("appraisal_policy")) {
-                const auto& policy = property.properties.at("appraisal_policy");
-                const bool ansi = policy.is_object() && policy.value("policy_kind", json()) == "ansi_z765_2021";
-                for (const auto& id : created_ids) {
-                    if (!snapshot.entities().contains(id)) continue;
-                    auto& boundary = current(id);
-                    // Interactive commits may keep the chosen token in the
-                    // shared classification field; read it as Appraisal does.
-                    const auto category = area_classification_for_workflow(boundary.properties, "appraisal");
-                    const auto defaults = category ? appraisal_classification_defaults(*category, ansi) : std::nullopt;
-                    if (!defaults) continue;
-                    auto facts = boundary.properties.value("appraisal_facts", json::object());
-                    if (!facts.is_object()) continue;
-                    json recorded = json::object();
-                    for (const auto& [key, value] : defaults->area)
-                        if (!facts.contains(key)) { facts[key] = value; recorded[key] = value; }
-                    if (!recorded.empty()) {
-                        boundary.properties["appraisal_facts"] = facts;
-                        boundary.properties["appraisal_fact_defaults"] = json{{"version", 1}, {"source", "classification"},
-                            {"classification", *category}, {"facts", recorded}};
-                        defaulted_type = QString::fromStdString(*category);
-                    }
-                    if (!defaults->grade && !defaults->grade_from_floor) continue;
-                    const auto floor_id = read_string(boundary.properties, "floor_id");
-                    if (!floor_id || !snapshot.entities().contains(*floor_id) || snapshot.entities().at(*floor_id).type != "floor") continue;
-                    auto& floor = current(*floor_id);
-                    auto level = floor.properties.value("appraisal_facts", json::object());
-                    if (!level.is_object()) continue;
-                    const auto floor_name = QString::fromStdString(read_string(floor.properties, "name").value_or("this floor"));
-                    if (level.contains("grade")) {
-                        if (defaults->grade && level.at("grade").is_string() && level.at("grade").get<std::string>() != *defaults->grade)
-                            kept.push_back(QStringLiteral("%1 stays %2 grade").arg(floor_name,
-                                QString::fromStdString(level.at("grade").get<std::string>())));
-                        continue;
-                    }
-                    const auto declared_level = appraisal_declared_floor_level_grade(property, *floor_id);
-                    if (defaults->grade && declared_level && *declared_level != *defaults->grade) {
-                        kept.push_back(QStringLiteral("%1 grade left undeclared: its reporting level is %2 grade")
-                            .arg(floor_name, QString::fromStdString(*declared_level)));
-                        continue;
-                    }
-                    const auto grade = defaults->grade ? *defaults->grade : declared_level.value_or("above");
-                    level["grade"] = grade;
-                    floor.properties["appraisal_facts"] = level;
-                    floor.properties["appraisal_fact_defaults"] = json{{"version", 1}, {"source", "classification"},
-                        {"facts", {{"grade", grade}}}};
-                }
-            }
-            ApplyEntityChanges command{snapshot.revision(), {}, {},
-                set_up ? "Set up appraisal and record area facts" : "Record area facts from area type"};
-            for (auto& [id, entity] : changed)
-                if (entity != snapshot.entities().at(id)) command.entity_changes.push_back(EntityChange::upsert(entity));
-            if (command.entity_changes.empty()) return;
-            // Every recorded declaration must still read as a valid declaration.
-            for (const auto& id : created_ids) {
-                if (!changed.contains(id)) continue;
-                const auto& boundary = changed.at(id);
-                const auto floor_id = read_string(boundary.properties, "floor_id").value_or("");
-                const auto& floor = changed.contains(floor_id) ? changed.at(floor_id) : snapshot.entities().at(floor_id);
-                (void)read_appraisal_declarations(property.properties, floor.properties, boundary.properties);
-            }
+            auto defaults = areaTypeDefaultChanges(snapshot, property_id, created_ids, staged);
+            if (defaults.changes.empty()) return;
+            ApplyEntityChanges command{snapshot.revision(), std::move(defaults.changes), {},
+                defaults.set_up ? "Set up appraisal and record area facts" : "Record area facts from area type"};
             (void)Document::preview_command(snapshot, command);
             if (!applyDocumentCommand(command)) throw std::invalid_argument(m_last_error.toStdString());
             clearError();
             refresh();
-            QStringList notes;
-            if (set_up) notes.push_back(QStringLiteral("Appraisal set up with residential defaults · change in Appraisal setup"));
-            if (!defaulted_type.isEmpty()) {
-                QString label = defaulted_type;
-                for (const auto& choice : areaTypeChoices(builtin_appraisal_profile(), true, true, design::dark_theme()))
-                    if (choice.key == defaulted_type) label = choice.label;
-                notes.push_back(QStringLiteral("%1 facts from classification · edit facts in Details").arg(label));
-            }
-            notes.append(kept);
-            if (!notes.isEmpty()) owner->statusBar()->showMessage(notes.join(QStringLiteral(". ")), 12000);
+            showAreaTypeDefaultNotes(defaults);
         } catch (const std::exception& error) {
             setError(QStringLiteral("Area created; its facts were not recorded: %1").arg(QString::fromUtf8(error.what())));
         }
+    }
+
+    // An area measured from a closed wall loop is a Living area. Its type
+    // facts (and the residential setup on a fresh property) join the
+    // wall-closing command so closing a room stays one undo step. The
+    // candidate is the source with the command applied.
+    void appendWallLoopLivingDefaults(const DocumentSnapshot& source, ApplyEntityChanges& command,
+                                      const QString& measurement_id, const std::string& property_id) const {
+        if (measurement_id.isEmpty()) return;
+        // The facts are optional: a failure keeps the walls and the area.
+        try {
+            const auto candidate = Document::preview_command(source, Command{command});
+            const auto found = candidate.entities().find(measurement_id.toStdString());
+            if (found == candidate.entities().end() ||
+                read_string(found->second.properties, "classification").value_or("") != "measurement" ||
+                read_string(found->second.properties, "appraisal_category")) return;
+            // Living area is a residential type; a declared light commercial
+            // property keeps its wall-derived area explicit-only.
+            const auto property = candidate.entities().find(property_id);
+            if (property == candidate.entities().end()) return;
+            const auto policy = property->second.properties.find("appraisal_policy");
+            if (policy != property->second.properties.end() && policy->is_object() &&
+                policy->value("policy_kind", std::string{}) == "light_commercial_declared") return;
+            auto defaults = areaTypeDefaultChanges(candidate, property_id, {found->first},
+                                                   std::optional<QString>{QStringLiteral("above_grade_finished")});
+            for (auto& change : defaults.changes) {
+                const auto existing = std::find_if(command.entity_changes.begin(), command.entity_changes.end(),
+                    [&](const EntityChange& item) {
+                        return item.kind == EntityChangeKind::upsert && item.entity.id == change.entity.id;
+                    });
+                if (existing != command.entity_changes.end()) *existing = std::move(change);
+                else command.entity_changes.push_back(std::move(change));
+            }
+        } catch (const std::exception&) {}
     }
 
     void cancelTool() {

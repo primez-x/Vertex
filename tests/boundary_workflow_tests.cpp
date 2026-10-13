@@ -3311,8 +3311,9 @@ void test_appraisal_draw_category_survives_workflow_switches() {
     workflow->setCurrentIndex(appraisal);
     auto* garage = window.findChild<QLabel*>(QStringLiteral("appraisalGarageTotal"));
     auto* gla = window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"));
-    require(garage && garage->text().contains(QStringLiteral("43.06")) &&
-                gla && gla->text().contains(QStringLiteral("0.00")),
+    // 4 m² = 43.06 sf, shown at the appraisal profile's one decimal place.
+    require(garage && garage->text() == QStringLiteral("43.1 sf") &&
+                gla && gla->text() == QStringLiteral("0.0 sf"),
             "returning to Appraisal must restore the drawn garage category and automatic total (garage='" +
                 (garage ? garage->text().toStdString() : std::string("missing")) + "' gla='" +
                 (gla ? gla->text().toStdString() : std::string("missing")) + "')");
@@ -3648,11 +3649,10 @@ void test_measure_wall_loop_creates_exterior_gla_area() {
     if (walls.size() != 4 || areas.size() != 1)
         throw std::runtime_error("closing the wall loop must create one exterior area: " +
             window.statusBar()->currentMessage().toStdString() + "; " + window.lastError().toStdString());
-    // The closing wall and its exterior area land in one revision; on a fresh
-    // project one more revision records the residential appraisal setup and
-    // the Living area facts (the same path as a drawn Living area).
-    require(closed.revision() == open.revision() + 2,
-            "the closing wall with its area, then the Living area facts, must be two revisions");
+    // The closing wall, its exterior area, the residential appraisal setup of a
+    // fresh project and the Living area facts land in one revision.
+    require(closed.revision() == open.revision() + 1,
+            "the closing wall with its area and Living area facts must be one revision");
     const auto& area = closed.entities().at(areas.front());
     require(area.properties.value("classification", std::string{}) == "measurement" &&
                 area.properties.value("appraisal_category", std::string{}) == "above_grade_finished" &&
@@ -3672,10 +3672,10 @@ void test_measure_wall_loop_creates_exterior_gla_area() {
                 !gla->text().contains(QStringLiteral("withheld"), Qt::CaseInsensitive) &&
                 !gla->text().contains(QStringLiteral("unavailable"), Qt::CaseInsensitive),
             "GLA must be computed from the wall loop without Setup or Edit facts steps");
-    require(window.undoCommand() && window.undoCommand() && window.document().snapshot().entities() == open.entities(),
-            "two Undos must remove the facts, then the closing wall with its derived area");
-    require(window.redoCommand() && window.redoCommand() && window.document().snapshot().entities() == closed.entities(),
-            "Redo must restore the closing wall, its area and the recorded facts");
+    require(window.undoCommand() && window.document().snapshot().entities() == open.entities(),
+            "one Undo must remove the closing wall with its derived area and facts");
+    require(window.redoCommand() && window.document().snapshot().entities() == closed.entities(),
+            "one Redo must restore the closing wall, its area and the recorded facts");
 }
 
 // The Area Draw choice traces existing walls: a click on a wall's exterior

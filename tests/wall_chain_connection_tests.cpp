@@ -448,14 +448,39 @@ void test_automatic_appraisal_wall_chain_closure(bool survey_only=false) {
         require(dimensions==boundary.segments.size() && dimensions==4 &&
                 (curved_closure ? arc_dimension : std::abs(perimeter-2*(7+2*thickness))<1e-8),
             "every exterior edge must have one current exact dimension");
-        require(!owner.properties.contains("appraisal_facts") && !owner.properties.contains("grade") &&
+        // On a residential policy a wall-loop area is a Living area (FB-011):
+        // its type facts are explicit declarations flagged as classification
+        // defaults, the declared policy is unchanged, and ANSI evidence (ceiling
+        // eligibility and the floor grade) is never defaulted. A declared light
+        // commercial property keeps the area explicit-only.
+        const bool ansi = std::string(policy_kind)=="ansi_z765_2021";
+        const bool commercial = std::string(policy_kind)=="light_commercial_declared";
+        const auto& floor = closed.entities().at(owner.properties.at("floor_id").get<std::string>());
+        const auto facts = owner.properties.value("appraisal_facts",nlohmann::json::object());
+        const auto floor_facts = floor.properties.value("appraisal_facts",nlohmann::json::object());
+        const auto diagnostic = std::string(" (policy=")+policy_kind+", area="+facts.dump()+", floor="+floor_facts.dump()+")";
+        if (commercial) require(!owner.properties.contains("appraisal_facts") && !owner.properties.contains("appraisal_category") &&
+                !owner.properties.contains("grade") && !floor_facts.contains("grade") && closed.entities().at("property-1")==property,
+            std::string("light commercial closure must retain declared policy without inventing area facts"+diagnostic).c_str());
+        else require(owner.properties.value("appraisal_category",std::string{})=="above_grade_finished" &&
+                !owner.properties.contains("grade") &&
+                owner.properties.contains("appraisal_fact_defaults") &&
+                owner.properties.at("appraisal_fact_defaults").at("source")=="classification" &&
+                owner.properties.at("appraisal_fact_defaults").at("facts")==facts &&
+                facts.value("finish",std::string{})=="finished" && facts.value("access",std::string{})=="direct_interior" &&
+                facts.value("area_use",std::string{})=="dwelling" && facts.value("boundary_role",std::string{})=="measured_area" &&
+                facts.contains("ceiling_eligibility")==!ansi && floor_facts.contains("grade")==!ansi &&
                 closed.entities().at("property-1")==property,
-            "automatic closure must retain declared policy without inventing finish, grade, access or ANSI area facts");
+            std::string("automatic closure must record flagged Living area defaults, keep the declared policy and never default ANSI evidence"+diagnostic).c_str());
         require(window.selectEntity(QString::fromStdString(owner.id)),"automatic measured owner remains selectable");
         auto* details = dynamic_cast<AppraisalDetailsPanel*>(window.findChild<QWidget*>("appraisalDetailsPanel"));
         auto* gla = window.findChild<QLabel*>("appraisalDetailsGla");
-        require(details && details->report() && !details->report()->qualified && gla && gla->text()=="Totals unavailable",
-            "Details must remain unqualified until actual area and floor declarations are supplied");
+        require(details && details->report() && gla,"automatic appraisal area reports through Details");
+        if (ansi || commercial) require(!details->report()->qualified && gla->text()=="Totals unavailable",
+            std::string("ANSI and light commercial Details must stay unqualified until the remaining facts are declared"+diagnostic).c_str());
+        else require(details->report()->qualified && details->report()->calculation &&
+                     std::abs(details->report()->calculation->property.gla().total.square_metres-area)<1e-8,
+            std::string("the defaulted Living area must qualify its exact exterior area as GLA"+diagnostic+" gla="+gla->text().toStdString()).c_str());
         auto* tabs = window.findChild<QTabWidget*>("sidebarTabs");
         require(tabs,"automatic appraisal UI retains the real Details tab");
         tabs->setCurrentIndex(2);

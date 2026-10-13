@@ -124,12 +124,15 @@ void test_explicit_deduction_history_details_and_pdf() {
     auto* workflow=window.findChild<QComboBox*>("calculationWorkflow"); require(workflow,"Details workflow exists"); workflow->setCurrentIndex(workflow->findData("appraisal"));
     const auto declarations=[](const char* use) { return QStringLiteral(R"({"appraisal_policy":{"policy_kind":"residential_declared","version":1,"property_kind":"detached_single_family","measurement_basis":"exterior"},"grade":"above","appraisal_facts":{"finish":"finished","access":"direct_interior","ceiling_eligibility":"standard","area_use":"%1","boundary_role":"measured_area"}})").arg(QString::fromLatin1(use)); };
     require(window.editSelectedAppraisalFacts(declarations("dwelling")) && window.selectEntity(QString::fromStdString(child.id)) && window.editSelectedAppraisalFacts(declarations("garage")),"appraisal eligibility is explicitly declared after geometric definition"); events();
-    auto* gla=window.findChild<QLabel*>("appraisalGlaTotal"); require(gla && gla->text().contains("84.00"),"Details shows eighty-four square metres of explicitly qualified living area");
+    // Areas display with one decimal place (design system); the value is checked exactly.
+    { const auto shown=build_appraisal_document_report(window.document().snapshot(),"p",AreaUnit::square_metre);
+      require(shown.qualified && shown.calculation && std::abs(shown.calculation->property.gla().total.square_metres-84)<1e-9,"explicit declarations qualify exactly eighty-four square metres of living area"); }
+    auto* gla=window.findChild<QLabel*>("appraisalGlaTotal"); require(gla && gla->text()==QString::fromUtf8("84.0 m²"),"Details shows eighty-four square metres of explicitly qualified living area");
     QTemporaryDir temp; require(window.saveProjectAs(temp.filePath("nested.bldproj")) && window.openProject(temp.filePath("nested.bldproj")),"nested areas and deduction link save and reopen");
     require(window.exportDraftPdf(temp.filePath("nested.pdf")),"actual shared PDF includes nested measured definition"); QPdfDocument pdf;
     require(pdf.load(temp.filePath("nested.pdf"))==QPdfDocument::Error::None && pdf.pageCount()>0 && !pdf.render(0,QSize(1000,800)).isNull(),"actual nested measured PDF renders");
     const auto pdf_text=pdf.getAllText(0).text();
-    if(!pdf_text.contains("84.00"))std::cerr<<"PDF text diagnostic:\n"<<pdf_text.toStdString()<<'\n';
+    if(!pdf_text.contains("84.0"))std::cerr<<"PDF text diagnostic:\n"<<pdf_text.toStdString()<<'\n';
     if(const auto capture=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR"); !capture.isEmpty()) {
         window.fitView();
         auto* tabs=window.findChild<QTabWidget*>("sidebarTabs");require(tabs,"native left tabs exist");
@@ -138,7 +141,7 @@ void test_explicit_deduction_history_details_and_pdf() {
         QDir().mkpath(capture); require(window.grab().save(QDir(capture).filePath("nested-defined-canvas.png")),"native nested canvas capture saves");
         require(pdf.render(0,QSize(1200,900)).save(QDir(capture).filePath("nested-defined-pdf.png")),"rendered nested PDF capture saves");
     }
-    require(pdf_text.contains("84.00"),"actual PDF retains the qualified eighty-four-square-metre net measurement");
+    require(pdf_text.contains("84.0"),"actual PDF retains the qualified eighty-four-square-metre net measurement");
 }
 void test_phase_review_and_exact_augmented_apply() {
     auto document=fixture();
@@ -496,7 +499,7 @@ void test_combined_adjacent_regions_review_history_and_sources() {
         require(window.selectEntity(QString::fromStdString(area.id)),"select combined owner for explicit appraisal facts");
         auto* workflow=window.findChild<QComboBox*>("calculationWorkflow");workflow->setCurrentIndex(workflow->findData("appraisal"));
         require(window.editSelectedAppraisalFacts(QStringLiteral(R"({"appraisal_policy":{"policy_kind":"residential_declared","version":1,"property_kind":"detached_single_family","measurement_basis":"exterior"},"grade":"above","appraisal_facts":{"finish":"finished","access":"direct_interior","ceiling_eligibility":"standard","area_use":"dwelling","boundary_role":"measured_area"}})")),"combined geometric owner requires explicit appraisal declarations");events();
-        auto* gla=window.findChild<QLabel*>("appraisalGlaTotal");require(gla && gla->text().contains("100.00"),"Details calculates combined owner once as hundred-square-metre qualified GLA");
+        auto* gla=window.findChild<QLabel*>("appraisalGlaTotal");require(gla && gla->text()==QString::fromUtf8("100.0 m²"),"Details calculates combined owner once as hundred-square-metre qualified GLA");
         QTemporaryDir directory;require(window.saveProjectAs(directory.filePath("combined.bldproj")) && window.openProject(directory.filePath("combined.bldproj")),"combined metadata saves/reopens");
         const auto reopened=window.document().snapshot();require(areas(reopened).size()==1 && measurement_linework_source_checks(reopened.entities()).at(area.id).current,"reopened combined owner remains current without duplicates");
         require(window.selectEntity("outer") && window.moveSelectedBoundaryVertex("outer:vertex1",{12,0},reopened.revision()),"native measured source vertex edit refreshes the whole combined owner");
@@ -604,7 +607,7 @@ void test_vendor_group_marker_on_other_boundary_owners() {
         entity.extensions["measurement_linework_group"]=marker;const auto marker_bytes=marker.dump();
         auto document=std::make_shared<Document>(Document::create({{"p","property",{{"name","Vendor boundary"}},false},{"b","building",{{"property_id","p"}},false},{"f","floor",{{"building_id","b"}},false},{"l","layer",{{"floor_id","f"}},false},entity}));
         MainWindow window(document);window.setAttribute(Qt::WA_DontShowOnScreen,true);window.show();window.setMetricUnits(true);require(window.selectEntity("vendor-area"),"select ordinary owner with opaque vendor group marker");events();
-        auto* total=window.findChild<QLabel*>("calculationBuildingTotal");require(total && total->text().contains("100.00"),"vendor group marker on other owners does not withhold calculable area totals");
+        auto* total=window.findChild<QLabel*>("calculationBuildingTotal");require(total && total->text().contains("100.0"),"vendor group marker on other owners does not withhold calculable area totals");
         auto* review_action=window.findChild<QAction*>("reviewMeasuredAreaSources");require(review_action && !review_action->isEnabled(),"ordinary owner vendor marker offers no measured-group source repair");
         const auto original=document->snapshot();
         const auto verify=[&] {

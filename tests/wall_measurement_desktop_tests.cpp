@@ -648,9 +648,16 @@ void mixed_wall_shell_move_refreshes_unselected_appraisal_area(bool metric, bool
         const auto& committed=rendered->type=="wall" ? rendered->snap_segments : rendered->segments;
         const auto& previewed=proposed->type=="wall" ? proposed->snap_segments : proposed->segments;
         require(committed.size()==previewed.size(),"mixed release retains the exact previewed geometry");
+        // Walls, openings and the measured owner are analytical and must match
+        // exactly. Furniture artwork is previewed as a rigid move of its retained
+        // outline while the release re-renders it from the exact committed
+        // placement (checked exactly below), so its outline may differ by
+        // floating-point rounding only.
+        const double tolerance=rendered->svg_symbol ? 1e-9 : 0.0;
+        const auto same=[&](double left,double right){return std::abs(left-right)<=tolerance;};
         for (std::size_t index=0;index<committed.size();++index)
-            require(committed[index].start.x==previewed[index].start.x && committed[index].start.y==previewed[index].start.y &&
-                committed[index].end.x==previewed[index].end.x && committed[index].end.y==previewed[index].end.y &&
+            require(same(committed[index].start.x,previewed[index].start.x) && same(committed[index].start.y,previewed[index].start.y) &&
+                same(committed[index].end.x,previewed[index].end.x) && same(committed[index].end.y,previewed[index].end.y) &&
                 committed[index].sweep_radians==previewed[index].sweep_radians,
                 "mixed release commits the same analytical geometry admitted by the captured preview");
         if (rendered->svg_symbol) require(proposed->svg_symbol &&

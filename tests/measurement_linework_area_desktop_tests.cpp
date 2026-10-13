@@ -204,7 +204,8 @@ void test_canvas_source_move_and_live_gla() {
     require(window.document().snapshot().entities()==moved.entities(),"native reopen preserves exact edited sources and derived areas");
     auto* tabs=window.findChild<QTabWidget*>("sidebarTabs");require(tabs,"Details tabs exist after reopen");tabs->setCurrentIndex(2);
     auto* gla=window.findChild<QLabel*>("appraisalDetailsGla");
-    require(gla && gla->text().contains("129.17"),"visible Details GLA uses the updated twelve square metres after reopen");
+    // 12 m² = 129.17 sf (checked exactly above), shown with one decimal place.
+    require(gla && gla->text()==QStringLiteral("129.2 sf"),"visible Details GLA uses the updated twelve square metres after reopen");
     const auto capture=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");if(!capture.isEmpty()) {
         QDir().mkpath(capture);require(window.grab().save(QDir(capture).filePath("measured-line-live-area-move.png")),"capture actual edited native canvas");
     }

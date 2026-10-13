@@ -212,8 +212,9 @@ void workflow() {
     const auto exterior_before = window.document().snapshot().entities().at(exterior.toStdString());
     const auto gla_before = child<QLabel>(window, "appraisalGlaTotal")->text();
     const auto property_gla_before = child<QLabel>(window, "appraisalDetailsGla")->text();
-    require(gla_before.contains("25.00"), "independent declared exterior owner reports 25 square metres GLA");
-    require(property_gla_before.contains("25.00"),"persistent property Details also report the qualified GLA");
+    // A 5 m x 5 m owner, shown with the one-decimal area display.
+    require(gla_before == QString::fromUtf8("25.0 m²"), "independent declared exterior owner reports 25 square metres GLA");
+    require(property_gla_before == QString::fromUtf8("25.0 m²"),"persistent property Details also report the qualified GLA");
 
     require(window.selectEntity("bottom"), "select real physical wall for room discovery");
     const auto before = window.document().snapshot();

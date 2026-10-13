@@ -191,8 +191,9 @@ void physical_wall_return(bool action, bool rotate, bool finish) {
     require(same(edge.start,points.back()) && same(edge.end,expected) && edge.sweep_radians==0 &&
                 after.revision()==before.revision()+1,
             "B/menu appends the literal matched diagonal return in one revision");
+    // Metric drawing uses the metric market defaults: 140 mm walls, 2.4 m high.
     require(std::abs(wall.properties.at("thickness_m").get<double>()-0.14)<1e-12 &&
-                std::abs(wall.properties.at("height_m").get<double>()-2.4384)<1e-12,
+                std::abs(wall.properties.at("height_m").get<double>()-2.4)<1e-12,
             "bay return retains default physical thickness and wall height");
     for (const auto& id : ids(after,"wall"))
         require(std::any_of(canvas.labels().begin(),canvas.labels().end(),[&](const auto& label) {
