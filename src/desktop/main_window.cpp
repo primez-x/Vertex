@@ -38171,10 +38171,15 @@ public:
     // The mixed placement coordinator can prepare the ordinary partition on
     // its immutable original destination without publishing a family fragment.
     // It remains responsible for complete destination admission and one apply.
+    // ordinary_payload: Edit > Duplicate passes the encoded selection graph
+    // directly so the system clipboard is neither read nor replaced.
     bool pasteSelection(const MixedClipboardTransfer* mixed=nullptr,
-        const DocumentSnapshot* destination=nullptr, OrdinaryClipboardPreparation* preparation=nullptr) {
+        const DocumentSnapshot* destination=nullptr, OrdinaryClipboardPreparation* preparation=nullptr,
+        const std::string* ordinary_payload=nullptr) {
         try {
             std::optional<DrawingContext> prepared_context;
+            if (ordinary_payload && (mixed || destination || preparation))
+                throw std::invalid_argument("A duplicated selection graph cannot be combined with a mixed clipboard packet.");
             if (mixed || destination || preparation) {
                 if (!mixed || !destination || !preparation || !mixed->ordinary)
                     throw std::invalid_argument("Mixed clipboard preparation requires its complete packet and destination.");
@@ -38187,9 +38192,12 @@ public:
             }
             const auto payload=[&]() -> json {
                 if (mixed) return *mixed->ordinary;
-                auto* clipboard=QGuiApplication::clipboard();
-                if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
-                const auto encoded=clipboard->text(QClipboard::Clipboard).toUtf8();
+                const auto encoded=[&] {
+                    if (ordinary_payload) return QByteArray::fromStdString(*ordinary_payload);
+                    auto* clipboard=QGuiApplication::clipboard();
+                    if (!clipboard) throw std::runtime_error("The system clipboard is unavailable.");
+                    return clipboard->text(QClipboard::Clipboard).toUtf8();
+                }();
                 if (encoded.isEmpty() || static_cast<std::size_t>(encoded.size())>kMaximumClipboardBytes)
                     throw std::invalid_argument("Clipboard data is empty or exceeds the local size limit.");
                 std::size_t values{};
@@ -38628,7 +38636,8 @@ public:
                 change.entity.properties.erase("vertical_placement");
             }
             const bool measured_placement=preparation ? false : placeMeasuredClipboardGraph(source,changes);
-            auto raw=ApplyEntityChanges{source.revision(),std::move(changes),{},"Paste selection"};
+            auto raw=ApplyEntityChanges{source.revision(),std::move(changes),{},
+                ordinary_payload ? "Duplicate selection" : "Paste selection"};
             if (preparation) {
                 if (fullSnapshotDigest(source)!=fullSnapshotDigest(authoringSnapshot()) ||
                     m_active_layer_id.toStdString()!=prepared_context->layer_id)
@@ -41632,6 +41641,7 @@ public:
             syncToolControls();
             clearError();
             refresh();
+            noteRecentProject(path);
             return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Open failed; the current document is unchanged: %1")
@@ -42129,7 +42139,9 @@ public:
             setError(QStringLiteral("Choose a destination project file."));
             return false;
         }
-        return saveTo(filesystem_path(path), false);
+        if (!saveTo(filesystem_path(path), false)) return false;
+        noteRecentProject(path);
+        return true;
     }
 
     void refreshOutput() {
@@ -49349,6 +49361,7 @@ public:
         const std::vector<QKeySequence> reserved{
             QKeySequence::Undo, QKeySequence::Redo, QKeySequence::Copy,
             QKeySequence::Cut, QKeySequence::Paste, QKeySequence::SelectAll,
+            QKeySequence(QStringLiteral("Ctrl+D")), // Edit > Duplicate
             QKeySequence(QStringLiteral("Ctrl+Shift+Z")),
             QKeySequence(QStringLiteral("Shift+F10"))};
         for (std::size_t index = 0; index < keys.size(); ++index) {
@@ -49438,8 +49451,9 @@ public:
 
     // Edit > Preferences. Saved preferences are the startup defaults; a
     // workspace profile applied later overrides units, grid, snap, overview
-    // and theme for the session. Imperial style, display precision, angle
-    // snap and "reopen last project" are stored but have no consumer yet.
+    // and theme for the session. Imperial style and display precision drive
+    // units::set_display_precision (every displayed length); the angle snap
+    // step drives both canvases' rotation/placement snapping.
     [[nodiscard]] const Preferences& preferences() const noexcept { return m_preferences; }
 
     [[nodiscard]] WorkspaceAutosaveScheduler autosaveScheduler() const {
@@ -49450,12 +49464,27 @@ public:
                                           std::max<std::chrono::milliseconds>(maximum, std::chrono::seconds(2)));
     }
 
+    [[nodiscard]] static units::DisplayPrecision displayPrecisionFor(const Preferences& preferences) {
+        units::DisplayPrecision precision;
+        precision.decimal_feet = preferences.imperial_style == Preferences::ImperialStyle::decimal_feet;
+        precision.imperial_denominator = preferences.imperial_precision_denominator;
+        precision.metric_step_mm = preferences.metric_precision_mm;
+        return precision;
+    }
+
     [[nodiscard]] static QString metreFieldText(double metres) {
         return QString::number(metres, 'g', 12) + QStringLiteral(" m");
     }
 
     void loadSavedPreferences() {
         QSettings settings;
+        // The display precision is process-wide: start every window from its
+        // own preferences, not whatever an earlier window left behind.
+        if (const auto precision = displayPrecisionFor(m_preferences); precision != units::display_precision()) {
+            units::set_display_precision(precision);
+            refreshCanvases();
+            refreshInspector();
+        }
         // Nothing saved yet: the shipped defaults are already in effect.
         if (!settings.childGroups().contains(QStringLiteral("preferences"))) return;
         applyPreferences(Preferences::load(settings));
@@ -49464,7 +49493,20 @@ public:
     void applyPreferences(const Preferences& preferences) {
         const auto previous = m_preferences;
         m_preferences = preferences;
+        // Display precision first so a units change below already redraws
+        // with it; otherwise a precision-only change refreshes the readouts.
+        const auto precision = displayPrecisionFor(preferences);
+        const bool precision_changed = precision != units::display_precision();
+        units::set_display_precision(precision);
+        if (m_measurementCanvas) m_measurementCanvas->setAngleSnapDegrees(preferences.angle_snap_degrees);
+        if (m_architecturalCanvas) m_architecturalCanvas->setAngleSnapDegrees(preferences.angle_snap_degrees);
         if (preferences.metric() != m_metric_units) setMetricUnits(preferences.metric());
+        else if (precision_changed) {
+            refreshCanvases();
+            refreshInspector();
+            refreshCursorLabel(m_last_cursor);
+            refreshBoundaryPreview();
+        }
         const auto theme = resolve_workspace_theme(preferences.theme, QGuiApplication::styleHints()->colorScheme());
         if (theme != m_theme) applyTheme(theme);
         if (m_grid_button) m_grid_button->setChecked(preferences.grid_enabled);
@@ -50473,6 +50515,8 @@ public:
             {QStringLiteral("Copy selection"), [this] { copySelection(); }},
             {QStringLiteral("Cut selection"), [this] { cutSelection(); }},
             {QStringLiteral("Paste selection"), [this] { pasteSelection(); }},
+            {QStringLiteral("Duplicate selection"), [this] { (void)duplicateSelection(); }},
+            {QStringLiteral("Select all"), [this] { (void)selectAll(); }},
             {QStringLiteral("Delete selection"), [this] { deleteSelection(); }},
             {QStringLiteral("Upgrade boundary identities"), [this] { (void)upgradeSelectedBoundaryIdentities(); }},
             {QStringLiteral("Insert point"), [this] { showBoundaryVertexInsertion(); }},
@@ -56375,6 +56419,18 @@ private:
         m_delete_action->setObjectName(QStringLiteral("deleteSelection"));
         m_delete_action->setShortcut(QKeySequence::Delete);
         m_delete_action->setShortcutContext(Qt::WindowShortcut);
+        // Text fields keep Ctrl+A through ShortcutOverride; the trigger
+        // handler below also leaves text and list controls their own select-all.
+        m_select_all_action = new QAction(QStringLiteral("Select all"), owner);
+        m_select_all_action->setObjectName(QStringLiteral("selectAll"));
+        m_select_all_action->setShortcut(QKeySequence::SelectAll);
+        m_select_all_action->setShortcutContext(Qt::WindowShortcut);
+        m_select_all_action->setStatusTip(QStringLiteral("Select every visible object in the current plan view"));
+        m_duplicate_action = new QAction(QStringLiteral("Duplicate"), owner);
+        m_duplicate_action->setObjectName(QStringLiteral("duplicateSelection"));
+        m_duplicate_action->setShortcut(QKeySequence(QStringLiteral("Ctrl+D")));
+        m_duplicate_action->setShortcutContext(Qt::WindowShortcut);
+        m_duplicate_action->setStatusTip(QStringLiteral("Copy the selection in place as one undoable step"));
         m_insert_vertex_action = new QAction(QStringLiteral("Insert point…"), owner);
         m_insert_vertex_action->setObjectName(QStringLiteral("insertBoundaryVertex"));
         auto* remove_point_action=new QAction(QStringLiteral("Remove point…"),owner);
@@ -56538,6 +56594,10 @@ private:
         auto* file_menu = add_menu(QStringLiteral("&File"), "fileMenu");
         file_menu->addAction(m_new_action);
         file_menu->addAction(m_open_action);
+        m_open_recent_menu = add_submenu(file_menu, QStringLiteral("Open recent"), "openRecentMenu");
+        m_open_recent_menu->setToolTipsVisible(true);
+        QObject::connect(m_open_recent_menu, &QMenu::aboutToShow, owner, [this] { populateRecentProjectsMenu(); });
+        populateRecentProjectsMenu();
         file_menu->addAction(m_recover_action);
         file_menu->addSeparator();
         file_menu->addAction(m_save_action);
@@ -56572,7 +56632,10 @@ private:
         edit_menu->addAction(m_cut_action);
         edit_menu->addAction(m_copy_action);
         edit_menu->addAction(m_paste_action);
+        edit_menu->addAction(m_duplicate_action);
         edit_menu->addAction(m_delete_action);
+        edit_menu->addSeparator();
+        edit_menu->addAction(m_select_all_action);
         edit_menu->addSeparator();
         edit_menu->addAction(m_transform_action);
         edit_menu->addAction(measurement_keypad_action);
@@ -56737,6 +56800,16 @@ private:
         });
         QObject::connect(m_delete_action, &QAction::triggered, owner, [this, text_editor_focused] {
             if (!text_editor_focused()) (void)deleteSelection();
+        });
+        QObject::connect(m_duplicate_action, &QAction::triggered, owner, [this, text_editor_focused] {
+            if (!text_editor_focused()) (void)duplicateSelection();
+        });
+        QObject::connect(m_select_all_action, &QAction::triggered, owner, [this, text_editor_focused] {
+            auto* focused = QApplication::focusWidget();
+            if (text_editor_focused() || qobject_cast<QTextEdit*>(focused) ||
+                qobject_cast<QAbstractSpinBox*>(focused)) return;
+            if (auto* view = qobject_cast<QAbstractItemView*>(focused)) { view->selectAll(); return; }
+            (void)selectAll();
         });
         QObject::connect(m_insert_vertex_action, &QAction::triggered, owner,
                          [this] { showBoundaryVertexInsertion(); });
@@ -72201,6 +72274,246 @@ public:
         return recoverFromDialog(true, false);
     }
 
+    // File > Open recent. A most-recently-used list of up to ten existing
+    // projects, stored as normalized absolute paths in QSettings
+    // "recentProjects" and updated after a successful open or Save as.
+    // Recording is off under QStandardPaths test mode (desktop tests) and in
+    // smoke runs, so those never write the user's list.
+    static constexpr int kMaximumRecentProjects = 10;
+
+    void setRecentProjectsEnabled(bool enabled) {
+        m_recent_projects_enabled = enabled;
+    }
+
+    [[nodiscard]] static QString normalizedRecentProjectPath(const QString& path) {
+        if (path.trimmed().isEmpty()) return {};
+        const QFileInfo info(path);
+        const auto canonical = info.canonicalFilePath();
+        return QDir::toNativeSeparators(canonical.isEmpty() ? QDir::cleanPath(info.absoluteFilePath()) : canonical);
+    }
+
+    [[nodiscard]] static bool sameRecentProjectPath(const QString& left, const QString& right) {
+#ifdef _WIN32
+        return left.compare(right, Qt::CaseInsensitive) == 0;
+#else
+        return left == right;
+#endif
+    }
+
+    [[nodiscard]] static bool recoveryCopyLocation(const QString& normalized) {
+        const auto directory = normalizedRecentProjectPath(
+            QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + QStringLiteral("/recovery"));
+        if (directory.isEmpty()) return false;
+        const auto prefix = directory + QDir::separator();
+        return normalized.startsWith(prefix,
+#ifdef _WIN32
+                                     Qt::CaseInsensitive
+#else
+                                     Qt::CaseSensitive
+#endif
+        );
+    }
+
+    // Stored entries in order, normalized and de-duplicated; missing files kept.
+    [[nodiscard]] QStringList storedRecentProjects() const {
+        QStringList result;
+        if (!m_recent_projects_enabled) return result;
+        const QSettings settings;
+        for (const auto& entry : settings.value(QStringLiteral("recentProjects")).toStringList()) {
+            const auto normalized = normalizedRecentProjectPath(entry);
+            if (normalized.isEmpty() ||
+                std::any_of(result.begin(), result.end(),
+                            [&](const QString& kept) { return sameRecentProjectPath(kept, normalized); }))
+                continue;
+            result.push_back(normalized);
+        }
+        return result;
+    }
+
+    void storeRecentProjects(const QStringList& paths) {
+        if (!m_recent_projects_enabled) return;
+        QSettings settings;
+        if (paths.isEmpty()) settings.remove(QStringLiteral("recentProjects"));
+        else settings.setValue(QStringLiteral("recentProjects"), paths);
+        settings.sync();
+    }
+
+    [[nodiscard]] QStringList recentProjects() const {
+        QStringList result;
+        for (const auto& path : storedRecentProjects()) {
+            if (!QFileInfo(path).isFile()) continue;
+            result.push_back(path);
+            if (result.size() == kMaximumRecentProjects) break;
+        }
+        return result;
+    }
+
+    void noteRecentProject(const QString& path) {
+        if (!m_recent_projects_enabled) return;
+        const auto normalized = normalizedRecentProjectPath(path);
+        if (normalized.isEmpty() || !QFileInfo(normalized).isFile() || recoveryCopyLocation(normalized)) return;
+        auto paths = recentProjects();
+        paths.removeIf([&](const QString& kept) { return sameRecentProjectPath(kept, normalized); });
+        paths.prepend(normalized);
+        while (paths.size() > kMaximumRecentProjects) paths.removeLast();
+        storeRecentProjects(paths);
+    }
+
+    void clearRecentProjects() {
+        storeRecentProjects({});
+        if (m_open_recent_menu) populateRecentProjectsMenu();
+        owner->statusBar()->showMessage(QStringLiteral("Recent projects cleared."), 4000);
+    }
+
+    bool openRecentProject(const QString& path) {
+        const auto normalized = normalizedRecentProjectPath(path);
+        if (normalized.isEmpty() || !QFileInfo(normalized).isFile()) {
+            auto paths = storedRecentProjects();
+            paths.removeIf([&](const QString& kept) { return sameRecentProjectPath(kept, normalized); });
+            storeRecentProjects(paths);
+            if (m_open_recent_menu) populateRecentProjectsMenu();
+            const QFileInfo missing(normalized);
+            owner->statusBar()->showMessage(
+                QStringLiteral("%1 is no longer in %2, so it was removed from Open recent. Use Open… to find the project.")
+                    .arg(missing.fileName(), QDir::toNativeSeparators(missing.absolutePath())),
+                10000);
+            return false;
+        }
+        return openProject(normalized);
+    }
+
+    void populateRecentProjectsMenu() {
+        if (!m_open_recent_menu) return;
+        m_open_recent_menu->clear();
+        const auto stored = storedRecentProjects();
+        const auto paths = recentProjects();
+        // Prune entries whose files have gone; say what happened once.
+        if (stored.size() > paths.size()) {
+            const auto removed = std::count_if(stored.begin(), stored.end(),
+                [](const QString& path) { return !QFileInfo(path).isFile(); });
+            storeRecentProjects(paths);
+            if (removed > 0)
+                owner->statusBar()->showMessage(
+                    QStringLiteral("%1 recent %2 no longer found and removed from Open recent. Use Open… to find moved projects.")
+                        .arg(removed).arg(removed == 1 ? QStringLiteral("project was") : QStringLiteral("projects were")),
+                    10000);
+        }
+        int index = 0;
+        for (const auto& path : paths) {
+            ++index;
+            auto name = QFileInfo(path).fileName();
+            name.replace(QLatin1Char('&'), QStringLiteral("&&"));
+            auto* action = m_open_recent_menu->addAction(
+                index < 10 ? QStringLiteral("&%1  %2").arg(index).arg(name) : QStringLiteral("1&0  %1").arg(name));
+            action->setObjectName(QStringLiteral("recentProject%1").arg(index));
+            action->setData(path);
+            action->setToolTip(path);
+            action->setStatusTip(path);
+            QObject::connect(action, &QAction::triggered, owner, [this, path] { (void)openRecentProject(path); });
+        }
+        if (paths.isEmpty()) {
+            auto* empty = m_open_recent_menu->addAction(QStringLiteral("No recent projects"));
+            empty->setObjectName(QStringLiteral("noRecentProjects"));
+            empty->setEnabled(false);
+        }
+        m_open_recent_menu->addSeparator();
+        auto* clear = m_open_recent_menu->addAction(QStringLiteral("Clear recent"));
+        clear->setObjectName(QStringLiteral("clearRecentProjects"));
+        clear->setEnabled(!paths.isEmpty());
+        QObject::connect(clear, &QAction::triggered, owner, [this] { clearRecentProjects(); });
+    }
+
+    // Startup: reopen the most recent project only when Preferences enables
+    // it, through the ordinary open path (ownership, recovery state, errors).
+    bool reopenLastProject() {
+        if (!m_recent_projects_enabled || !m_preferences.reopen_last_project) return false;
+        if (!m_file_path.empty() || hasBoundaryDraftChanges()) return false;
+        if (m_recovery_ledger.empty()) {
+            if (m_document->revision() > 1) return false;
+        } else if (projectDirty()) {
+            return false;
+        }
+        const auto paths = storedRecentProjects();
+        if (paths.isEmpty()) return false;
+        return openRecentProject(paths.front());
+    }
+
+    // Edit > Select all: every visible, selectable object in the active plan
+    // view (selection filter applied), adopted through the marquee path so the
+    // selection frame, Properties and transforms behave as for Ctrl+marquee.
+    bool selectAll() {
+        try {
+            auto* canvas = m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+            if (!canvas) return false;
+            if (!m_pending_symbol_id.isEmpty() || hasPendingPlacementEdit() || m_text_placement_context ||
+                m_plan_label_context || m_armed_area_class || m_boundary_session)
+                throw std::invalid_argument("Finish or cancel the current placement or drawing, then select all.");
+            if (siteCanvas(canvas)) requireSitePublicationCurrent(false);
+            const auto ids = canvas->selectableIds();
+            if (ids.isEmpty()) {
+                owner->statusBar()->showMessage(QStringLiteral("Nothing selectable is visible in this view."), 4000);
+                return false;
+            }
+            const auto source = captureCanvasGeometrySource(canvas, std::nullopt, false);
+            if (!selectRoofOpeningMarquee(source, ids, {}, false, false)) return false;
+            owner->statusBar()->showMessage(m_selected_ids.size() == 1
+                ? QStringLiteral("Selected 1 object.")
+                : QStringLiteral("Selected %1 objects.").arg(m_selected_ids.size()), 4000);
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Select all: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    // Edit > Duplicate: one undoable copy of the selection. Ordinary objects
+    // are pasted in place from the selection graph (the system clipboard is
+    // untouched) and the copies become the selection, ready to drag or
+    // Transform. Corner windows, skylights and mixed groups use their existing
+    // pending-placement duplicate flows.
+    bool duplicateSelection() {
+        try {
+            if (!m_document->is_editable()) throw std::invalid_argument("This project is read-only.");
+            if (m_selected_ids.isEmpty() && m_selected_roof_openings.empty())
+                throw std::invalid_argument("Select one or more objects to duplicate.");
+            if (mixedClipboardSelection()) {
+                duplicateMixedClipboardSelection();
+                return m_pending_mixed_clipboard != nullptr;
+            }
+            if (!m_selected_roof_openings.empty()) {
+                const auto captured = m_selected_roof_openings;
+                const auto source = selectedRoofOpeningCohortSource(false);
+                std::vector<RoofOpeningCloneSource> clones;
+                for (const auto& target : captured)
+                    clones.push_back({source->entities().at(target.roof_id.toStdString()), target.opening_id.toStdString()});
+                return clones.size() > 1 ? beginRoofOpeningGroupClone(std::move(clones))
+                                         : beginRoofOpeningClone(std::move(clones.front()));
+            }
+            if (hasCornerWindowSelection()) {
+                duplicateCornerWindowSelection();
+                return !m_pending_corner_window_group.empty();
+            }
+            const auto before = m_document->revision();
+            const auto encoded = clipboardSelectionPayload(authoringSnapshot());
+            if (!pasteSelection(nullptr, nullptr, nullptr, &encoded)) {
+                auto message = lastError();
+                if (message.startsWith(QStringLiteral("Paste: ")))
+                    setError(QStringLiteral("Duplicate: ") + message.mid(7));
+                return false;
+            }
+            if (m_document->revision() == before) return false;
+            const auto count = m_selected_ids.size();
+            owner->statusBar()->showMessage(count == 1
+                ? QStringLiteral("Duplicated 1 object in place. The copy is selected; drag it or use Transform to place it.")
+                : QStringLiteral("Duplicated %1 objects in place. The copies are selected; drag them or use Transform to place them.").arg(count),
+                8000);
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Duplicate: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
 private:
     struct ModalContext {
         std::shared_ptr<Document> document;
@@ -78998,6 +79311,10 @@ private:
     QAction* m_new_action{};
     QAction* m_open_action{};
     QAction* m_recover_action{};
+    QMenu* m_open_recent_menu{};
+    QAction* m_select_all_action{};
+    QAction* m_duplicate_action{};
+    bool m_recent_projects_enabled{!QStandardPaths::isTestModeEnabled()};
     QAction* m_save_action{};
     QAction* m_save_as_action{};
     QAction* m_undo_action{};
@@ -79802,6 +80119,34 @@ QString MainWindow::recoveryCopyPath() const {
 
 bool MainWindow::offerStartupRecovery() {
     return m_impl->offerStartupRecovery();
+}
+
+void MainWindow::setRecentProjectsEnabled(bool enabled) {
+    m_impl->setRecentProjectsEnabled(enabled);
+}
+
+QStringList MainWindow::recentProjects() const {
+    return m_impl->recentProjects();
+}
+
+void MainWindow::clearRecentProjects() {
+    m_impl->clearRecentProjects();
+}
+
+bool MainWindow::openRecentProject(const QString& path) {
+    return m_impl->openRecentProject(path);
+}
+
+bool MainWindow::reopenLastProject() {
+    return m_impl->reopenLastProject();
+}
+
+bool MainWindow::selectAll() {
+    return m_impl->selectAll();
+}
+
+bool MainWindow::duplicateSelection() {
+    return m_impl->duplicateSelection();
 }
 
 bool MainWindow::saveProjectAs(const QString& path) {

@@ -1,6 +1,8 @@
 #include "sketch/desktop/preferences_dialog.hpp"
 
+#include "sketch/quantity.hpp"
 #include "support/noninteractive_errors.hpp"
+#include "../src/desktop/measurement_format.hpp"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -221,6 +223,78 @@ void test_invalid_length_blocks_save() {
 
 } // namespace
 
+void require_text(const QString& actual, const QString& expected, std::string_view message) {
+    if (actual != expected)
+        throw std::runtime_error(std::string(message) + " (got \"" + actual.toStdString() +
+                                 "\", expected \"" + expected.toStdString() + "\")");
+}
+
+// Display precision from Preferences: presentation only, ANSI untouched.
+void test_display_precision() {
+    namespace units = sketch::desktop::units;
+    struct Restore { ~Restore() { units::set_display_precision(units::default_display_precision()); } } restore;
+    constexpr double inch = 0.0254;
+    const double length = 294.19 * inch;      // 24' 6.19"
+    const double feet_24_5 = 24.5 * 0.3048;
+    const double tiny = inch * 3.0 / 64.0;  // 0.75/16 in, 0.375/8 in
+    const double metric = 2.2537;
+    const auto ansi_length = units::ansi_length_text(length);
+    const auto ansi_area = units::ansi_area_text(171.23);
+
+    require(units::display_precision() == units::default_display_precision(), "default precision active");
+    require_text(units::length_text(length, false), QStringLiteral("24' 6 3/16\""), "default 1/16 inch");
+    require_text(units::length_text(tiny, false), QStringLiteral("1/16\""), "3/64 inch rounds to 1/16");
+    require_text(units::length_text(metric, true), QStringLiteral("2.254 m"), "default 1 mm");
+
+    units::DisplayPrecision eighth;
+    eighth.imperial_denominator = 8;
+    units::set_display_precision(eighth);
+    require_text(units::length_text(length, false), QStringLiteral("24' 6 1/4\""), "1/8 inch precision");
+    require_text(units::length_input_text(length, false), QStringLiteral("24' 6 1/4\""), "1/8 inch input text");
+    require_text(units::length_text(tiny, false), QStringLiteral("≈ 0\""), "approximate below 1/8 inch");
+    require_text(units::length_input_text(tiny, false), QStringLiteral("0\""), "input text never approximate");
+    require_text(units::length_text(length, false, units::default_display_precision()),
+                 QStringLiteral("24' 6 3/16\""), "explicit precision overrides the active one");
+    require_text(units::ansi_length_text(length), ansi_length, "ANSI length ignores precision");
+    require_text(units::ansi_area_text(171.23), ansi_area, "ANSI area ignores precision");
+
+    units::DisplayPrecision whole_inch;
+    whole_inch.imperial_denominator = 1;
+    units::set_display_precision(whole_inch);
+    require_text(units::length_text(length, false), QStringLiteral("24' 6\""), "1 inch precision");
+
+    units::DisplayPrecision decimal;
+    decimal.decimal_feet = true;
+    units::set_display_precision(decimal);
+    require_text(units::length_text(feet_24_5, false), QStringLiteral("24.50 ft"), "decimal feet");
+    require_text(units::length_text(-feet_24_5, false), QStringLiteral("-24.50 ft"), "negative decimal feet");
+    require_text(units::length_text(0.0001, false), QStringLiteral("≈ 0.00 ft"), "approximate decimal zero");
+    require_text(units::length_input_text(0.0001, false), QStringLiteral("0.00 ft"), "decimal input not approximate");
+    require_text(units::length_text(metric, true), QStringLiteral("2.254 m"), "decimal feet leaves metric alone");
+    require_near(sketch::parse_quantity(units::length_input_text(feet_24_5, false).toStdString()).metres,
+                 feet_24_5, "decimal feet input text parses");
+    require_text(units::ansi_length_text(length), ansi_length, "ANSI length ignores decimal feet");
+
+    units::DisplayPrecision five_mm;
+    five_mm.metric_step_mm = 5.0;
+    units::set_display_precision(five_mm);
+    require_text(units::length_text(metric, true), QStringLiteral("2.255 m"), "5 mm precision");
+    require_text(units::length_text(0.002, true), QStringLiteral("≈ 0 m"), "approximate below 5 mm");
+    require_text(units::length_input_text(0.002, true), QStringLiteral("0 m"), "metric input not approximate");
+    require_text(units::length_text(length, false), QStringLiteral("24' 6 3/16\""), "5 mm leaves imperial alone");
+    units::DisplayPrecision ten_mm;
+    ten_mm.metric_step_mm = 10.0;
+    units::set_display_precision(ten_mm);
+    require_text(units::length_text(metric, true), QStringLiteral("2.25 m"), "10 mm precision");
+    require_text(units::area_text(171.23, true), QStringLiteral("171.2 m²"), "areas keep one decimal");
+
+    units::DisplayPrecision invalid;
+    invalid.imperial_denominator = 0;
+    invalid.metric_step_mm = -1.0;
+    units::set_display_precision(invalid);
+    require(units::display_precision() == units::default_display_precision(), "invalid steps fall back");
+}
+
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
@@ -238,6 +312,7 @@ int main(int argc, char** argv) {
         test_dialog_edits();
         test_restore_defaults();
         test_invalid_length_blocks_save();
+        test_display_precision();
     } catch (const std::exception& error) {
         std::cerr << "preferences_dialog_tests failed: " << error.what() << '\n';
         return 1;

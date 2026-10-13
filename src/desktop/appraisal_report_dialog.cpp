@@ -685,7 +685,7 @@ QString appraisal_rounded_ceiling_height_text(double observed_metres, Acquisitio
     const auto rounded=rounded_ansi_ceiling_height_metres(observed_metres,increment);
     if(increment==AcquisitionIncrement::tenth_foot)
         return units::ansi_length_text(rounded)+QStringLiteral(" (nearest tenth foot)");
-    return units::length_text(rounded,false)+QStringLiteral(" (nearest inch)");
+    return units::length_text(rounded,false,units::default_display_precision())+QStringLiteral(" (nearest inch)");
 }
 
 QString appraisal_sloped_ceiling_rows(const AppraisalBoundaryStatus& boundary,

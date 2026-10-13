@@ -318,6 +318,37 @@ void common_angle_snapping_and_cancelled_rotation() {
     require(rotations==5 && render(canvas)==committed,
             "Escape must restore the committed object-relative frame without a callback");
 }
+void preference_angle_snap_step() {
+    constexpr double radians=std::numbers::pi/180;
+    constexpr double radius=.5+(7.5+24)/80;
+    PlanCanvas canvas;setup(canvas,30*radians);
+    require(close_enough(canvas.angleSnapDegrees(),45),"angle snap defaults to 45 degrees");
+    canvas.setAngleSnapDegrees(30);
+    canvas.setAngleSnapDegrees(0);
+    canvas.setAngleSnapDegrees(std::numeric_limits<double>::quiet_NaN());
+    require(close_enough(canvas.angleSnapDegrees(),30),"invalid angle snap steps are ignored");
+    double angle=30*radians, expected=0;
+    int rotations=0;
+    canvas.setEntityTransformRequested([&](QString,double,double delta) {
+        require(close_enough(std::remainder(angle+delta,2*std::numbers::pi),
+                             std::remainder(expected,2*std::numbers::pi)),
+                "rotation must snap to the preference angle step");
+        ++rotations;angle=expected;canvas.setEntities({entity(angle)});return true;
+    });
+    const auto drag=[&](double pointer_degrees,double committed_degrees,
+                        Qt::KeyboardModifiers modifiers=Qt::NoModifier) {
+        expected=committed_degrees*radians;
+        const auto pin=screen(oriented(0,radius,angle));
+        const auto destination=screen(oriented(0,radius,pointer_degrees*radians));
+        mouse(canvas,QEvent::MouseButtonPress,pin,modifiers);
+        mouse(canvas,QEvent::MouseMove,destination,modifiers);
+        mouse(canvas,QEvent::MouseButtonRelease,destination,modifiers);
+    };
+    drag(65,60);      // 45-degree steps would give 45
+    drag(137,150);    // 45-degree steps would give 135
+    drag(97.5,97.5,Qt::ShiftModifier);
+    require(rotations==3,"each preference-snapped rotation commits once");
+}
 void dimensions_are_physical_and_screen_only() {
     PlanCanvas canvas;setup(canvas);
     const auto metric=render(canvas);const auto output=render(canvas,true);
@@ -463,7 +494,7 @@ int main(int argc,char**argv) {
         require(!families.isEmpty(),"bundled canvas font must expose its family");
         app.setFont(QFont(families.front(),10));
         compound_presentation_previews();axis_gestures();rotated_symbol_and_rotation();vector_frame_survives_projection_refresh();
-        common_angle_snapping_and_cancelled_rotation();
+        common_angle_snapping_and_cancelled_rotation();preference_angle_snap_step();
         dimensions_are_physical_and_screen_only();label_and_reference_rotation_preview();exact_presentation_move_admission();
         std::cout<<"Axis canvas controls tests passed\n";return 0;
     } catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 1;}

@@ -27,6 +27,7 @@
 #include <limits>
 #include <array>
 #include <cstdint>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <utility>
@@ -478,6 +479,11 @@ public:
     [[nodiscard]] CanvasSelectionFilter selectionFilter() const noexcept { return m_selection_filter; }
     void setGridEnabled(bool enabled);
     void setSnapEnabled(bool enabled);
+    // Rotation / placement angle snap step (Preferences); Shift stays free.
+    // Non-finite or non-positive values are ignored. Default 45 degrees.
+    void setAngleSnapDegrees(double degrees);
+    [[nodiscard]] double angleSnapDegrees() const noexcept { return m_angle_snap_degrees; }
+    [[nodiscard]] double angleSnapRadians() const noexcept { return m_angle_snap_degrees * std::numbers::pi / 180.0; }
     void setWallSnapEnabled(bool enabled);
     // Tools that project onto a host consume raw coordinates, independently
     // of the user's retained grid/geometry snapping preference.
@@ -697,6 +703,10 @@ public:
         std::function<bool(bool, QStringList, std::vector<CanvasRoofOpeningTarget>)> callback);
     // Ctrl-drag rectangle selection adds to the retained selection.
     void setEntitiesSelected(std::function<void(QStringList, bool)> callback);
+    // Edit > Select all: every selectable presentation in this plan, using the
+    // Ctrl marquee's enclosure rules and the active selection filter as if one
+    // marquee surrounded the whole drawing. Empty while selection is disabled.
+    [[nodiscard]] QStringList selectableIds() const;
     // Commits one model-space move after the interactive preview ends. A hosted
     // opening's delta is its constrained midpoint displacement; the host keeps
     // the exact semantic command captured by the move-preview provider.
@@ -1427,6 +1437,7 @@ private:
     QString m_empty_drawing_hint;
     bool m_grid_enabled{true};
     bool m_snap_enabled{true};
+    double m_angle_snap_degrees{45.0};
     bool m_wall_snap_enabled{false};
     bool m_raw_point_input{false};
     Qt::KeyboardModifiers m_placement_modifiers{};

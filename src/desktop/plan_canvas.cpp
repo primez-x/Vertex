@@ -985,6 +985,11 @@ void PlanCanvas::setSnapEnabled(bool enabled) {
     update();
 }
 
+void PlanCanvas::setAngleSnapDegrees(double degrees) {
+    if (!std::isfinite(degrees) || degrees <= 0.0 || degrees > 360.0) return;
+    m_angle_snap_degrees = degrees;
+}
+
 void PlanCanvas::setWallSnapEnabled(bool enabled) {
     if (m_wall_snap_enabled == enabled) return;
     clearComponentPlacementPreview();
@@ -2891,6 +2896,14 @@ void PlanCanvas::setEntitiesSelected(std::function<void(QStringList, bool)> call
     m_entities_selected = std::move(callback);
 }
 
+QStringList PlanCanvas::selectableIds() const {
+    if (!selectionInteractionEnabled()) return {};
+    // A marquee enclosing every finite published presentation. Enclosure
+    // (left-to-right) rules keep the result identical at any zoom.
+    constexpr double extent = 1.0e15;
+    return rectangleHits(QRectF(-extent, -extent, 2.0 * extent, 2.0 * extent), false);
+}
+
 void PlanCanvas::setEntitiesMoveRequested(std::function<bool(QStringList, Vec2)> callback) {
     m_entities_move_requested = std::move(callback);
 }
@@ -4312,7 +4325,7 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
                         ? m_transform_source_rotation_direction : 1.0;
                     auto absolute = initial - delta * direction;
                     if (std::abs(delta) > 1e-12 && !fine) {
-                        constexpr double step = pi / 4.0;
+                        const double step = angleSnapRadians();
                         absolute = std::round(absolute / step) * step;
                     }
                     m_transform_rotation_preview = std::remainder(
@@ -6915,7 +6928,7 @@ void PlanCanvas::updateRoofOpeningGroupPreview(QPointF point,Qt::KeyboardModifie
     const auto snap=[&](double value) { return step>0.0 ? std::round(value/step)*step : value; };
     if (rotating) {
         edit.rotation_radians=canonical_roof_opening_angle(std::atan2(delta.y,delta.x)-m_roof_opening_group_press_angle);
-        if (!m_roof_opening_group_fine) edit.rotation_radians=std::round(edit.rotation_radians/(pi/4.0))*(pi/4.0);
+        if (!m_roof_opening_group_fine) edit.rotation_radians=std::round(edit.rotation_radians/angleSnapRadians())*angleSnapRadians();
         if (std::hypot(delta.x,delta.y)<=1e-12) edit.rotation_radians=std::numeric_limits<double>::quiet_NaN();
     } else if (m_roof_opening_group_handle.x==0.0 && m_roof_opening_group_handle.y==0.0) {
         edit.translation={snap(model.x-m_roof_opening_group_press_model.x),snap(model.y-m_roof_opening_group_press_model.y)};
@@ -7223,7 +7236,7 @@ void PlanCanvas::updateRoofOpeningPreview(QPointF point, Qt::KeyboardModifiers m
         auto angle=source.frame.rotation_radians+canonical_roof_opening_angle(
             std::atan2(physical.y,physical.x)-m_roof_opening_press_angle);
         if (!modifiers.testFlag(Qt::ShiftModifier)) {
-            constexpr double angle_step=pi/4.0;
+            const double angle_step=angleSnapRadians();
             angle=std::round(angle/angle_step)*angle_step;
         }
         frame.rotation_radians=canonical_roof_opening_angle(angle);

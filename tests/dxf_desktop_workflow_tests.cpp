@@ -774,10 +774,17 @@ void dxfCircleDesktopWorkflow(const QString& directory) {
     require(output.open(QIODevice::ReadOnly), "circle DXF export must open");
     const auto exported_bytes = output.readAll();
     const auto parsed = parse_dxf_ascii(std::string_view(exported_bytes.constData(), exported_bytes.size()));
-    require(parsed.diagnostics.empty() && parsed.drawing.polylines.size() == 1 &&
-            parsed.drawing.polylines.front().closed && parsed.drawing.polylines.front().vertices.size() == 2,
+    // A closed editable boundary exports inside its native VERTEX_BOUNDARY plan
+    // block (or, for non-native consumers, as a top-level polyline).
+    std::vector<const sketch::DxfPolyline*> circle_polylines;
+    for (const auto& polyline : parsed.drawing.polylines) circle_polylines.push_back(&polyline);
+    for (const auto& block : parsed.drawing.blocks)
+        if (block.name.rfind("VERTEX_BOUNDARY_", 0) == 0)
+            for (const auto& polyline : block.polylines) circle_polylines.push_back(&polyline);
+    require(parsed.diagnostics.empty() && circle_polylines.size() == 1 &&
+            circle_polylines.front()->closed && circle_polylines.front()->vertices.size() == 2,
             "circle export must retain closed exact two-bulge geometry");
-    for (const auto& vertex : parsed.drawing.polylines.front().vertices)
+    for (const auto& vertex : circle_polylines.front()->vertices)
         require(std::abs(vertex.bulge - 1.0) < 1e-12, "circle export must preserve each analytic semicircle");
     const auto project = directory + "/editable-circle.sketch";
     require(window.saveProjectAs(project), "editable circle must save");
@@ -834,6 +841,7 @@ int main(int argc, char** argv) {
             {{4.0, 3.0}, {0.0, 3.0}, 0.0},
             {{0.0, 3.0}, {0.0, 0.0}, 0.0}});
         require(!boundary_id.isEmpty(), "source boundary must be created");
+        const auto source_boundary = source.document().snapshot().entities().at(boundary_id.toStdString());
         const auto path = temporary.filePath(QStringLiteral("mapped.dxf"));
         require(source.exportDxf(path), "native project must export DXF");
         require(QFileInfo::exists(path) && QFileInfo(path).size() > 0,
@@ -852,9 +860,28 @@ int main(int argc, char** argv) {
         bool imported_boundary = false;
         bool retained_source = false;
         for (const auto& [id, entity] : snapshot.entities()) {
-            (void)id;
-            if (entity.type == "boundary" && entity.properties.value("classification", "") ==
-                    "dxf_polyline_closed") imported_boundary = true;
+            // Since native DXF boundary reconstruction, a closed Vertex boundary
+            // re-imports from its VERTEX_BOUNDARY plan block as a fresh native
+            // boundary of the same native type and classification, carrying
+            // BOUNDARY_PLAN_V1 provenance (docs/project-format.md).
+            if (entity.type == source_boundary.type && entity.extensions.contains("vertex_dxf_boundary")) {
+                require(entity.properties.value("classification", std::string{}) ==
+                            source_boundary.properties.value("classification", std::string{}),
+                        "native DXF boundary must retain its native classification");
+                const auto& provenance = entity.extensions.at("vertex_dxf_boundary");
+                require(provenance.value("version", 0) == 2 &&
+                            provenance.value("depiction", std::string{}) == "BOUNDARY_PLAN_V1",
+                        "native DXF boundary must record its plan-block provenance");
+                require(id != boundary_id.toStdString(), "native DXF boundary must receive a fresh identity");
+                const auto identified =
+                    inspect_boundary_entity_version(entity).format == BoundaryEntityFormat::identified_v1
+                        ? entity : upgrade_legacy_boundary_entity(entity);
+                const auto geometry = boundary_geometry(decode_identified_boundary_entity(identified));
+                require(validate_boundary(geometry).empty() && std::abs(std::abs(signed_area(geometry)) - 12.0) < 1e-9 &&
+                            std::abs(perimeter(geometry) - 14.0) < 1e-9,
+                        "native DXF boundary must reconstruct the exact source rectangle");
+                imported_boundary = true;
+            }
             if (entity.type == "dxf_source") {
                 retained_source = true;
                 const auto asset_id = entity.properties.value("asset_id", "");

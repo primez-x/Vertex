@@ -6603,6 +6603,10 @@
     },
     {
       "category": "source",
+      "path": "tests/edit_menu_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/embedded_assembly_workflow_desktop_tests.cpp"
     },
     {

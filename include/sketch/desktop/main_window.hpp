@@ -433,6 +433,14 @@ public:
         std::optional<Revision> expected_revision = std::nullopt);
     [[nodiscard]] bool cutSelection();
     [[nodiscard]] bool pasteSelection();
+    // Edit > Select all (Ctrl+A on the canvas): every visible, selectable
+    // object in the active plan view, through the Ctrl-marquee selection path.
+    [[nodiscard]] bool selectAll();
+    // Edit > Duplicate (Ctrl+D): one undoable in-place copy of the selection,
+    // which becomes the selection; corner windows, skylights and mixed groups
+    // begin their existing pending-placement duplicate flows instead. The
+    // system clipboard is not changed.
+    [[nodiscard]] bool duplicateSelection();
     // Deletes the selected semantic graph in one guarded, undoable command.
     // Hosted openings and boundary dimensions are removed with their owner;
     // referenced objects are rejected by the document validator.
@@ -691,6 +699,20 @@ public:
     // Offers local startup recovery only when an unsaved recovery copy is
     // available. Returns true when the selected copy was opened.
     [[nodiscard]] bool offerStartupRecovery();
+    // File > Open recent: up to ten existing projects, most recent first, as
+    // normalized absolute paths (QSettings "recentProjects"). Updated after a
+    // successful open or Save as. Disabled by default under QStandardPaths
+    // test mode; smoke runs disable it explicitly.
+    void setRecentProjectsEnabled(bool enabled);
+    [[nodiscard]] QStringList recentProjects() const;
+    void clearRecentProjects();
+    // Opens a listed project through openProject(). A missing file is removed
+    // from the list with a status-bar explanation and returns false.
+    [[nodiscard]] bool openRecentProject(const QString& path);
+    // Startup: reopens the most recent project only when the "Reopen last
+    // project" preference is on and the window still holds an untouched
+    // untitled document. Returns true when a project was opened.
+    [[nodiscard]] bool reopenLastProject();
     [[nodiscard]] bool exportDraftPdf(const QString& path);
     // Tight vector crop of the current visible committed canvas. References,
     // grids, selection and drawing previews are excluded; sheet output remains

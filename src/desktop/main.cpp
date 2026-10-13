@@ -367,6 +367,9 @@ int main(int argc, char** argv) {
 
     sketch::desktop::MainWindow window;
     if (smoke) {
+        // Smoke fixtures open and save temporary projects; keep them out of
+        // the user's File > Open recent list.
+        window.setRecentProjectsEnabled(false);
         window.setAttribute(Qt::WA_DontShowOnScreen, true);
         window.setAttribute(Qt::WA_ShowWithoutActivating, true);
         window.resize(smoke_size(application.arguments()));
@@ -402,7 +405,11 @@ int main(int argc, char** argv) {
     window.show();
 
     if (!smoke) {
-        QTimer::singleShot(0, &window, [&window] { (void)window.offerStartupRecovery(); });
+        // Unsaved recovery work takes precedence; otherwise the "Reopen last
+        // project" preference (off by default) reopens the most recent file.
+        QTimer::singleShot(0, &window, [&window] {
+            if (!window.offerStartupRecovery()) (void)window.reopenLastProject();
+        });
     }
 
     if (smoke) {

@@ -12,15 +12,22 @@
 //   * Imperial is feet-inches with straight primes and a space, rounded to the
 //     nearest 1/16 inch with reduced fractions: 24' 6", 39' 4 7/16", 6",
 //     7/16", 0". Feet are omitted below one foot. Decimal feet are used only
-//     where decimal mode is chosen (decimal_feet_text): 24.50 ft.
+//     where decimal mode is chosen (Preferences "Decimal feet", or
+//     decimal_feet_text directly): 24.50 ft.
 //   * Metric is always metres (never mm in a readout, so one readout never
 //     mixes units), rounded to the millimetre with trailing zeros trimmed:
 //     2.25 m, 0.95 m, 3 m, 1.235 m.
+//   * The imperial style and rounding steps above are the defaults of the
+//     process-wide DisplayPrecision (set from Preferences): feet-inches or
+//     decimal feet (hundredths), 1/16, 1/8, 1/4, 1/2 or 1 inch, and 1, 5 or
+//     10 mm. ANSI helpers and appraisal text never follow it (their standard
+//     owns the rounding); appraisal code passes default_display_precision().
 //   * Lengths have no thousands separator so that every displayed length is
 //     also valid input for sketch::parse_quantity.
 //
 // The "≈" rule
-//   The active display precision (1/16 inch, 1 mm) already states how far the
+//   The active display precision (1/16 inch, 1 mm by default; 0.01 ft in
+//   decimal feet) already states how far the
 //   shown value may be from the exact one: up to half a step. Rounding within
 //   that precision is therefore not marked. "≈ " is shown only when the text
 //   drops more than the display precision promises, i.e. when
@@ -89,30 +96,81 @@ inline QString trim_decimal_zeros(QString text) {
     return text;
 }
 
+// Display rounding chosen in Preferences. Presentation only: stored values
+// are never rounded and parsing is unaffected.
+struct DisplayPrecision {
+    bool decimal_feet{false};       // imperial as 24.50 ft instead of 24' 6"
+    int imperial_denominator{16};   // feet-inches step: 1/N inch (16, 8, 4, 2, 1)
+    double metric_step_mm{1.0};     // metric step in millimetres (1, 5, 10)
+
+    bool operator==(const DisplayPrecision&) const = default;
+};
+
+[[nodiscard]] inline constexpr DisplayPrecision default_display_precision() noexcept { return {}; }
+
+namespace detail {
+inline DisplayPrecision& display_precision_storage() noexcept {
+    static DisplayPrecision value{};
+    return value;
+}
+} // namespace detail
+
+// The active process-wide precision (GUI thread). Invalid steps fall back to
+// the defaults (1/16 inch, 1 mm).
+[[nodiscard]] inline DisplayPrecision display_precision() noexcept {
+    return detail::display_precision_storage();
+}
+
+inline void set_display_precision(DisplayPrecision precision) noexcept {
+    if (precision.imperial_denominator < 1 || precision.imperial_denominator > 64)
+        precision.imperial_denominator = 16;
+    if (!std::isfinite(precision.metric_step_mm) || precision.metric_step_mm <= 0.0)
+        precision.metric_step_mm = 1.0;
+    detail::display_precision_storage() = precision;
+}
+
 namespace detail {
 
-inline QString imperial_length(double metres, bool allow_approximate) {
+inline QString decimal_feet_length(double metres, bool allow_approximate) {
     if (!std::isfinite(metres)) return QStringLiteral("—");
+    const auto feet = metres / metres_per_foot;
+    const auto hundredths = std::round(std::abs(feet) * 100.0);
+    if (!std::isfinite(hundredths) || hundredths > 9e15) {
+        return allow_approximate
+            ? approximate_prefix + QStringLiteral("%1 ft").arg(feet, 0, 'g', 6)
+            : QStringLiteral("%1 ft").arg(feet, 0, 'g', 17);
+    }
+    const auto prefix = allow_approximate && hundredths == 0.0 && feet != 0.0
+        ? approximate_prefix : QString{};
+    return prefix + fixed_number(feet, 2) + QStringLiteral(" ft");
+}
+
+inline QString imperial_length(double metres, bool allow_approximate,
+                               const DisplayPrecision& precision = display_precision()) {
+    if (precision.decimal_feet) return decimal_feet_length(metres, allow_approximate);
+    if (!std::isfinite(metres)) return QStringLiteral("—");
+    const std::int64_t denominator = precision.imperial_denominator;
     const auto inches = std::abs(metres) / metres_per_inch;
-    const auto sixteenths = std::round(inches * 16.0);
-    if (!std::isfinite(sixteenths)) return QStringLiteral("—");
+    const auto steps = std::round(inches * static_cast<double>(denominator));
+    if (!std::isfinite(steps)) return QStringLiteral("—");
     const auto negative = metres < 0.0;
-    if (sixteenths > 9e15) {
+    if (steps > 9e15) {
         // Beyond exact step arithmetic: decimal feet, six significant digits.
         const auto feet = metres / metres_per_foot;
         return allow_approximate
             ? approximate_prefix + QStringLiteral("%1 ft").arg(feet, 0, 'g', 6)
             : QStringLiteral("%1 ft").arg(feet, 0, 'g', 17);
     }
-    const auto ticks = static_cast<std::int64_t>(sixteenths);
-    const auto feet = ticks / 192;
-    const auto whole = (ticks % 192) / 16;
-    const auto numerator = ticks % 16;
+    const auto ticks = static_cast<std::int64_t>(steps);
+    const auto per_foot = 12 * denominator;
+    const auto feet = ticks / per_foot;
+    const auto whole = (ticks % per_foot) / denominator;
+    const auto numerator = ticks % denominator;
     QString inch_text = whole || !numerator ? QString::number(whole) : QString{};
     if (numerator) {
-        const auto divisor = std::gcd(numerator, std::int64_t{16});
+        const auto divisor = std::gcd(numerator, denominator);
         if (!inch_text.isEmpty()) inch_text += QLatin1Char(' ');
-        inch_text += QStringLiteral("%1/%2").arg(numerator / divisor).arg(16 / divisor);
+        inch_text += QStringLiteral("%1/%2").arg(numerator / divisor).arg(denominator / divisor);
     }
     const auto sign = negative && ticks > 0 ? QStringLiteral("-") : QString{};
     const auto prefix = allow_approximate && ticks == 0 && inches > 0.0
@@ -121,9 +179,11 @@ inline QString imperial_length(double metres, bool allow_approximate) {
                     : QStringLiteral("%1%2%3\"").arg(prefix, sign, inch_text);
 }
 
-inline QString metric_length(double metres, bool allow_approximate) {
+inline QString metric_length(double metres, bool allow_approximate,
+                             const DisplayPrecision& precision = display_precision()) {
     if (!std::isfinite(metres)) return QStringLiteral("—");
-    const auto millimetres = std::round(std::abs(metres) * 1000.0);
+    const auto step_mm = precision.metric_step_mm;
+    const auto millimetres = std::round(std::round(std::abs(metres) * 1000.0 / step_mm) * step_mm);
     if (!std::isfinite(millimetres) || millimetres > 9e15) {
         return allow_approximate
             ? approximate_prefix + QStringLiteral("%1 m").arg(metres, 0, 'g', 6)
@@ -144,14 +204,24 @@ inline QString metric_length(double metres, bool allow_approximate) {
 
 } // namespace detail
 
-// Displayed length (canvas, dimensions, Details, readouts, reports).
+// Displayed length (canvas, dimensions, Details, readouts, reports) at the
+// active display precision, or at an explicit one (appraisal text passes
+// default_display_precision() so Preferences never change its rounding).
+inline QString length_text(double metres, bool metric, const DisplayPrecision& precision) {
+    return metric ? detail::metric_length(metres, true, precision)
+                  : detail::imperial_length(metres, true, precision);
+}
 inline QString length_text(double metres, bool metric) {
-    return metric ? detail::metric_length(metres, true) : detail::imperial_length(metres, true);
+    return length_text(metres, metric, display_precision());
 }
 
 // Same text without "≈"; always accepted by sketch::parse_quantity.
+inline QString length_input_text(double metres, bool metric, const DisplayPrecision& precision) {
+    return metric ? detail::metric_length(metres, false, precision)
+                  : detail::imperial_length(metres, false, precision);
+}
 inline QString length_input_text(double metres, bool metric) {
-    return metric ? detail::metric_length(metres, false) : detail::imperial_length(metres, false);
+    return length_input_text(metres, metric, display_precision());
 }
 
 // Decimal-foot mode: 24.50 ft.
