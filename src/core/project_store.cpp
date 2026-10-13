@@ -335,6 +335,35 @@ bool has_identified_assembly_entity_profiles(const Entity& entity) {
     return false;
 }
 
+std::uint32_t recovery_reader_floor(const RecoveryLedger* recovery) {
+    if (!recovery) return 1;
+    const auto requires_defaults=[](const nlohmann::json& input) {
+        if (!input.is_object() || !input.contains("version") || input.at("version")!=3) return false;
+        // Recognition errors must not prevent the ledger's aggregate version/kind
+        // scan from retaining the entire archive opaquely.
+        try {
+            const auto decoded=decode_boundary_active_recovery(input);
+            return decoded.supported() && decoded.active->area_defaults.has_value();
+        } catch (const std::invalid_argument&) { return false; }
+        catch (const nlohmann::json::exception&) { return false; }
+    };
+    for (const auto& record : *recovery) {
+        if (record.record_kind=="boundary_active" && requires_defaults(record.envelope)) return 261;
+        if (record.record_kind!="workspace_history" || !record.envelope.is_object() ||
+            record.envelope.value("version",nlohmann::json())!=1) continue;
+        for (const auto* field : {"events","retired"}) {
+            const auto rows=record.envelope.find(field);
+            if (rows==record.envelope.end() || !rows->is_array()) continue;
+            for (const auto& row : *rows) {
+                if (!row.is_object() || !row.contains("input") || !row.at("input").is_object()) continue;
+                const auto input=row.at("input").find("value");
+                if (input!=row.at("input").end() && requires_defaults(*input)) return 261;
+            }
+        }
+    }
+    return 1;
+}
+
 std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                                                bool reading_legacy_lineage = false) {
     std::uint32_t required = 1;
@@ -549,6 +578,18 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
             const auto literal_true=[](const nlohmann::json& child,const char* field) {
                 return child.contains(field) && child.at(field).is_boolean() && child.at(field)==true;
             };
+            if (floor<260 && typed_shape(value,46,{"version","expected_revision","source_snapshot_digest",
+                "source_authoring_digest","source_entities_digest","source_saved_revision","phase_selections",
+                "intent","coordinated_replacements"})) {
+                try {
+                    // Only the canonical closed enclosing authority raises this
+                    // floor; a loose nested version number is not sufficient.
+                    (void)decode_phase_constraint_authoring_intent(value);
+                    floor=260U;
+                } catch (const std::invalid_argument&) {
+                } catch (const nlohmann::json::exception&) {
+                }
+            }
             if(floor<259) {
                 // Source-preserving mapped slab geometry: leaf5, replacement11,
                 // dimension wrapper12 and outer phase44/45. Mapped frames and
@@ -1833,14 +1874,14 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<259 && (revision.boundary_constraint_changes || revision.boundary_geometry_edit)) {
+        if (required<260 && (revision.boundary_constraint_changes || revision.boundary_geometry_edit)) {
             const auto command=revision.boundary_constraint_changes ?
                 encoded_command(*revision.boundary_constraint_changes) : std::nullopt;
             const auto edit=revision.boundary_geometry_edit ?
                 encoded_edit(*revision.boundary_geometry_edit) : std::nullopt;
             if (command) required=std::max(required,retained_component_reader_floor(*command));
-            if (required<259 && edit) required=std::max(required,typed_edit_reader_floor(*edit));
-            if (required<259 && command) required=std::max(required,typed_edit_reader_floor(*command));
+            if (required<260 && edit) required=std::max(required,typed_edit_reader_floor(*edit));
+            if (required<260 && command) required=std::max(required,typed_edit_reader_floor(*command));
             if (required<122 && edit) required=std::max(required,quantity_reader_floor(*edit));
             if (required<122 && command) required=std::max(required,quantity_reader_floor(*command));
         }
@@ -2786,6 +2827,11 @@ std::uint32_t ProjectStore::required_format_version(const DocumentSnapshot& snap
 
 std::uint32_t ProjectStore::required_semantic_format_version(const DocumentSnapshot& snapshot) {
     return required_format_version_internal(snapshot);
+}
+
+std::uint32_t ProjectStore::required_semantic_format_version(const ProjectArchiveSnapshot& archive) {
+    (void)preflight_recovery_ledger(archive.document(),archive.recovery());
+    return std::max(required_format_version_internal(archive.document()),recovery_reader_floor(&archive.recovery()));
 }
 
 class ProjectStoreAccess final {
@@ -3997,7 +4043,7 @@ std::string write_database(const std::filesystem::path& path, const DocumentSnap
     execute(database.get(), "PRAGMA synchronous=FULL");
     execute(database.get(), "PRAGMA locking_mode=EXCLUSIVE");
     execute(database.get(), "PRAGMA application_id=1347638340");
-    const auto format = std::max({recovery ? 4U : 1U,
+    const auto format = std::max({recovery ? 4U : 1U, recovery_reader_floor(recovery),
         required_format_version_internal(snapshot), requires_shared_asset_payload_layout(payloads) ? 161U : 1U});
     const auto requested_digest = logical_digest(snapshot, format, recovery);
     const auto user_version = "PRAGMA user_version=" + std::to_string(format);
@@ -4430,6 +4476,8 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 257 &&
          sqlite3_column_int(user_version.get(), 0) != 258 &&
          sqlite3_column_int(user_version.get(), 0) != 259 &&
+         sqlite3_column_int(user_version.get(), 0) != 260 &&
+         sqlite3_column_int(user_version.get(), 0) != 261 &&
          sqlite3_column_int(user_version.get(), 0) != 253 &&
          sqlite3_column_int(user_version.get(), 0) != 242 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
@@ -5157,6 +5205,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=260)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 260 for coordinated directional or mapped slab contributions");
         if (required_format>=259)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 259 for source-preserving mapped slab geometry");
         if (required_format>=258)
@@ -5607,6 +5657,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
         catch (const std::invalid_argument& error) {
             storage_error(StorageErrorCode::resource_limit, error.what());
         }
+        if (recovery_reader_floor(recovery)>format_number)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 261 for atomic area creation defaults");
     }
     const auto decoded_digest = logical_digest(snapshot, format_number, recovery);
     if (decoded_digest != expected_digest) {

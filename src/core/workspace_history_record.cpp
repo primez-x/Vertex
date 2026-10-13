@@ -338,7 +338,9 @@ WorkspaceHistoryDecodeResult decode_workspace_history_record(const DocumentSnaps
             if (!input.is_object() || !input.contains("value")) invalid("missing input value");
             const auto& value = input.at("value");
             if (value.is_null()) continue;
-            if (future(value, 2)) return opaque();
+            if (future(value, 3)) return opaque();
+            if (value.at("version")==3 && value.at("area_defaults").at("version").is_number_integer() &&
+                value.at("area_defaults").at("version")>1) return opaque();
             if (!value.contains("checkpoint")) invalid("missing checkpoint");
             if (future(value.at("checkpoint"), boundary_authoring_recovery_version_v3)) return opaque();
         }

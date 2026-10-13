@@ -82,7 +82,7 @@ void run(BoundaryAuthoringMode mode, bool subtraction = false, std::uint32_t dia
         rejects([&] { (void)decode_workspace_history_record(s.document(), forged, s.active_boundary()); });
         auto future_target = wire;
         for (auto& e : future_target["events"]) if (!e["input"].is_null() && !e["input"]["value"].is_null())
-            e["input"]["value"]["version"] = 3;
+            e["input"]["value"]["version"] = 4;
         require(decode_workspace_history_record(s.document(), future_target, s.active_boundary()).opaque(),
             "future active owner must keep the containing history opaque");
     }

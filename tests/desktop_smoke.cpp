@@ -1,4 +1,5 @@
 #include "sketch/desktop/main_window.hpp"
+#include "support/fresh_open_history.hpp"
 
 #include "sketch/document.hpp"
 #include "sketch/document_digest.hpp"
@@ -2176,6 +2177,7 @@ void test_pasted_annotation_visible_selection() {
     require(source.selectEntity(wall) && source.selectEntity(first, true) && source.selectEntity(second, true) &&
             source.copySelection(), "copy ordered geometry plus two children of one annotation owner");
     desktop::MainWindow mixed;
+    const auto mixed_before = mixed.document().snapshot();
     require(mixed.pasteSelection(), "paste mixed geometry and annotation children");
     const auto mixed_snapshot = mixed.document().snapshot();
     const auto mixed_owner = annotation_owner_for_selection(mixed_snapshot, mixed.selectedEntityId());
@@ -2193,8 +2195,8 @@ void test_pasted_annotation_visible_selection() {
     QTemporaryDir directory;
     require(mixed.saveProjectAs(directory.filePath("visible-paste.bldproj")) &&
             mixed.openProject(directory.filePath("visible-paste.bldproj")) &&
-            mixed.document().snapshot().entities() == mixed_snapshot.entities() && mixed.undoCommand() &&
-            mixed.redoCommand() && mixed.document().snapshot().entities() == mixed_snapshot.entities(),
+            mixed.document().snapshot().entities() == mixed_snapshot.entities() &&
+            testing::saved_undo_redo(mixed, mixed_before, mixed_snapshot),
             "visible selection must not change pasted content, save/reopen or its atomic history");
 }
 
@@ -3663,9 +3665,8 @@ void test_boundary_vertex_insertion_workflow() {
     require(directory.isValid() && window.saveProjectAs(path) && window.openProject(path) &&
         document_authoring_source_digest_v2(window.document().snapshot())==document_authoring_source_digest_v2(retained),
         "insertion geometry, all links and complete typed history must survive native save and reopen");
-    require(window.undoCommand() && window.document().snapshot().entities()==before.entities() &&
-        window.redoCommand() && window.document().snapshot().entities()==after_insertion.entities(),
-        "reopened insertion must undo and redo both dimension placement policies exactly");
+    require(testing::saved_undo_redo(window, before, after_insertion),
+        "saved insertion history must replay both dimension placement policies independently of the new session");
     const auto rejected_source = document_snapshot_digest(window.document().snapshot());
     require(window.selectEntity(inserted_id) &&
                 !window.insertSelectedBoundaryVertex(segment_id, QStringLiteral("1.0")) &&
@@ -9062,6 +9063,7 @@ void test_inspector_untouched_dimension_precision() {
         require(window.selectEntity(wall), "precision fixture must refresh after rejected input");
     };
     edit(height, "height_m", QStringLiteral("2.8004 m"), 2.8004);
+    const auto before_thickness = window.document().snapshot();
     edit(thickness, "thickness_m", QStringLiteral("0.07004 m"), 0.07004);
     QTemporaryDir directory;
     const auto path = directory.filePath(QStringLiteral("inspector-precision.bldproj"));
@@ -9071,10 +9073,18 @@ void test_inspector_untouched_dimension_precision() {
                 document_authoring_source_digest_v2(window.document().snapshot()) ==
                     document_authoring_source_digest_v2(stored),
             "inspector edits and complete authoring history must save and reopen editable");
-    require(window.undoCommand() &&
-                window.document().snapshot().entities().at(wall.toStdString()).properties.at("thickness_m") == 0.06 &&
-                window.redoCommand() && window.document().snapshot().entities() == stored.entities(),
-            "reopened inspector dimension history must retain atomic undo and redo");
+    require(testing::saved_undo_redo(window, before_thickness, stored),
+            "saved inspector dimension history must replay exactly while ordinary Open starts a fresh session");
+    require(window.selectEntity(wall), "reselect the reopened wall for a new inspector edit");
+    height = window.findChild<QLineEdit*>("inspectorHeight");
+    require(height && height->isEnabled(), "reopened inspector height must remain editable");
+    edit(height, "height_m", QStringLiteral("3.1004 m"), 3.1004);
+    const auto session_edit = window.document().snapshot();
+    require(window.undoCommand() && window.document().snapshot().entities() == stored.entities() &&
+                window.document().snapshot().assets() == stored.assets() && !window.undoCommand() &&
+                window.redoCommand() && window.document().snapshot().entities() == session_edit.entities() &&
+                window.document().snapshot().assets() == session_edit.assets() && !window.redoCommand(),
+            "new inspector edits must undo and redo exactly within the reopened session boundary");
 }
 
 void test_cross_view_source_editing() {

@@ -1,5 +1,14 @@
 # Portable project extraction
 
+Exchange version259 requires native reader261 for deterministic area-default
+intents in current and archived boundary recovery inputs. The exact ledger,
+including retained and undone inputs, contributes to the extraction reader floor.
+
+Exchange version258 requires native reader260 for closed phase outer46/direct
+coordinated inner10 directional or mapped slab contributions. The extraction
+retains the exact source-bound command and history, including undone commands;
+historical coordination and standalone slab wire meanings are unchanged.
+
 Exchange version257 requires native reader259 for source-preserving mapped
 slab `planar_affine`, leaf5/archive5, slab replacement11/dimension wrapper12
 and outer phase44/45. Authored rings and the map are carried unchanged; older

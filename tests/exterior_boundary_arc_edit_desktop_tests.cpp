@@ -1,4 +1,5 @@
 #include "sketch/desktop/main_window.hpp"
+#include "support/fresh_open_history.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/appraisal_document.hpp"
 #include "sketch/wall_measurement.hpp"
@@ -154,8 +155,8 @@ void exterior_arc_edit(bool metric,bool curved,const char* operation,const char*
     if(!evidence.isEmpty())require(QFile::copy(file,QDir(evidence).filePath(name+".bldproj")),"Retain actual native40 fixture for transfer-package verification");
     MainWindow reopened({},nullptr,directory.filePath("other-library.json"));
     require(reopened.openProject(file) && reopened.document().is_editable() && reopened.document().snapshot().entities()==after.entities(),"Source curve reconstruction retains editable ownership-safe reopen");
-    require(reopened.undoCommand() && reopened.document().snapshot().entities()==before.entities() &&
-        reopened.redoCommand() && reopened.document().snapshot().entities()==after.entities(),"Restored typed history exactly replays");
+    require(sketch::testing::saved_undo_redo(reopened, before, after),
+        "Fresh session refuses inherited Undo/Redo while saved typed history exactly replays independently");
     // Whole-area reflection is a grouped transform in the real editor. It
     // transforms the physical sources and measured owner together; endpoint
     // authoring intentionally retains corner adjacency and is not that API.
@@ -191,9 +192,8 @@ void exterior_arc_edit(bool metric,bool curved,const char* operation,const char*
     MainWindow final_window({},nullptr,directory.filePath("final-library.json"));
     require(final_window.openProject(reflected_file) && final_window.document().is_editable() &&
         final_window.document().snapshot().entities()==reflected.entities() &&
-        final_window.undoCommand() && final_window.document().snapshot().entities()==after.entities() &&
-        final_window.redoCommand() && final_window.document().snapshot().entities()==reflected.entities(),
-        "Actual grouped reflection reopens editable and replays exact source history");
+        sketch::testing::saved_undo_redo(final_window, after, reflected),
+        "Actual grouped reflection reopens editable with fresh-session refusal and independent exact saved history replay");
 }
 }
 int main(int argc,char** argv) {

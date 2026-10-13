@@ -200,6 +200,7 @@ public:
     [[nodiscard]] DocumentSnapshot snapshot() const;
     [[nodiscard]] ProjectWorkspaceSnapshot capture() const;
     [[nodiscard]] WorkspaceDocumentHistory document_history() const;
+    [[nodiscard]] const WorkspaceNavigationState& navigation() const noexcept;
     [[nodiscard]] std::optional<BoundaryActiveRecovery> active_boundary() const;
     // A detached view only. Retired input is never an active finish source.
     [[nodiscard]] std::optional<BoundaryActiveRecovery> retired_boundary(std::string_view identity_namespace) const;

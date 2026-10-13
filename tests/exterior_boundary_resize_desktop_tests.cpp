@@ -1,4 +1,5 @@
 #include "sketch/desktop/main_window.hpp"
+#include "support/fresh_open_history.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/appraisal_document.hpp"
 #include "sketch/wall_measurement.hpp"
@@ -129,8 +130,8 @@ void exterior_resize(bool metric,bool curved,bool end_anchor,bool chain) {
     if(!evidence.isEmpty())require(QFile::copy(file,QDir(evidence).filePath(name+".bldproj")),"Retain actual native39 fixture for transfer-package verification");
     MainWindow reopened({},nullptr,directory.filePath("other-library.json"));
     require(reopened.openProject(file) && reopened.document().is_editable() && reopened.document().snapshot().entities()==after.entities(),"Source resize retains editable ownership-safe reopen");
-    require(reopened.undoCommand() && reopened.document().snapshot().entities()==before.entities() &&
-        reopened.redoCommand() && reopened.document().snapshot().entities()==after.entities(),"Restored typed history exactly replays");
+    require(sketch::testing::saved_undo_redo(reopened, before, after),
+        "Fresh session refuses inherited Undo/Redo while saved typed history exactly replays independently");
 }
 }
 int main(int argc,char** argv) {

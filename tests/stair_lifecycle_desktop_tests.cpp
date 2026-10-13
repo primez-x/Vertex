@@ -1,5 +1,6 @@
 #include "support/detached_document_snapshot.hpp"
 #include "sketch/desktop/main_window.hpp"
+#include "support/fresh_open_history.hpp"
 #include "sketch/desktop/building_object_dialog.hpp"
 #include "sketch/building_plan_projection.hpp"
 #include "sketch/document_digest.hpp"
@@ -381,8 +382,8 @@ void hosted_upgrade_geometry_failure_and_roundtrip() {
     require(restored.entities() == saved.entities() && restored.assets() == saved.assets() && restored.history().size() == saved.history().size(),
             "save/reopen must retain exact stair, attachment, assets and command history");
     require(ProjectStore::required_format_version(restored) == 52, "saved lifecycle must retain native format 52");
-    require(reopened.undoCommand() && reopened.document().snapshot().entities() == moved.entities() && reopened.redoCommand() &&
-            reopened.document().snapshot().entities() == saved.entities(), "reopened UndoRedo must restore exact level and host maps");
+    require(sketch::testing::saved_undo_redo(reopened, moved, saved),
+            "fresh session refuses inherited Undo/Redo while saved history independently restores exact level and host maps");
     (void)actual_plan(reopened, rail_id.toStdString());
     const auto reopened_bounds = bounds(geometry(reopened).solids.at(rail_id.toStdString()).shape);
     for (std::size_t i = 0; i < 6; ++i) require_near(reopened_bounds[i], raised_bounds[i]);
@@ -607,8 +608,8 @@ void landing_guard_full_controller_lifecycle() {
     require(restored.entities() == saved.entities() && restored.assets() == saved.assets() && restored.history().size() == saved.history().size() &&
                 ProjectStore::required_format_version(restored) == 54,
             "save/reopen must preserve exact v3 landing graph and retained history floor");
-    require(reopened.undoCommand() && reopened.document().snapshot().entities() == source.entities() && reopened.redoCommand() &&
-                reopened.document().snapshot().entities() == saved.entities(), "reopened landing clipboard command must undo and redo exactly");
+    require(sketch::testing::saved_undo_redo(reopened, source, saved),
+                "fresh session refuses inherited Undo/Redo while saved landing clipboard command replays exactly independently");
     (void)geometry(reopened);
     for (const auto& id : rails) (void)actual_plan(reopened, id);
 }
@@ -682,9 +683,8 @@ void authored_stair_host_context_lifecycle() {
         require(restored.entities() == saved.entities() && restored.assets() == saved.assets() &&
                     restored.history().size() == saved.history().size() && ProjectStore::required_format_version(restored) == 54,
                 "save/reopen must retain authored stair hierarchy, both rails, assets and history");
-        require(reopened.undoCommand() && reopened.document().snapshot().entities() == before_last.entities() &&
-                    reopened.redoCommand() && reopened.document().snapshot().entities() == saved.entities(),
-                "reopened authored landing rail command must undo and redo exact source maps");
+        require(sketch::testing::saved_undo_redo(reopened, before_last, saved),
+                "fresh session refuses inherited Undo/Redo while saved authored landing rail command independently replays exact source maps");
     }
 }
 void actual_modal_source_guards() {

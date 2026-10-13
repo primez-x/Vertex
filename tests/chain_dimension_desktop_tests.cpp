@@ -1,5 +1,6 @@
 #include "support/detached_document_snapshot.hpp"
 #include "sketch/desktop/main_window.hpp"
+#include "support/fresh_open_history.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/document_digest.hpp"
@@ -151,7 +152,8 @@ void api_lifecycle() {
     MainWindow reopened; prepare(reopened); require(reopened.openProject(path)&&reopened.document().is_editable(),"chain archive reopens editable");
     const auto restored=reopened.document().snapshot();
     require(restored.entities()==saved.entities()&&restored.assets()==saved.assets()&&restored.history().size()==saved.history().size(),"reopen retains full chain maps, assets and command count");
-    require(reopened.undoCommand()&&reopened.document().snapshot().entities()==resized.entities()&&reopened.redoCommand()&&reopened.document().snapshot().entities()==saved.entities(),"reopened chain UndoRedo restores exact maps");
+    require(sketch::testing::saved_undo_redo(reopened, resized, saved),
+        "fresh session refuses inherited Undo/Redo while saved chain history independently restores exact maps");
 }
 void select_chain(QDialog& dialog,const QString& owner,const QString& first,const QString& last) {
     choose(control<QComboBox>(dialog,"dimensionSourceBoundary"),owner);

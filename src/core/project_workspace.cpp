@@ -32,6 +32,7 @@ bool same_semantics(const BoundaryActiveRecovery& left, const BoundaryActiveReco
     // Opaque extension representation must survive archival input sharing.
     return left.source == right.source && left.extensions.dump() == right.extensions.dump() &&
         left.auto_subtract_target_id == right.auto_subtract_target_id &&
+        left.area_defaults == right.area_defaults &&
         a.version == b.version && a.replay_version == b.replay_version && a.mode == b.mode &&
         a.identity_namespace == b.identity_namespace && a.options == b.options &&
         a.actions == b.actions && a.history_position == b.history_position &&
@@ -203,6 +204,7 @@ ProjectWorkspaceSnapshot ProjectWorkspace::capture() const {
 }
 WorkspaceDocumentHistory ProjectWorkspace::document_history() const { return state_->history; }
 std::optional<BoundaryActiveRecovery> ProjectWorkspace::active_boundary() const { return state_->active; }
+const WorkspaceNavigationState& ProjectWorkspace::navigation() const noexcept { return state_->navigation; }
 std::optional<BoundaryActiveRecovery> ProjectWorkspace::retired_boundary(std::string_view identity_namespace) const {
     const auto found = state_->retired.find(identity_namespace);
     if (found == state_->retired.end()) return std::nullopt;
@@ -515,8 +517,9 @@ PreparedWorkspaceEdit ProjectWorkspace::prepare_finish_boundary_impl(const EditB
         state_->active->checkpoint, resource_policy_);
     if (session.phase() != BoundaryAuthoringPhase::completed || session.accepted_chains().empty())
         throw std::invalid_argument("finish requires a completed boundary checkpoint");
-    if (state_->active->auto_subtract_target_id && state_->active->extensions.contains("desktop_operation"))
-        throw std::invalid_argument("redraw and Auto-Subtract cannot be combined");
+    if ((state_->active->auto_subtract_target_id || state_->active->area_defaults) &&
+        state_->active->extensions.contains("desktop_operation"))
+        throw std::invalid_argument("redraw cannot contain creation defaults or Auto-Subtract");
     if (replacement) {
         validate_workspace_boundary_redefinition_input(source, *state_->active, *replacement, resource_policy_);
     } else if (state_->active->extensions.contains("desktop_operation")) {
@@ -525,7 +528,8 @@ PreparedWorkspaceEdit ProjectWorkspace::prepare_finish_boundary_impl(const EditB
     auto state = prepare_state();
     auto& candidate = *state->candidate;
     const BoundaryCommitIntent intent{session.options(), session.accepted_chains(),
-        candidate.active->source.context, "Finish boundary", candidate.active->auto_subtract_target_id};
+        candidate.active->source.context, "Finish boundary", candidate.active->auto_subtract_target_id,
+        candidate.active->area_defaults};
     const auto preview = replacement ? std::optional<BoundaryCommitPreview>{} :
         std::optional{preview_boundary_commit(candidate.document->snapshot(), intent)};
     if (preview && !preview->accepted())

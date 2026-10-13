@@ -1,4 +1,33 @@
-# Vertex project formats v1 through v259
+# Vertex project formats v1 through v261
+
+Reader261/native extraction259 retains active-recovery v3 area-default intents
+in both current drafts and archived lifecycle inputs. Their semantic reader floor
+survives Finish, Undo and retirement. Native saves mark both metadata and SQLite
+`user_version`; load refuses a downgraded marker. Recovery and workspace-history
+version scans recognize the new input dialect before replay. Unknown positive
+algorithm versions preserve the complete enclosing ledger opaquely.
+
+Reader260/native extraction258 adds phase outer46 with a direct coordinated
+inner10 body. It composes independently replayed directional or mapped slab
+geometry with another changed physical family in one source-bound command.
+The body requires `complete_hosted_component_dimensions:true`; exact complete
+family declarations match their canonical children. It cannot be nested in
+historical coordination wrappers. Historical outer and inner versions retain
+their existing authority and continue to refuse this slab geometry.
+
+Catalog contributions are authenticated against each independent source-derived
+family result before disjoint composition. Hosted dimensions are carried once
+from the original source to the final model; unchanged unit associations and
+fresh copies share the existing aggregate budget. Retained and undone outer46
+commands keep reader260 even when the live mapped geometry has disappeared.
+
+Boundary active-recovery v3 separately archives the version-1 deterministic area
+creation-default intent, including a nullable staged category. Finish reconstructs
+geometry, classification defaults and residential declarations as one exact
+command. Legacy v1/v2 records retain their original semantics; a future default
+algorithm leaves the entire recovery envelope opaque. Ordinary project open
+starts a runtime-only Undo/Redo boundary without removing saved history. Explicit
+startup Recover resumes that saved navigation.
 
 Reader259/native extraction257 retains source-preserving mapped slab geometry.
 A slab may carry `planar_affine`, a closed version-1 object with exactly

@@ -8,6 +8,7 @@
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "support/noninteractive_errors.hpp"
+#include "support/fresh_open_history.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include <QAction>
 #include <QAbstractItemModel>
@@ -347,8 +348,7 @@ void saved_dimension_canvas_drag(int kind,bool mixed=false) {
     const auto file=directory.filePath("callout-drag.bldproj");require(window.saveProjectAs(file) && window.createNewProject(),"Save moved callout and release writer lease");
     MainWindow reopened;prepare(reopened);
     require(reopened.openProject(file) && reopened.document().is_editable() && reopened.document().snapshot().entities()==after.entities() &&
-        reopened.undoCommand() && reopened.document().snapshot().entities()==before.entities() &&
-        reopened.redoCommand() && reopened.document().snapshot().entities()==after.entities(),"Callout drag reopens editable with exact source and placement history");
+        sketch::testing::saved_undo_redo(reopened,before,after),"Callout drag reopens editable with exact saved source and placement history independent of the fresh UI session");
 }
 
 void mixed_complete_partial_canvas_drag(bool reverse,bool select_whole_callout=true) {
@@ -436,8 +436,8 @@ void mixed_complete_partial_canvas_drag(bool reverse,bool select_whole_callout=t
     if (!window.saveProjectAs(path)) throw std::runtime_error("Save mixed proof: "+window.lastError().toStdString());
     if (!window.createNewProject()) throw std::runtime_error("Release mixed proof writer lease: "+window.lastError().toStdString());
     MainWindow reopened;prepare(reopened);require(reopened.openProject(path) && reopened.document().is_editable() &&
-        reopened.document().snapshot().entities()==after.entities() && reopened.undoCommand() && reopened.document().snapshot().entities()==before.entities() &&
-        reopened.redoCommand() && reopened.document().snapshot().entities()==after.entities(),"Mixed proof reopens editable with exact one-step history");
+        reopened.document().snapshot().entities()==after.entities() && sketch::testing::saved_undo_redo(reopened,before,after),
+        "Mixed proof reopens editable with exact saved one-step history independent of the fresh UI session");
 }
 
 void actual_creator_terminal_arc_and_revisits() {
@@ -975,16 +975,8 @@ void transform_clipboard_output_delete_and_reopen() {
     exact_history(window,before_delete,deleted);const auto file=temporary.filePath("deleted-measured-dimensions.bldproj");require(window.saveProjectAs(file),"native deleted-state project must save");
     require(window.createNewProject(),"release writer ownership before testing editable reopen");
     MainWindow reopened;prepare(reopened);require(reopened.openProject(file)&&reopened.document().is_editable()&&reopened.document().snapshot().entities()==deleted.entities(),"native reopen retains exact deletion and editable dimension history");
-    if(!reopened.undoCommand())throw std::runtime_error("Undo after measured-dimension reopen: "+reopened.lastError().toStdString());
-    if(reopened.document().snapshot().entities()!=after.entities()) {
-        std::string difference;
-        for(const auto& [id,entity]:after.entities()) {
-            const auto current=reopened.document().snapshot();const auto found=current.entities().find(id);
-            if(found==current.entities().end())difference+=" missing:"+id;
-            else if(found->second!=entity)difference+=" changed:"+id;
-        }
-        throw std::runtime_error("Undo after reopen differs:"+difference);
-    }
+    require(sketch::testing::saved_undo_redo(reopened,before_delete,deleted),
+        "Saved deletion history independently restores exact measured sources, dimensions and assets and removes them again");
 }
 }
 int main(int argc,char** argv){sketch::testing::noninteractive_errors();QStandardPaths::setTestModeEnabled(true);sketch::desktop::configure_application_platform();QApplication app(argc,argv);

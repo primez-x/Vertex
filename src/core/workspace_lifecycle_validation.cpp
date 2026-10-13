@@ -39,8 +39,8 @@ void validate_workspace_finish_deltas(const DocumentSnapshot& snapshot,
         const auto& before = snapshot.history()[static_cast<std::size_t>(event.before_revision)];
         const auto& after = snapshot.history()[static_cast<std::size_t>(event.after_revision)];
         const bool redraw = input.extensions.contains("desktop_operation");
-        if (redraw && input.auto_subtract_target_id)
-            throw std::invalid_argument("Redraw finish cannot contain an Auto-Subtract target");
+        if (redraw && (input.auto_subtract_target_id || input.area_defaults))
+            throw std::invalid_argument("Redraw finish cannot contain creation defaults or an Auto-Subtract target");
         if (after.source_revision || after.name ||
             after.action != (redraw ? "Edit boundary geometry" : "Finish boundary") || before.assets != after.assets)
             throw std::invalid_argument("Finish delta changes unrelated document state");
@@ -59,7 +59,8 @@ void validate_workspace_finish_deltas(const DocumentSnapshot& snapshot,
             continue;
         }
         validate_historical_boundary_commit(prefix.snapshot(),
-            {session.options(), session.accepted_chains(), input.source.context, "Finish boundary", input.auto_subtract_target_id},
+            {session.options(), session.accepted_chains(), input.source.context, "Finish boundary", input.auto_subtract_target_id,
+             input.area_defaults},
             after.entities);
     }
 }

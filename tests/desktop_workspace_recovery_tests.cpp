@@ -50,6 +50,74 @@ namespace {
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
+void require_project_navigation(sketch::desktop::MainWindow& window, bool undo, bool redo) {
+    auto* undo_action = window.findChild<QAction*>(QStringLiteral("undoCommand"));
+    auto* redo_action = window.findChild<QAction*>(QStringLiteral("redoCommand"));
+    require(undo_action && redo_action, "project history actions exist");
+    require(undo_action->isEnabled() == undo && redo_action->isEnabled() == redo,
+        "project history actions match the current session boundary");
+}
+
+void test_ordinary_open_session_history_floor() {
+    using namespace sketch;
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "session history temporary directory");
+    const auto source = temporary.filePath(QStringLiteral("session-history.bldproj"));
+    desktop::MainWindow seed;
+    const auto retained_wall = seed.createStraightWall({0, 0}, {4, 0});
+    const auto undone_wall = seed.createStraightWall({0, 1}, {4, 1});
+    require(!retained_wall.isEmpty() && !undone_wall.isEmpty() && seed.undoCommand(),
+        "seed an ordinary project with retained Undo and Redo stacks");
+    require(seed.saveProjectAs(source) && seed.createNewProject(), "save and release the history fixture");
+    const auto persisted = ProjectStore::load(std::filesystem::path(source.toStdWString())).document.snapshot();
+    require(!persisted.history().back().undo_stack.empty() && !persisted.history().back().redo_stack.empty(),
+        "ordinary fixture actually contains both persisted command stacks");
+
+    desktop::MainWindow window;
+    require(window.openProject(source), "ordinary open accepts retained history");
+    const auto floor = window.document().snapshot();
+    require(document_snapshot_digest(floor) == document_snapshot_digest(persisted) &&
+        window.document().can_undo() && window.document().can_redo(),
+        "ordinary open preserves immutable history and document command identities");
+    require_project_navigation(window, false, false);
+    require(!window.undoCommand() && !window.redoCommand() &&
+        document_snapshot_digest(window.document().snapshot()) == document_snapshot_digest(floor),
+        "direct Undo and Redo refuse persisted commands without changing the document");
+
+    const auto local_wall = window.createStraightWall({0, 2}, {4, 2});
+    require(!local_wall.isEmpty(), "one current-session edit is allowed");
+    const auto edited = window.document().snapshot().entities();
+    require_project_navigation(window, true, false);
+    require(window.saveProject(), "saving the local edit does not reset the session floor");
+    const auto before_failed_open = document_snapshot_digest(window.document().snapshot());
+    require(!window.openProject(temporary.filePath(QStringLiteral("missing.bldproj"))) &&
+        document_snapshot_digest(window.document().snapshot()) == before_failed_open,
+        "failed open preserves the current document and session");
+    require_project_navigation(window, true, false);
+    require(window.undoCommand() && window.document().snapshot().entities() == floor.entities(),
+        "one Undo returns exactly to the opened entity map after save and failed open");
+    require_project_navigation(window, false, true);
+    const auto at_floor = document_snapshot_digest(window.document().snapshot());
+    require(!window.undoCommand() && document_snapshot_digest(window.document().snapshot()) == at_floor,
+        "Undo refuses to cross the open-session prefix despite the newer navigation revision");
+    require(window.saveProject(), "save while local Redo is available");
+    require_project_navigation(window, false, true);
+    require(window.redoCommand() && window.document().snapshot().entities() == edited,
+        "save retains exact local Redo");
+    require(window.undoCommand(), "return to the session floor before branching");
+    const auto replacement = window.createStraightWall({0, 3}, {4, 3});
+    require(!replacement.isEmpty() && !window.document().snapshot().entities().contains(local_wall.toStdString()),
+        "a replacement command abandons only current-session Redo");
+    require_project_navigation(window, true, false);
+    require(window.undoCommand() && window.document().snapshot().entities() == floor.entities() && !window.undoCommand(),
+        "equal-depth replacement stacks still stop at the exact persisted command prefix");
+    require(window.saveProject() && window.openProject(source), "reopen with a persisted local Redo command");
+    require_project_navigation(window, false, false);
+    require(!window.undoCommand() && !window.redoCommand() &&
+        window.document().snapshot().entities() == floor.entities(),
+        "a second ordinary open starts another session floor for both directions");
+}
+
 void draft_click(sketch::desktop::PlanCanvas* canvas, QPoint offset) {
     const QPointF point(canvas->rect().center() + offset);
     QMouseEvent press(QEvent::MouseButtonPress, point, point, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
@@ -61,6 +129,49 @@ void draft_key(QWidget* canvas, int key) {
     QKeyEvent event(QEvent::KeyPress, key, Qt::NoModifier);
     QApplication::sendEvent(canvas, &event);
 }
+void test_session_floor_survives_workspace_promotion() {
+    using namespace sketch;
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "promotion history temporary directory");
+    desktop::MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen, true);
+    window.show();
+    QApplication::processEvents();
+    const auto source = temporary.filePath(QStringLiteral("promotion-history.bldproj"));
+    require(!window.createStraightWall({0, 0}, {4, 0}).isEmpty() &&
+        window.saveProjectAs(source) && window.openProject(source), "open legacy promotion fixture");
+    const auto floor = window.document().snapshot().entities();
+    require_project_navigation(window, false, false);
+    require(!window.createStraightWall({0, 6}, {4, 6}).isEmpty(), "edit before legacy workspace promotion");
+    const auto before_boundary = window.document().snapshot();
+    require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, "living_area"),
+        "boundary authoring promotes the legacy document without resetting its session floor");
+    auto* canvas = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+    require(canvas, "promotion fixture canvas");
+    for (const auto offset : {QPoint(-60, -60), QPoint(60, -60), QPoint(60, 60), QPoint(-60, 60)})
+        draft_click(canvas, offset);
+    draft_key(canvas, Qt::Key_Return);
+    const auto finished = window.document().snapshot();
+    require(!canvas->boundaryDraftPreview() && finished.revision() == before_boundary.revision() + 1,
+        "promoted boundary commits one document revision");
+    require(window.saveProject(), "save after workspace promotion");
+    require(window.undoCommand() && window.document().snapshot().entities() == before_boundary.entities(),
+        "Undo removes only the promoted Finish");
+    require(window.undoCommand() && window.document().snapshot().entities() == before_boundary.entities(),
+        "Undo retires the current-session activation without changing the entity map");
+    require(window.undoCommand() && window.document().snapshot().entities() == floor,
+        "the edit before promotion remains undoable in the same session");
+    require_project_navigation(window, false, true);
+    require(!window.undoCommand(), "promoted workspace refuses the inherited pre-open command");
+    require(window.redoCommand() && window.redoCommand() && window.redoCommand() &&
+        window.document().snapshot().entities() == finished.entities(),
+        "promotion retains exact Redo for the edit, activation and Finish");
+    require(window.saveProject() && window.openProject(source) &&
+        window.document().snapshot().entities() == finished.entities(), "promoted history round trip");
+    require_project_navigation(window, false, false);
+    require(!window.undoCommand() && !window.redoCommand(), "ordinary promoted archive reopen sets a new floor");
+}
+
 // Independent redraws declare fresh topology, so finishing a Redefine with
 // attached references opens the modal Keep/map/Remove review. Keep every
 // reference and map each original child to the same-numbered replacement
@@ -592,6 +703,13 @@ void test_startup_recovery_selection() {
         return snapshot.document().document_id();
     };
     const auto recovered_document_id = write_copy(recovery_path, "startup-recovery", std::nullopt);
+    {
+        desktop::MainWindow ordinary;
+        require(ordinary.openProject(qt_path(recovery_path)), "ordinary File Open accepts a recovery-role archive");
+        require_project_navigation(ordinary, false, false);
+        require(!ordinary.undoCommand() && !ordinary.redoCommand(),
+            "archive role alone cannot opt ordinary File Open into recovery-resume history");
+    }
     (void)write_copy(discard_path, "discard-recovery", std::string("C:/Projects/Maple Street.bldproj"));
     const auto chooser = [] { return QApplication::activeModalWidget() &&
         QApplication::activeModalWidget()->objectName() == QStringLiteral("recoveryChooser")
@@ -667,6 +785,13 @@ void test_startup_recovery_selection() {
         require(opened, "startup recovery prompt must open the selected copy");
         require(responded && window.document().snapshot().document_id() == recovered_document_id,
                 "startup recovery must load the persisted recovery document");
+        require_project_navigation(window, true, false);
+        const auto resumed_revision = window.document().revision();
+        require(window.undoCommand() && window.document().revision() == resumed_revision + 1,
+                "explicit Recover resumes the retained workspace command stack");
+        require_project_navigation(window, false, true);
+        require(window.redoCommand() && window.document().revision() == resumed_revision + 2,
+                "explicit Recover retains exact workspace Redo navigation");
     }
     (void)write_copy(later_path, "later-recovery", std::nullopt);
     {
@@ -817,6 +942,8 @@ void test_live_boundary_recovery() {
 
 void run() {
     using namespace sketch;
+    test_ordinary_open_session_history_floor();
+    test_session_floor_survives_workspace_promotion();
     QTemporaryDir temporary;
     require(temporary.isValid(), "temporary directory");
     const std::filesystem::path directory(temporary.path().toStdWString());
@@ -890,15 +1017,25 @@ void run() {
         "second open keeps the owned recovery archive read-only");
     require(reopened.openProject(qt_path(independent_copy)) && reopened.document().is_editable(),
         "independent recovery archive reopens writable");
-    require(reopened.undoCommand() && !reopened.document().snapshot().entities().contains(wall.toStdString()),
-        "reopened recovery archive retains command undo");
-    require(reopened.redoCommand() && reopened.saveProject(), "reopened recovery archive redoes and saves");
-    require(reopened.openProject(qt_path(independent_copy)),
-        "saved independent recovery archive reopens");
-    require(reopened.undoCommand() && !reopened.document().snapshot().entities().contains(wall.toStdString()),
-        "reopened recovery archive retains command undo after reload");
-    require(reopened.redoCommand() && reopened.saveProject(),
-        "reopened recovery archive redoes and saves after reload");
+    const auto opened_entities = reopened.document().snapshot().entities();
+    require_project_navigation(reopened, false, false);
+    require(!reopened.undoCommand() && !reopened.redoCommand() &&
+        reopened.document().snapshot().entities() == opened_entities,
+        "ordinary reopen retains the recovery ledger without resuming its command navigation");
+    const auto session_wall = reopened.createStraightWall({0, 8}, {4, 8});
+    require(!session_wall.isEmpty(), "opened workspace accepts one current-session edit");
+    const auto session_entities = reopened.document().snapshot().entities();
+    require(reopened.saveProject() && reopened.undoCommand() &&
+        reopened.document().snapshot().entities() == opened_entities && !reopened.undoCommand(),
+        "workspace session Undo stops at the opened identity prefix after Save");
+    require_project_navigation(reopened, false, true);
+    require(reopened.redoCommand() && reopened.document().snapshot().entities() == session_entities &&
+        reopened.saveProject(), "workspace session Redo restores the exact new edit");
+    require(reopened.openProject(qt_path(independent_copy)), "saved independent recovery archive reopens");
+    require_project_navigation(reopened, false, false);
+    require(!reopened.undoCommand() && !reopened.redoCommand() &&
+        reopened.document().snapshot().entities() == session_entities,
+        "ordinary reload establishes a new floor without deleting workspace history");
     require(reopened.createNewProject(), "release independent recovery ownership");
     desktop::MainWindow lifecycle;
     lifecycle.document().mark_saved(lifecycle.document().revision());
@@ -921,6 +1058,10 @@ void run() {
     require(!window.openProject(qt_path(directory / "missing.bldproj")), "missing archive is rejected");
     require(document_snapshot_digest(window.document().snapshot()) == clean_digest,
         "failed open preserves current document");
+    require(window.undoCommand() && !window.document().snapshot().entities().contains(wall.toStdString()) &&
+        window.redoCommand() &&
+        window.document().snapshot().entities() == edited.archive->document().entities() && window.saveProject(),
+        "failed open preserves the current workspace session floor and local command navigation");
     require(window.workspaceDocumentsShareDocument(), "workspace tabs retain shared document API");
     const auto file_hash = ProjectStore::file_sha256(destination);
     auto entity = window.document().snapshot().entities().at("property-1");
@@ -1176,7 +1317,11 @@ int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
     try {
-        if (argc > 1 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--live-boundary"))
+        if (argc > 1 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--session-history"))
+            { test_ordinary_open_session_history_floor();
+              test_session_floor_survives_workspace_promotion();
+              test_startup_recovery_selection(); }
+        else if (argc > 1 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--live-boundary"))
             test_live_boundary_recovery();
         else if (argc > 1 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--discard-navigation"))
             test_discard_navigation();

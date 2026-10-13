@@ -39,10 +39,10 @@ The latest instruction requires continuous execution until the full product
 exit. Use [progress.md](progress.md) as the durable resumption record without a
 goal loop. Reconcile it with Git and actual evidence, and continue the next
 unfinished task. Never restart completed work after compaction. Current steering
-is source implementation only: do not run builds, tests, probes, native jobs,
-launches, packages or installations. When the user resumes qualification, build
-affected targets after a meaningful source batch and package only a coherent
-human-test candidate or release.
+resumes source implementation, builds, tests and live-app qualification under
+the October 13 Claude handoff. Build affected targets after a meaningful source
+batch; package only a coherent human-test candidate or release. Keep the installed
+candidate unchanged until the separate packaging/installation step.
 Documentation, status requests and unchanged source do not trigger builds.
 
 Root owns integration, shared controller/commands, format floors, CMake,
@@ -358,7 +358,8 @@ with shared fresh topology, temporary preview-only dimension suppression,
 mandatory release review and a separately manufactured final candidate. Actual
 source/selection/viewport/recovery fences retire stale output. Qualification
 remains required; source integration alone does not close the canvas gate.
-These sources have not been compiled or exercised. Follow the
+The October 13 Release build now compiles these sources; see the handoff record
+in [progress.md](progress.md) for automated qualification and remaining gates. Follow the
 [consumer integration design](../design/vertex-component-directional-resize.md)
 through whole-component nested deformation and captured canvas side handles;
 retain the complete geometry and mixed-family scope above. Cutout transfer now

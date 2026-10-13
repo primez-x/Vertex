@@ -8,6 +8,7 @@
 #include "sketch/physical_wall_phase_review.hpp"
 #include "sketch/physical_wall_spaces.hpp"
 #include "sketch/area_type_presets.hpp"
+#include "sketch/boundary_area_defaults.hpp"
 
 #include "plan_canvas.hpp"
 #include "vertex_design_tokens.hpp"
@@ -2213,6 +2214,22 @@ QRectF plan_area_label_footprint(const CanvasLabel& label,QFont base_font,const 
     return rotation.mapRect(world);
 }
 
+bool fixed_plan_dimension_label(const CanvasLabel& label) {
+    return label.selection_type==QStringLiteral("dimension") && !label.automatic_linear_placement;
+}
+
+std::optional<Bounds2> fixed_plan_dimension_label_bounds(
+    const CanvasLabel& label,const QFont& font,const QPaintDevice* device) {
+    if (!fixed_plan_dimension_label(label) || label.text.isEmpty() ||
+        !std::isfinite(label.position.x) || !std::isfinite(label.position.y) ||
+        !std::isfinite(label.rotation_radians)) return std::nullopt;
+    const auto footprint=plan_area_label_footprint(label,font,device);
+    if (!std::isfinite(footprint.left()) || !std::isfinite(footprint.top()) ||
+        !std::isfinite(footprint.right()) || !std::isfinite(footprint.bottom())) return std::nullopt;
+    return Bounds2{{label.position.x+footprint.left(),label.position.y+footprint.top()},
+        {label.position.x+footprint.right(),label.position.y+footprint.bottom()}};
+}
+
 QFont sheet_text_font(double point_size, double pixels_per_mm) {
     // Printed and PDF sheet text uses the bundled IBM Plex Sans face.
     ensure_bundled_fonts();
@@ -2872,25 +2889,6 @@ json stored_factor_json(const StoredFactor& factor) {
                 {"factor_denominator", factor.rational.denominator}};
 }
 
-CalculationProfile default_calculation_profile() {
-    auto profile = CalculationProfile{
-        "vertex-default",
-        2,
-        AreaUnit::square_foot,
-        1, // design system: one decimal (1,842.5 sf)
-        {{"measurement", ClassificationRule{true, false}},
-         {"survey", ClassificationRule{false, false}},
-         {"room", ClassificationRule{true, true}},
-         {"living", ClassificationRule{true, true}},
-         {"interior", ClassificationRule{false, false}},
-         {"exterior", ClassificationRule{true, false}},
-         {"party", ClassificationRule{true, false}}}};
-    for (const auto& preset : area_type_presets)
-        if (!preset.classification.empty())
-            profile.classifications.emplace(std::string(preset.classification),
-                ClassificationRule{preset.building_total, preset.living_total});
-    return profile;
-}
 
 QString symbol_svg_resource_path(const SymbolSvgAsset& asset) {
     const auto relative = QString::fromStdString(asset.relative_path);
@@ -4629,88 +4627,6 @@ bool appraisal_area_has_derived_category_authority(const DocumentSnapshot& snaps
         // Invalid scope cannot safely restore an editable legacy category.
     }
     return appraisal_property_has_declarations(snapshot, property);
-}
-
-// Explicit appraisal facts implied by the area type chosen when an area is
-// drawn (FB-011). They are stored as ordinary declarations and listed in the
-// owner's appraisal_fact_defaults record, so Details and Edit facts can show
-// they came from the area type; every value stays editable. A fact the type
-// does not imply is left Undeclared and keeps withholding totals. Facts that
-// cannot change a non-dwelling use's category are declared Unknown, never
-// guessed. ANSI observation evidence (and the ANSI-derived grade and ceiling)
-// is never defaulted.
-struct AppraisalClassificationDefaults {
-    std::optional<std::string> grade; // Floor-level fact; implied by the type.
-    bool grade_from_floor{};          // The type does not imply a grade.
-    std::vector<std::pair<std::string, std::string>> area;
-};
-
-std::optional<AppraisalClassificationDefaults> appraisal_classification_defaults(
-    std::string_view classification, bool ansi) {
-    const auto category = parse_appraisal_category(classification);
-    if (!category || *category == AppraisalAreaCategory::none) return std::nullopt;
-    using C = AppraisalAreaCategory;
-    AppraisalClassificationDefaults result;
-    const auto dwelling = [&](const char* grade, const char* finish, const char* access, const char* ceiling) {
-        result.grade = grade;
-        result.area = {{"finish", finish}, {"access", access}};
-        if (ceiling != nullptr) result.area.emplace_back("ceiling_eligibility", ceiling);
-        result.area.emplace_back("area_use", "dwelling");
-    };
-    const auto other_use = [&](std::string use) {
-        result.grade_from_floor = true;
-        result.area = {{"finish", "unknown"}, {"access", "unknown"}, {"ceiling_eligibility", "unknown"},
-                       {"area_use", std::move(use)}};
-    };
-    switch (*category) {
-    case C::above_grade_finished: dwelling("above", "finished", "direct_interior", "standard"); break;
-    case C::above_grade_unfinished: dwelling("above", "unfinished", "unknown", "unknown"); break;
-    case C::below_grade_finished: dwelling("below", "finished", "direct_interior", "standard"); break;
-    case C::below_grade_unfinished: dwelling("below", "unfinished", "unknown", "unknown"); break;
-    case C::above_grade_nonstandard_finished: dwelling("above", "finished", "direct_interior", "nonstandard"); break;
-    case C::below_grade_nonstandard_finished: dwelling("below", "finished", "direct_interior", "nonstandard"); break;
-    // Noncontinuous access does not imply ceiling eligibility; it stays Undeclared.
-    case C::noncontinuous_finished: dwelling("above", "finished", "noncontinuous", nullptr); break;
-    // ADU and detached identities are ANSI evidence and stay explicit.
-    case C::adu_above_grade_finished: case C::detached_other_above_grade_finished:
-    case C::adu_above_grade_nonstandard_finished: case C::detached_other_above_grade_nonstandard_finished:
-        dwelling("above", "finished", "direct_interior", nullptr); break;
-    case C::adu_below_grade_finished: case C::detached_other_below_grade_finished:
-    case C::adu_below_grade_nonstandard_finished: case C::detached_other_below_grade_nonstandard_finished:
-        dwelling("below", "finished", "direct_interior", nullptr); break;
-    case C::adu_above_grade_unfinished: case C::detached_other_above_grade_unfinished:
-        dwelling("above", "unfinished", "unknown", nullptr); break;
-    case C::adu_below_grade_unfinished: case C::detached_other_below_grade_unfinished:
-        dwelling("below", "unfinished", "unknown", nullptr); break;
-    default: other_use(std::string(appraisal_category_name(*category))); break;
-    }
-    result.area.emplace_back("boundary_role", "measured_area");
-    if (ansi) {
-        result.grade.reset();
-        result.grade_from_floor = false;
-        std::erase_if(result.area, [](const auto& fact) { return fact.first == "ceiling_eligibility"; });
-    }
-    return result;
-}
-
-// The floor's declared reporting level, when one exists, is the user's own
-// grade declaration for that floor. Names and elevations are not evidence.
-std::optional<std::string> appraisal_declared_floor_level_grade(const Entity& property, const std::string& floor_id) {
-    const auto stored = property.properties.find("appraisal_reporting");
-    if (stored == property.properties.end()) return std::nullopt;
-    try {
-        std::optional<std::string> grade;
-        for (const auto& unit : parse_appraisal_reporting_settings(*stored).living_units)
-            for (const auto& level : unit.levels) {
-                if (level.floor_id != floor_id || !level.grade_level_type) continue;
-                const std::string value = *level.grade_level_type == "above_grade" ? "above" : "below";
-                if (grade && *grade != value) return std::nullopt;
-                grade = value;
-            }
-        return grade;
-    } catch (const std::exception&) {
-        return std::nullopt;
-    }
 }
 
 PlanAreaPresentation effective_plan_area_presentation(
@@ -6866,6 +6782,7 @@ public:
         capture_diagnostic_stage("constructor.scaffold.end");
         capture_diagnostic_stage("constructor.workspace.begin");
         m_project_workspace = std::make_unique<ProjectWorkspace>(m_document->snapshot());
+        if (scaffolded) adoptSessionHistory();
         capture_diagnostic_stage("constructor.workspace.end");
         capture_diagnostic_stage("constructor.drawing_context.begin");
         initializeDrawingContext();
@@ -12593,7 +12510,12 @@ public:
         // place would therefore restore the previous theme's palette over the
         // new one (blank toolbar glyphs, system link and focus colors). Drop
         // the old sheet first so the new palette is the one it snapshots.
-        if (!owner->styleSheet().isEmpty()) owner->setStyleSheet(QString());
+        if (!owner->styleSheet().isEmpty()) {
+            // Resolve the previous sheet before replacing it even when the
+            // theme is chosen before the window's first show.
+            owner->ensurePolished();
+            owner->setStyleSheet(QString());
+        }
         owner->setPalette(palette);
         // Widgets under a window with a style sheet do not inherit its
         // palette; they start from the application palette. Publish the theme
@@ -23044,6 +22966,7 @@ public:
             clearPreview();
             m_boundary_session = std::move(candidate);
             m_auto_setup_classification = staged_setup;
+            m_boundary_area_defaults = BoundaryAreaDefaultsIntent{};
             m_boundary_source = m_document->snapshot();
             m_boundary_context = *context;
             m_boundary_document = m_document;
@@ -29086,10 +29009,15 @@ public:
                     candidate_labels.push_back(std::move(label));
                 }
             }
-            // Refresh emits derived area labels in document ID order. Keep
-            // the same obstacle order when a proposal newly qualifies an area.
+            // Fixed dimension ink is reserved before any automatic area,
+            // independent of document ID order. Preserve area-to-area order.
             std::stable_sort(candidate_labels.begin(),candidate_labels.end(),
-                [](const auto& first,const auto& second){return plan_label_instance_key(first)<plan_label_instance_key(second);});
+                [](const auto& first,const auto& second) {
+                    const auto first_fixed=fixed_plan_dimension_label(first);
+                    const auto second_fixed=fixed_plan_dimension_label(second);
+                    if (first_fixed!=second_fixed) return first_fixed;
+                    return plan_label_instance_key(first)<plan_label_instance_key(second);
+                });
             const auto withhold_label = [&](const CanvasLabel& retained) {
                 auto hidden = retained;
                 hidden.text.clear();
@@ -29103,7 +29031,9 @@ public:
                 const auto found=typed_annotation ? candidate.end() : candidate.find(label.id.toStdString());
                 if (found==candidate.end()) {
                     const auto original=typed_annotation ? source.entities().end() : source.entities().find(label.id.toStdString());
-                    if (original!=source.entities().end() && original->second.type=="measurement_linework") {
+                    if (original!=source.entities().end() &&
+                        (original->second.type=="measurement_linework" ||
+                         can_recognize_boundary_dimension_entity_type(original->second.type))) {
                         withhold_label(label);
                         continue;
                     }
@@ -29189,11 +29119,14 @@ public:
                     const auto decoded=decode_boundary_dimension_entity(entity);
                     if (!decoded.supported()) return std::nullopt;
                     const auto& dimension=*decoded.dimension;
+                    if (dimension.presentation && !dimension.presentation->visible) {
+                        withhold_label(label);
+                        continue;
+                    }
                     const auto& dimension_owner=candidate.at(dimension.boundary_id);
                     const bool physical_room_dimension=is_physical_wall_room(dimension_owner);
-                    if (!physical_room_dimension && source.entities().contains(entity.id) &&
-                        source.entities().contains(dimension.boundary_id) && entity==source.entities().at(entity.id) &&
-                        dimension_owner==source.entities().at(dimension.boundary_id)) continue;
+                    // Even unchanged dimensions must seed the candidate layout.
+                    // Re-resolve bound measurements against the candidate head.
                     CanvasLabel projected=label;
                     try {
                         projected=project_boundary_dimension(dimension,
@@ -29209,6 +29142,18 @@ public:
                         ? project_plan_point(projected.position,view_context->frame) : projected.position;
                     proposed.text=std::move(projected.text);
                     proposed.rotation_radians=projected.rotation_radians;
+                    // Area candidates are placed in canonical source axes.
+                    // Keep the retained typography, but use the freshly resolved
+                    // dimension anchor rather than a captured viewport anchor.
+                    auto obstacle_label=proposed;
+                    obstacle_label.position=projected.position;
+                    if (const auto bounds=fixed_plan_dimension_label_bounds(obstacle_label,label_font,&label_device)) {
+                        if (site_input) {
+                            if (const auto frame=site_input->frames.auxiliary.find(label.id);
+                                frame!=site_input->frames.auxiliary.end())
+                                site_label_obstacles.insert(*bounds,frame->second);
+                        } else candidate_label_obstacles.insert(*bounds);
+                    }
                     result.labels.push_back(std::move(proposed));
                 } else if (label.avoid_components &&
                            (can_recognize_boundary_entity_type(entity.type) || entity.type=="room")) {
@@ -41781,6 +41726,73 @@ public:
         }catch(const std::exception&){return false;}
     }
 
+    // This boundary belongs to the adopted document, not to save/checkpoint
+    // epochs. Original command IDs survive Document navigation and promotion.
+    enum class ProjectOpenMode { ordinary, recovery_resume };
+
+    void adoptSessionHistory(ProjectOpenMode mode = ProjectOpenMode::ordinary) {
+        m_session_history_document_id = m_document->snapshot().document_id();
+        m_session_undo_prefix.clear();
+        m_session_inherited_redo.clear();
+        m_session_legacy_navigation_revision.reset();
+        if (mode == ProjectOpenMode::ordinary) {
+            const auto& navigation = sessionNavigation();
+            m_session_undo_prefix = navigation.undo_stack;
+            m_session_inherited_redo = navigation.redo_stack;
+        }
+    }
+
+    const WorkspaceNavigationState& sessionNavigation() const {
+        if (!m_recovery_ledger.empty()) return m_project_workspace->navigation();
+        const auto snapshot = m_document->snapshot();
+        if (!m_session_legacy_navigation_revision ||
+            *m_session_legacy_navigation_revision > snapshot.revision() ||
+            m_session_legacy_navigation_document_id != snapshot.document_id()) {
+            m_session_legacy_navigation = initialize_workspace_navigation(snapshot,
+                capture_workspace_history_fence(snapshot));
+            m_session_legacy_navigation_revision = snapshot.revision();
+            m_session_legacy_navigation_document_id = snapshot.document_id();
+        }
+        // Live Document records are validated and immutable. Extend the cached
+        // logical stacks using only original command identities; never use the
+        // physical snapshot references recorded by Undo/Redo as command IDs.
+        for (auto revision = *m_session_legacy_navigation_revision + 1; revision <= snapshot.revision(); ++revision) {
+            const auto& record = snapshot.history().at(static_cast<std::size_t>(revision));
+            auto& undo = m_session_legacy_navigation.undo_stack;
+            auto& redo = m_session_legacy_navigation.redo_stack;
+            if (!record.source_revision) {
+                undo.push_back({record.revision});
+                redo.clear();
+            } else if (record.action == "undo" && !undo.empty()) {
+                redo.push_back(undo.back()); undo.pop_back();
+            } else if (record.action == "redo" && !redo.empty()) {
+                undo.push_back(redo.back()); redo.pop_back();
+            } else {
+                throw std::invalid_argument("Session command navigation is inconsistent");
+            }
+        }
+        m_session_legacy_navigation_revision = snapshot.revision();
+        return m_session_legacy_navigation;
+    }
+
+    bool sessionCanNavigate(bool redo) const {
+        if (!m_document->is_editable()) return false;
+        const bool available = m_recovery_ledger.empty()
+            ? (redo ? m_document->can_redo() : m_document->can_undo())
+            : (redo ? m_project_workspace->can_redo() : m_project_workspace->can_undo());
+        if (!available) return false;
+        if (m_session_history_document_id.empty()) return true;
+        if (m_session_history_document_id != m_document->snapshot().document_id()) return false;
+        const auto& navigation = sessionNavigation();
+        if (navigation.undo_stack.size() < m_session_undo_prefix.size() ||
+            !std::equal(m_session_undo_prefix.begin(), m_session_undo_prefix.end(), navigation.undo_stack.begin()))
+            return false;
+        if (!redo) return navigation.undo_stack.size() > m_session_undo_prefix.size();
+        if (navigation.redo_stack.empty()) return false;
+        return std::find(m_session_inherited_redo.begin(), m_session_inherited_redo.end(),
+            navigation.redo_stack.back()) == m_session_inherited_redo.end();
+    }
+
     bool undoCommand() {
         if (m_drawing_parked) {
             if (m_linework_drawing) finishMeasurementLinework();
@@ -41813,7 +41825,7 @@ public:
             finishWallChain();
             return true;
         }
-        if (!(m_recovery_ledger.empty() ? m_document->can_undo() : m_project_workspace->can_undo())) {
+        if (!sessionCanNavigate(false)) {
             if (m_linework_drawing) finishMeasurementLinework();
             return false;
         }
@@ -41879,12 +41891,12 @@ public:
             try { requireLineworkHistorySource(); }
             catch (const std::exception&) { finishMeasurementLinework(); }
         }
-        if (m_boundary_session && !(m_restored_boundary_navigation && m_project_workspace->can_redo())) {
+        if (m_boundary_session && !(m_restored_boundary_navigation && sessionCanNavigate(true))) {
             const bool changed = m_boundary_session->redo();
             if (changed) { clearError(); boundaryDraftChanged(); }
             return changed;
         }
-        if (!(m_recovery_ledger.empty() ? m_document->can_redo() : m_project_workspace->can_redo())) {
+        if (!sessionCanNavigate(true)) {
             // A validated current session can keep drawing when there is no
             // Redo entry. The source check above already retired stale sessions.
             return false;
@@ -41950,6 +41962,7 @@ public:
             rememberPristineProject();
             m_project_workspace = std::move(candidate_workspace);
             m_recovery_ledger.clear();
+            adoptSessionHistory();
             m_saved_edited_generation = 0;
             resetAutosaveSession();
             m_view_filter = {};
@@ -41974,7 +41987,7 @@ public:
         }
     }
 
-    bool openProject(const QString& path) {
+    bool openProject(const QString& path, ProjectOpenMode mode = ProjectOpenMode::ordinary) {
         if (path.trimmed().isEmpty()) {
             setError(QStringLiteral("Choose a project file to open."));
             return false;
@@ -42055,6 +42068,14 @@ public:
                 candidate_redefine = boundaryRecoveryTarget(*candidate_active, candidate_workspace->snapshot());
                 candidate_boundary = BoundaryAuthoringSession::from_recovery_checkpoint(candidate_active->checkpoint);
             }
+            // Prepare the runtime-only boundary before replacing any current
+            // state. A failed load must retain the existing session boundary.
+            auto candidate_session_id = candidate->snapshot().document_id();
+            auto candidate_session_undo = mode == ProjectOpenMode::ordinary
+                ? candidate_workspace->navigation().undo_stack : std::vector<WorkspaceNavigationTarget>{};
+            auto candidate_session_redo = mode == ProjectOpenMode::ordinary
+                ? candidate_workspace->navigation().redo_stack : std::vector<WorkspaceNavigationTarget>{};
+            auto candidate_legacy_navigation = candidate_workspace->navigation();
             if (m_project_ownership && !reuse_current_ownership) {
                 const auto released = m_project_ownership->release();
                 if (!released.ok()) {
@@ -42070,6 +42091,12 @@ public:
                 m_project_ownership = std::make_unique<ProjectOwnershipSession>();
             }
             m_recovery_ledger = std::move(candidate_ledger);
+            m_session_history_document_id = std::move(candidate_session_id);
+            m_session_undo_prefix = std::move(candidate_session_undo);
+            m_session_inherited_redo = std::move(candidate_session_redo);
+            m_session_legacy_navigation = std::move(candidate_legacy_navigation);
+            m_session_legacy_navigation_document_id = m_session_history_document_id;
+            m_session_legacy_navigation_revision = m_document->revision();
             m_saved_workspace_epoch = m_project_workspace->epoch();
             m_saved_edited_generation = m_document->dirty() ? 0 : m_project_workspace->edited_generation();
             resetAutosaveSession();
@@ -42098,6 +42125,9 @@ public:
                 m_boundary_context = candidate_active->source.context;
                 m_boundary_document = m_document;
                 m_redefine_boundary_id = candidate_redefine;
+                m_boundary_area_defaults = candidate_active->area_defaults;
+                if (candidate_active->area_defaults && candidate_active->area_defaults->staged_category)
+                    m_auto_setup_classification = QString::fromStdString(*candidate_active->area_defaults->staged_category);
                 if (candidate_active->auto_subtract_target_id)
                     m_boundary_subtract_target=QString::fromStdString(*candidate_active->auto_subtract_target_id);
                 m_tool = CanvasTool::boundary;
@@ -58355,15 +58385,18 @@ private:
         symbols_layout->addWidget(architecture_palette);
 
         auto* components_header = new QWidget(navigator_panel);
-        auto* components_header_layout = new QHBoxLayout(components_header);
+        auto* components_header_layout = new QGridLayout(components_header);
         components_header_layout->setContentsMargins(0, 4, 0, 0);
         components_header_layout->setSpacing(4);
         auto* components_heading = new QLabel(QStringLiteral("Components"), components_header);
         m_component_library_heading = components_heading;
         components_heading->setAccessibleName(QStringLiteral("Active layer symbol and label library"));
         components_heading->setObjectName(QStringLiteral("componentLibraryHeading"));
-        components_header_layout->addWidget(components_heading);
-        components_header_layout->addStretch();
+        components_heading->setWordWrap(true);
+        components_heading->setMinimumWidth(0);
+        components_heading->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);
+        components_header_layout->addWidget(components_heading,0,0,1,2);
+        components_header_layout->setColumnStretch(0,1);
         m_object_button = new QToolButton(components_header);
         m_object_button->setText(QStringLiteral("Object"));
         m_object_button->setIcon(modern_toolbar_icon(
@@ -58376,7 +58409,7 @@ private:
         m_object_button->setMenu(architecture_menu);
         m_object_button->setPopupMode(QToolButton::MenuButtonPopup);
         m_object_button->setAutoRaise(true);
-        components_header_layout->addWidget(m_object_button);
+        components_header_layout->addWidget(m_object_button,1,0,Qt::AlignLeft);
         QObject::connect(m_object_button, &QToolButton::clicked, owner,
                          [this] { showBuildingObjectDialog(false); });
         auto* text_button = new QToolButton(components_header);
@@ -58384,7 +58417,7 @@ private:
         text_button->setText(QStringLiteral("+ Text"));
         text_button->setToolTip(QStringLiteral("Open the Labels library"));
         text_button->setAutoRaise(true);
-        components_header_layout->addWidget(text_button);
+        components_header_layout->addWidget(text_button,1,1,Qt::AlignRight);
         symbols_layout->addWidget(components_header);
 
         auto* symbol_size_row = new QHBoxLayout;
@@ -62492,6 +62525,15 @@ private:
         }
         capture_diagnostic_stage("projection.visibility.end");
         PlanLabelBoundsIndex area_label_obstacles(component_bounds);
+        // Fixed dimensions retain their authored anchors. Reserve their actual
+        // painted typography/rotation before automatic areas choose anchors.
+        if (!options.site_plan) for (const auto& label : all_labels) {
+            const auto id=label.id.toStdString();
+            if (!visible_ids.contains(id) ||
+                (presentation_hidden_ids.contains(id) && !object_hidden_ids.contains(id))) continue;
+            if (const auto bounds=fixed_plan_dimension_label_bounds(label,options.label_font,options.label_device))
+                area_label_obstacles.insert(*bounds);
+        }
         QHash<QString, const CanvasEntity*> area_label_owners;
         area_label_owners.reserve(static_cast<qsizetype>(all_geometry.size()));
         for (const auto& entity : all_geometry)
@@ -62792,6 +62834,12 @@ private:
                 !item.segments.empty())
                 obstacles.insert(boundary_bounds(item.segments),frames.geometryAt(item));
         }
+        // This collection has already passed the Site visibility mask. Index
+        // each fixed dimension in its own resolved presentation frame so text
+        // from another building can also displace an automatic area label.
+        for (const auto& label : scene.labels)
+            if (const auto bounds=fixed_plan_dimension_label_bounds(label,font,device))
+                obstacles.insert(*bounds,frames.auxiliary.at(label.id));
         std::vector<std::size_t> order;
         for (std::size_t index=0;index<scene.labels.size();++index)
             if (scene.labels[index].avoid_components) order.push_back(index);
@@ -68564,10 +68612,10 @@ private:
         const bool linework_anchor = m_linework_drawing && m_linework_drawing->has_anchor;
         m_undo_action->setEnabled(m_document->is_editable() && (wall_anchor || linework_anchor ||
             (m_boundary_session ? m_boundary_session->can_undo() :
-             m_recovery_ledger.empty() ? m_document->can_undo() : m_project_workspace->can_undo())));
-        m_redo_action->setEnabled(m_restored_boundary_navigation && m_project_workspace->can_redo() ? true :
+             sessionCanNavigate(false))));
+        m_redo_action->setEnabled(m_document->is_editable() && (m_restored_boundary_navigation && sessionCanNavigate(true) ? true :
             m_boundary_session ? m_boundary_session->can_redo() :
-            m_recovery_ledger.empty() ? m_document->can_redo() : m_project_workspace->can_redo());
+            sessionCanNavigate(true)));
         m_save_action->setEnabled(m_document->is_editable() &&
                                  (projectDirty() || hasUnsavedBoundaryDraftChanges()));
         m_save_as_action->setEnabled(m_document->is_editable());
@@ -69791,6 +69839,9 @@ private:
             inspect_boundary_recovery_source(m_project_workspace->snapshot(), active->source) ==
                 BoundaryRecoverySourceStatus::current) {
             m_redefine_boundary_id = boundaryRecoveryTarget(*active, m_project_workspace->snapshot());
+            m_boundary_area_defaults = active->area_defaults;
+            if (active->area_defaults && active->area_defaults->staged_category)
+                m_auto_setup_classification = QString::fromStdString(*active->area_defaults->staged_category);
             if (active->auto_subtract_target_id)
                 m_boundary_subtract_target=QString::fromStdString(*active->auto_subtract_target_id);
             m_boundary_session = BoundaryAuthoringSession::from_recovery_checkpoint(active->checkpoint);
@@ -69819,6 +69870,11 @@ private:
             capture_boundary_recovery_source(*m_boundary_source, *m_boundary_context),
             m_boundary_session->recovery_checkpoint()};
         if (m_boundary_subtract_target) active.auto_subtract_target_id=m_boundary_subtract_target->toStdString();
+        if (!m_redefine_boundary_id && m_boundary_area_defaults) {
+            active.area_defaults = m_boundary_area_defaults;
+            if (m_auto_setup_classification)
+                active.area_defaults->staged_category = m_auto_setup_classification->toStdString();
+        }
         const auto previous = m_project_workspace->active_boundary();
         if (previous) {
             if (previous->checkpoint.identity_namespace != active.checkpoint.identity_namespace)
@@ -72158,11 +72214,17 @@ private:
             BoundaryCommitIntent intent{m_boundary_session->options(), m_boundary_session->accepted_chains(),
                 *m_boundary_context, commit_message.toStdString()};
             if (m_boundary_subtract_target) intent.auto_subtract_target_id=m_boundary_subtract_target->toStdString();
+            if (!m_redefine_boundary_id && m_boundary_area_defaults) {
+                intent.area_defaults = m_boundary_area_defaults;
+                if (m_auto_setup_classification)
+                    intent.area_defaults->staged_category = m_auto_setup_classification->toStdString();
+            }
             if (document_snapshot_digest(*m_boundary_source) != document_snapshot_digest(m_document->snapshot()))
                 throw std::invalid_argument("the document changed after boundary drawing started");
             const auto preview = preview_boundary_commit(authoringSnapshot(), intent);
             if (!preview.accepted()) throw std::invalid_argument(preview.diagnostics().empty()
                 ? "boundary commit was rejected" : preview.diagnostics().front());
+            const auto default_notes = preview.area_default_notes();
             QString committed_id;
             if (m_redefine_boundary_id.has_value()) {
                 if (m_boundary_session->accepted_chains().size() != 1)
@@ -72209,15 +72271,13 @@ private:
                 committed_id = QString::fromStdString(preview.created_boundary_ids().front());
                 created_ids = preview.created_boundary_ids();
             }
-            const auto area_property_id = m_boundary_context->property_id;
-            const auto staged_setup = std::exchange(m_auto_setup_classification, std::nullopt);
             m_selected_id = committed_id;
             clearPreview(false);
             m_tool = CanvasTool::select;
             syncToolControls();
             clearError();
             refresh();
-            if (!created_ids.empty()) recordAreaTypeDefaults(area_property_id, created_ids, staged_setup);
+            if (!created_ids.empty()) showAreaTypeDefaultNotes(default_notes);
         } catch (const std::exception& error) {
             setError(QStringLiteral("Finish boundary: %1").arg(QString::fromUtf8(error.what())));
         }
@@ -72225,7 +72285,7 @@ private:
 
     // While appraisal setup is pending, a chosen appraisal category is held
     // back and the area commits with the neutral measurement classification;
-    // recordAreaTypeDefaults applies the category with the setup.
+    // the sealed creation intent applies the category together with Setup.
     QString stagedAreaType(const DrawingContext& context, const QString& chosen, std::optional<QString>& staged) const {
         const auto category = parse_appraisal_category(chosen.toStdString());
         if (!category || *category == AppraisalAreaCategory::none ||
@@ -72234,147 +72294,18 @@ private:
         return QStringLiteral("measurement");
     }
 
-    // The explicit facts an area type implies for newly created areas, computed
-    // on snapshot (the committed document or a candidate that already holds
-    // the areas). When the property had no appraisal declarations and a type
-    // is staged, the residential appraisal setup is included. Defaults are
-    // flagged in appraisal_fact_defaults; declared facts are never
-    // overwritten; facts the type does not imply stay Undeclared.
-    struct AreaTypeDefaultChanges {
-        std::vector<EntityChange> changes;
-        bool set_up{};
-        QString defaulted_type;
-        QStringList kept;
-    };
-
-    AreaTypeDefaultChanges areaTypeDefaultChanges(const DocumentSnapshot& snapshot, const std::string& property_id,
-                                                  const std::vector<std::string>& created_ids,
-                                                  const std::optional<QString>& staged) const {
-        AreaTypeDefaultChanges result;
-        const auto stored_property = snapshot.entities().find(property_id);
-        if (stored_property == snapshot.entities().end() || stored_property->second.type != "property") return result;
-        std::map<std::string, Entity, std::less<>> changed;
-        const auto current = [&](const std::string& id) -> Entity& {
-            auto found = changed.find(id);
-            if (found == changed.end()) found = changed.emplace(id, snapshot.entities().at(id)).first;
-            return found->second;
-        };
-        const auto stage_category = [&] {
-            for (const auto& id : created_ids) {
-                if (!snapshot.entities().contains(id)) continue;
-                auto& boundary = current(id);
-                if (read_string(boundary.properties, "appraisal_category") ||
-                    read_string(boundary.properties, "classification").value_or("") != "measurement") continue;
-                boundary.properties["measurement_classification"] = "measurement";
-                boundary.properties["appraisal_category"] = staged->toStdString();
-            }
-        };
-        const auto active_property = propertyEntity();
-        if (staged && active_property && active_property->id == property_id && appraisalSetupPending(snapshot, property_id)) {
-            const json residential{{"policy_kind", "residential_declared"}, {"version", 1},
-                                   {"property_kind", "detached_single_family"}, {"measurement_basis", "exterior"}};
-            for (auto& change : calculationWorkflowChanges(snapshot, stored_property->second, "appraisal", residential, std::nullopt))
-                if (change.kind == EntityChangeKind::upsert) changed.insert_or_assign(change.entity.id, change.entity);
-            stage_category();
-            result.set_up = true;
-        }
-        if (staged && !result.set_up && calculation_workflow_name(stored_property->second.properties) == "appraisal")
-            stage_category();
-        const auto& property = changed.contains(property_id) ? changed.at(property_id) : stored_property->second;
-        if (calculation_workflow_name(property.properties) == "appraisal" && property.properties.contains("appraisal_policy")) {
-            const auto& policy = property.properties.at("appraisal_policy");
-            const bool ansi = policy.is_object() && policy.value("policy_kind", json()) == "ansi_z765_2021";
-            for (const auto& id : created_ids) {
-                if (!snapshot.entities().contains(id)) continue;
-                auto& boundary = current(id);
-                // Interactive commits may keep the chosen token in the
-                // shared classification field; read it as Appraisal does.
-                const auto category = area_classification_for_workflow(boundary.properties, "appraisal");
-                const auto defaults = category ? appraisal_classification_defaults(*category, ansi) : std::nullopt;
-                if (!defaults) continue;
-                auto facts = boundary.properties.value("appraisal_facts", json::object());
-                if (!facts.is_object()) continue;
-                json recorded = json::object();
-                for (const auto& [key, value] : defaults->area)
-                    if (!facts.contains(key)) { facts[key] = value; recorded[key] = value; }
-                if (!recorded.empty()) {
-                    boundary.properties["appraisal_facts"] = facts;
-                    boundary.properties["appraisal_fact_defaults"] = json{{"version", 1}, {"source", "classification"},
-                        {"classification", *category}, {"facts", recorded}};
-                    result.defaulted_type = QString::fromStdString(*category);
-                }
-                if (!defaults->grade && !defaults->grade_from_floor) continue;
-                const auto floor_id = read_string(boundary.properties, "floor_id");
-                if (!floor_id || !snapshot.entities().contains(*floor_id) || snapshot.entities().at(*floor_id).type != "floor") continue;
-                auto& floor = current(*floor_id);
-                auto level = floor.properties.value("appraisal_facts", json::object());
-                if (!level.is_object()) continue;
-                const auto floor_name = QString::fromStdString(read_string(floor.properties, "name").value_or("this floor"));
-                if (level.contains("grade")) {
-                    if (defaults->grade && level.at("grade").is_string() && level.at("grade").get<std::string>() != *defaults->grade)
-                        result.kept.push_back(QStringLiteral("%1 stays %2 grade").arg(floor_name,
-                            QString::fromStdString(level.at("grade").get<std::string>())));
-                    continue;
-                }
-                const auto declared_level = appraisal_declared_floor_level_grade(property, *floor_id);
-                if (defaults->grade && declared_level && *declared_level != *defaults->grade) {
-                    result.kept.push_back(QStringLiteral("%1 grade left undeclared: its reporting level is %2 grade")
-                        .arg(floor_name, QString::fromStdString(*declared_level)));
-                    continue;
-                }
-                const auto grade = defaults->grade ? *defaults->grade : declared_level.value_or("above");
-                level["grade"] = grade;
-                floor.properties["appraisal_facts"] = level;
-                floor.properties["appraisal_fact_defaults"] = json{{"version", 1}, {"source", "classification"},
-                    {"facts", {{"grade", grade}}}};
-            }
-        }
-        for (auto& [id, entity] : changed)
-            if (entity != snapshot.entities().at(id)) result.changes.push_back(EntityChange::upsert(entity));
-        if (result.changes.empty()) return result;
-        // Every recorded declaration must still read as a valid declaration.
-        for (const auto& id : created_ids) {
-            if (!changed.contains(id)) continue;
-            const auto& boundary = changed.at(id);
-            const auto floor_id = read_string(boundary.properties, "floor_id").value_or("");
-            const auto& floor = changed.contains(floor_id) ? changed.at(floor_id) : snapshot.entities().at(floor_id);
-            (void)read_appraisal_declarations(property.properties, floor.properties, boundary.properties);
-        }
-        return result;
-    }
-
     void showAreaTypeDefaultNotes(const AreaTypeDefaultChanges& defaults) {
         QStringList notes;
         if (defaults.set_up) notes.push_back(QStringLiteral("Appraisal set up with residential defaults · change in Appraisal setup"));
-        if (!defaults.defaulted_type.isEmpty()) {
-            QString label = defaults.defaulted_type;
+        if (defaults.defaulted_type) {
+            const auto type = QString::fromStdString(*defaults.defaulted_type);
+            QString label = type;
             for (const auto& choice : areaTypeChoices(builtin_appraisal_profile(), true, true, design::dark_theme()))
-                if (choice.key == defaults.defaulted_type) label = choice.label;
+                if (choice.key == type) label = choice.label;
             notes.push_back(QStringLiteral("%1 facts from classification · edit facts in Details").arg(label));
         }
-        notes.append(defaults.kept);
+        for (const auto& kept : defaults.kept_notes) notes.push_back(QString::fromStdString(kept));
         if (!notes.isEmpty()) owner->statusBar()->showMessage(notes.join(QStringLiteral(". ")), 12000);
-    }
-
-    // After an area is drawn, record the facts its area type implies (and the
-    // residential setup on a fresh property) as one undoable command after the
-    // area's own command.
-    void recordAreaTypeDefaults(const std::string& property_id, const std::vector<std::string>& created_ids,
-                                const std::optional<QString>& staged) {
-        try {
-            const auto snapshot = authoringSnapshot();
-            auto defaults = areaTypeDefaultChanges(snapshot, property_id, created_ids, staged);
-            if (defaults.changes.empty()) return;
-            ApplyEntityChanges command{snapshot.revision(), std::move(defaults.changes), {},
-                defaults.set_up ? "Set up appraisal and record area facts" : "Record area facts from area type"};
-            (void)Document::preview_command(snapshot, command);
-            if (!applyDocumentCommand(command)) throw std::invalid_argument(m_last_error.toStdString());
-            clearError();
-            refresh();
-            showAreaTypeDefaultNotes(defaults);
-        } catch (const std::exception& error) {
-            setError(QStringLiteral("Area created; its facts were not recorded: %1").arg(QString::fromUtf8(error.what())));
-        }
     }
 
     // An area measured from a closed wall loop is a Living area. Its type
@@ -72398,8 +72329,8 @@ private:
             const auto policy = property->second.properties.find("appraisal_policy");
             if (policy != property->second.properties.end() && policy->is_object() &&
                 policy->value("policy_kind", std::string{}) == "light_commercial_declared") return;
-            auto defaults = areaTypeDefaultChanges(candidate, property_id, {found->first},
-                                                   std::optional<QString>{QStringLiteral("above_grade_finished")});
+            auto defaults = boundary_area_default_changes(candidate, property_id, {found->first},
+                BoundaryAreaDefaultsIntent{1, std::string{"above_grade_finished"}});
             for (auto& change : defaults.changes) {
                 const auto existing = std::find_if(command.entity_changes.begin(), command.entity_changes.end(),
                     [&](const EntityChange& item) {
@@ -73215,6 +73146,8 @@ private:
         m_measurementCanvas->clearPreview();
         m_architecturalCanvas->clearPreview();
         m_boundary_session.reset();
+        m_boundary_area_defaults.reset();
+        m_auto_setup_classification.reset();
         m_boundary_dimension_choices.clear();
         m_boundary_dimension_choice_namespace.clear();
         ++m_pending_dimension_semantic_serial;
@@ -73542,7 +73475,7 @@ private:
             if (startup_only) recoveryDeferredThisSession() = true;
             return false;
         }
-        return openProject(selected_path);
+        return openProject(selected_path, ProjectOpenMode::recovery_resume);
     }
 
     // "Later" at startup holds for the rest of this application session.
@@ -79935,6 +79868,12 @@ private:
     std::optional<ModalContext> m_text_placement_context;
     std::unique_ptr<ProjectWorkspace> m_project_workspace;
     RecoveryLedger m_recovery_ledger;
+    std::string m_session_history_document_id;
+    std::vector<WorkspaceNavigationTarget> m_session_undo_prefix;
+    std::vector<WorkspaceNavigationTarget> m_session_inherited_redo;
+    mutable std::string m_session_legacy_navigation_document_id;
+    mutable std::optional<Revision> m_session_legacy_navigation_revision;
+    mutable WorkspaceNavigationState m_session_legacy_navigation;
     std::uint64_t m_saved_workspace_epoch{};
     std::uint64_t m_saved_edited_generation{};
     const std::string m_save_owner_token{make_stable_id()};
@@ -80301,9 +80240,9 @@ private:
     bool m_boundary_classification_chosen{false};
     // Area type chosen while the property still had no appraisal declarations.
     // The area commits with the neutral measurement classification; the
-    // residential setup, this appraisal category and its fact defaults follow
-    // as one command (see recordAreaTypeDefaults).
+    // residential setup, this category and its facts join the sealed Finish.
     std::optional<QString> m_auto_setup_classification;
+    std::optional<BoundaryAreaDefaultsIntent> m_boundary_area_defaults;
     AreaClassPalette* m_area_class_palette{};
     std::optional<QString> m_armed_area_class;
     std::weak_ptr<Document> m_area_class_document;

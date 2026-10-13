@@ -5,14 +5,65 @@ latest instruction; it does not restore per-turn builds or packages.
 The binding execution plan is [plan.md](plan.md). No production acceptance is
 claimed by this record.
 
-The latest steering is source implementation first: do not resume builds,
-tests, probes, native jobs, package generation or installations. Keep the
-installed candidate unchanged and implement the remaining behavior in the
-permanent checkout. Source inspection, scoped commits and remote backup remain
-part of delivery. This steering overrides the plan's build-after-batch cadence;
-changed source does not acquire runtime acceptance without later qualification.
+The October 13 handoff resumes build, test and live-app qualification in the
+permanent checkout. The installed candidate stays unchanged; packaging and
+installation are separate delivery steps. Source and automated evidence do not
+constitute user acceptance.
 
 ## Current delivery state
+
+### October 13 handoff and baseline consolidation
+
+`main` now contains Claude's pushed checkpoint `1df97f5e`. The delivery-reset,
+appraisal-workflow and architectural-authoring-surface branches contained no
+unique work after that fast-forward; their redundant local/remote refs were
+removed. Existing untracked user work was preserved.
+
+The Release desktop build passed. The full baseline suite passed 316 of 318
+active tests; the DXF and IFC workflow tests require the protected import runner.
+All six protected import fixtures, including those two, passed in a fresh
+job-free read-only runtime. The production acceptance gate remains disabled.
+The standard runner's parent process encounters a PowerShell MI native-DLL
+access error on this host; its existing independent-child checks were executed
+through a task-owned WMI launcher. Eight live smoke cases passed at 100%, 150%
+and 200% scaling; visual review found Library context-heading clipping and a
+startup-theme rendering discrepancy for follow-up.
+
+Regression checks reproduced the area chooser's second undo step, inherited
+Undo/Redo after ordinary open, and fixed dimension/area-label collisions.
+Area creation now seals geometry, classification defaults and residential
+declarations into one undoable command. Ordinary Open starts a session boundary
+while explicit Recover resumes saved navigation; persisted history is retained.
+Area choices use sentence case, and automatic area labels reserve visible fixed
+dimension ink in Plan and Site views. Library headings wrap, and Light selected
+before first show paints the sidebar correctly. The final eight native smoke
+cases passed at 100%, 150% and 200% scaling, with screenshots inspected in both
+workspaces. Theme and Plan/Site callout regression checks passed.
+
+The integrated Release desktop build passed. The full 320-test registration ran:
+302 of 319 active tests passed initially. Fifteen failures were obsolete
+post-Open history expectations; those fixtures now check unchanged UI refusal,
+independent exact saved-history replay and genuine new-session edits. All fifteen
+passed after rebuilding the affected programs. The remaining two DXF/IFC tests
+passed in the fresh protected runtime, as did its other four fixtures. Thus all
+319 active tests have passing evidence across the full run, affected reruns and
+protected import checks; the production acceptance gate remains disabled.
+Evidence is retained under `artifacts/codex-handoff-20261013/`, including
+`final-full-build.log`, `final-full-ctest.log`, `open-history-tests-ctest.log`,
+`redraw-history-ctest.log` and `protected-runtime-integrated/result.json`.
+
+Closed coordinated directional/mapped slab authority is implemented with exact
+source replay, catalog composition and a shared ordinary/copy dimension budget.
+Native reader260 protects retained resize commands; reader261 protects active
+and archived area-default intents. Unknown recovery dialects remain opaque.
+Independent review's wall/opening dimension-roster and aggregate opaque-recovery
+findings were corrected; the follow-up review found no required issues. Storage,
+reader downgrade, exact replay and shared resource-boundary regressions passed.
+Full mixed-family side-resize controls remain a separate scope item.
+
+The user reports no real Apex project files. No original Apex round-trip or
+physical device/caller compatibility is claimed. Repository fixtures support
+internal adapter checks; they cannot establish an undocumented Apex wire format.
 
 ### October 12 design system, audit and simplification
 

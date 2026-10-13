@@ -23,7 +23,7 @@ $addProcessArguments = {
     }) -join ' ')
 }
 if (!(Test-Path -LiteralPath $executable)) { throw 'Build the desktop application first.' }
-$python = (Get-Command python -CommandType Application -ErrorAction Stop).Source
+$python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 $outputDirectory = Join-Path $projectRoot "artifacts\desktop-smoke\$configName"
 New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
 $evidence = @()

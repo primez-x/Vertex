@@ -6,6 +6,7 @@
 #include "sketch/workspace_history_record.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
+#include "support/fresh_open_history.hpp"
 
 #include <QApplication>
 #include <QFont>
@@ -72,6 +73,21 @@ void capture(MainWindow& window, const QString& name) {
     const auto directory = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
     if (directory.isEmpty()) return;
     require(QDir().mkpath(directory) && window.grab().save(QDir(directory).filePath(name)), "full native history capture saves");
+}
+void post_open_stroke_history(MainWindow& window, PlanCanvas& canvas) {
+    const auto before = window.document().snapshot();
+    start(window, {8,8}); click(canvas, {10,8}); window.finishMeasurementLinework();
+    const auto after = window.document().snapshot();
+    require(after.revision() == before.revision()+1 && after.entities() != before.entities(),
+        "fresh session commits a genuine new measured edge");
+    key(canvas, Qt::Key_Z, Qt::ControlModifier);
+    require(window.document().snapshot().entities() == before.entities() &&
+        window.document().snapshot().assets() == before.assets() && !canvas.boundaryDraftPreview(),
+        "post-open Ctrl+Z restores exactly the opened document without reviving the finished pen");
+    key(canvas, Qt::Key_Y, Qt::ControlModifier);
+    require(window.document().snapshot().entities() == after.entities() &&
+        window.document().snapshot().assets() == after.assets() && !canvas.boundaryDraftPreview(),
+        "post-open Ctrl+Y restores exactly the new edge without reviving the finished pen");
 }
 void test_native_history_continuation() {
     MainWindow window; auto& canvas = prepare(window); start(window);
@@ -179,10 +195,13 @@ void test_finish_close_retrace_and_reopen() {
     QTemporaryDir directory; const auto path = directory.filePath(QStringLiteral("history.bldproj"));
     require(window.saveProjectAs(path) && window.openProject(path), "save and reopen stroke history");
     require(window.document().snapshot().entities() == closed.entities() && !canvas.boundaryDraftPreview(), "reopen restores exact geometry without active drawing");
-    require(window.undoCommand() && window.redoCommand() && !canvas.boundaryDraftPreview(), "reopened document history does not restart pen");
+    require(sketch::testing::saved_undo_redo(window,retraced,closed) && !canvas.boundaryDraftPreview(),
+        "saved closed-stroke history replays exact entities and assets independently without restarting the reopened pen");
+    post_open_stroke_history(window,canvas);
 }
 void test_save_active_stroke_and_reopen() {
     MainWindow window; auto& canvas = prepare(window); start(window, {0.125,-0.25});
+    const auto before = window.document().snapshot();
     require(window.appendMeasurementLineworkHeading(QStringLiteral("1.25 m"), QStringLiteral("0 deg")), "typed active save edge");
     const auto retained = window.document().snapshot();
     QTemporaryDir directory; const auto path = directory.filePath(QStringLiteral("active-stroke.bldproj"));
@@ -190,8 +209,9 @@ void test_save_active_stroke_and_reopen() {
     pen(canvas, {1.375,-0.25}, "saving preserves current active pen");
     require(window.openProject(path) && window.document().snapshot().entities() == retained.entities() &&
         !canvas.boundaryDraftPreview(), "active saved stroke reopens exactly without spontaneous drawing");
-    require(window.undoCommand() && window.redoCommand() && window.document().snapshot().entities() == retained.entities() &&
-        !canvas.boundaryDraftPreview(), "reopened active-stroke history stays ordinary document navigation");
+    require(sketch::testing::saved_undo_redo(window,before,retained) && !canvas.boundaryDraftPreview(),
+        "saved active-stroke history replays exact entities and assets independently while the reopened pen stays finished");
+    post_open_stroke_history(window,canvas);
 }
 void test_layer_workspace_and_phase_context() {
     MainWindow window; auto& canvas = prepare(window);

@@ -1,4 +1,5 @@
 #include "sketch/desktop/main_window.hpp"
+#include "support/fresh_open_history.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_integrity.hpp"
@@ -274,9 +275,8 @@ void test_area_move_and_history() {
     MainWindow reopened({}, nullptr, directory.filePath("reopened-library.json"));
     require(reopened.openProject(project) && reopened.document().is_editable() &&
             reopened.document().snapshot().entities() == after.entities(), "save/reopen must retain exact geometry, evidence and metadata");
-    require(reopened.undoCommand() && reopened.document().snapshot().entities() == before.entities() &&
-            reopened.redoCommand() && reopened.document().snapshot().entities() == after.entities(),
-        "persisted history must Undo/Redo BOTH owners atomically after ownership-safe reopen");
+    require(sketch::testing::saved_undo_redo(reopened, before, after),
+        "fresh session refuses inherited Undo/Redo while persisted history replays BOTH owners atomically independently");
 }
 
 void test_invalid_conflicting_and_stale_moves() {
@@ -573,9 +573,8 @@ void test_split_whole_wall_move_and_history(bool curved) {
     MainWindow reopened({}, nullptr, directory.filePath("reopened-split-library.json"));
     require(reopened.openProject(project) && reopened.document().is_editable() &&
             reopened.document().snapshot().entities() == after.entities(), "whole-wall membership and geometry must reopen exactly");
-    require(reopened.undoCommand() && reopened.document().snapshot().entities() == before.entities() &&
-            reopened.redoCommand() && reopened.document().snapshot().entities() == after.entities(),
-        "persisted history must retain the complete whole-wall move");
+    require(sketch::testing::saved_undo_redo(reopened, before, after),
+        "fresh session refuses inherited Undo/Redo while persisted history independently replays the complete whole-wall move");
 }
 } // namespace
 

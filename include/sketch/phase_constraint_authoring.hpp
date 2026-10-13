@@ -117,6 +117,14 @@ struct PhaseConstraintAuthoringIntent {
     // destinations together. The source-derived shared copied roster and one
     // final ordinary hosted contribution share the 1000-association budget;
     // final copied frames are independently verified against the original source.
+    // Dialect forty-six alone pairs direct inner ten, with inner four/five's
+    // family restrictions plus explicit directional/mapped slab geometry.
+    // It has the family body keys (no authoring wrapper), literal-true complete
+    // hosted dimensions, and optional completion flags matching actual children.
+    // Independent same-source replay authenticates units and changed hosts;
+    // disjoint directional catalog composition precedes one shared ordinary/
+    // clone dimension batch. At least two physical families must actually change.
+    // Historical coordinated dialects retain their exact geometry authority.
     nlohmann::json coordinated_replacements=nullptr;
     // Dialect nine: source-derived column/beam edits in one saved alternative.
     // Shared baseline owners remain exact; explicit structural intent alone
@@ -206,6 +214,7 @@ struct PhaseConstraintAuthoringIntent {
 // enclosing intent. Inner six/seven/eight/nine's exact closed, literal-true, nonnested
 // wrapper is checked before unwrapping once; historical bodies return unchanged.
 // Mutation callers must re-encode the enclosing intent to validate completion.
+// Direct inner ten returns unchanged after its own closed-shape/flag check.
 // This accessor grants no edit, replay, replacement or publication authority.
 [[nodiscard]] const nlohmann::json& phase_constraint_coordinated_authoring_body(
     const nlohmann::json& coordinated_replacements);
@@ -228,7 +237,8 @@ struct PhaseConstraintAuthoringIntent {
 [[nodiscard]] std::map<std::string,Entity,std::less<>> replay_phase_constraint_authoring(
     const std::map<std::string,Entity,std::less<>>& source, const nlohmann::json& proof);
 // Detached physical preview for coordinated authored inner v2/v3/v4/v5 wall
-// replacements, including the exclusive v6/v7/v8/v9 dimension wrappers when present.
+// replacements, including the exclusive v6/v7/v8/v9 dimension wrappers and
+// direct inner10 slab authority when present.
 // Pending room decisions remain pending; this map is not publication authority.
 [[nodiscard]] PhaseWallReplacementAuthoringPreview inspect_phase_coordinated_authoring(
     const DocumentSnapshot& source,const PhaseConstraintAuthoringIntent& intent);

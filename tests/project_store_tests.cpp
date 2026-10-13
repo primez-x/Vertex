@@ -359,8 +359,12 @@ void rewrite_logical_digest(const std::filesystem::path& path) {
 
     require(sqlite3_prepare_v2(
                 database,
-                "SELECT revision,asset_id,media_type,sha256,metadata_json,length(data) "
-                "FROM revision_assets ORDER BY revision,asset_id",
+                format >= 161
+                    ? "SELECT a.revision,a.asset_id,a.media_type,a.sha256,a.metadata_json,p.size "
+                      "FROM revision_assets a JOIN asset_payloads p ON p.sha256=a.payload_sha256 "
+                      "ORDER BY a.revision,a.asset_id"
+                    : "SELECT revision,asset_id,media_type,sha256,metadata_json,length(data) "
+                      "FROM revision_assets ORDER BY revision,asset_id",
                 -1, &statement, nullptr) == SQLITE_OK,
             "test should read assets for digest");
     while (sqlite3_step(statement) == SQLITE_ROW) {
@@ -3576,6 +3580,169 @@ void test_svg_palette_reader_floor() {
     require(ProjectStore::required_format_version(Document::create({vendor}).snapshot())==1,"vendor palette collision stays opaque");
 }
 
+void test_area_defaults_archive_reader_floor_and_future_algorithm() {
+    using namespace sketch;
+    TempDirectory temp;
+    for (int state = 0; state != 4; ++state) {
+        auto document = Document::create({entity("p", "property"),
+            entity("b", "building", {{"property_id", "p"}}),
+            entity("f", "floor", {{"building_id", "b"}}),
+            entity("l", "layer", {{"floor_id", "f"}})});
+        ProjectWorkspace workspace(document.snapshot());
+        BoundaryAuthoringSession session(BoundaryAuthoringMode::define_first);
+        session.set_classification("measurement");
+        (void)session.anchor({0, 0});
+        (void)session.add_line_to({4, 0});
+        (void)session.place_manual_dimension({2, -1});
+        (void)session.add_line_to({4, 3});
+        (void)session.place_manual_dimension({5, 1.5});
+        (void)session.add_line_to({0, 3});
+        (void)session.place_manual_dimension({2, 4});
+        (void)session.add_line_to({0, 0});
+        (void)session.place_manual_dimension({-1, 1.5});
+        (void)session.close_chain();
+        BoundaryActiveRecovery active{capture_boundary_recovery_source(workspace.snapshot(), {"p", "b", "f", "l"}),
+            session.recovery_checkpoint()};
+        active.area_defaults = BoundaryAreaDefaultsIntent{1, std::string{"above_grade_finished"}};
+        auto ticket = workspace.prepare_boundary_checkpoint(active); (void)workspace.commit(ticket);
+        if (state == 1) {
+            auto discard = workspace.prepare_discard_boundary(); (void)workspace.commit(discard);
+        } else if (state == 2) {
+            auto undo = workspace.prepare_undo(); (void)workspace.commit(undo);
+        } else if (state == 3) {
+            auto finish = workspace.prepare_finish_boundary(); (void)workspace.commit(finish);
+            auto undo = workspace.prepare_undo(); (void)workspace.commit(undo);
+        }
+        const auto capture = workspace.capture();
+        require(capture.active_boundary().has_value() == (state == 0),
+            "floor fixture distinguishes active input from retained inactive input");
+        require(capture.retired_boundaries().empty() == (state != 3),
+            "finished then undone fixture must retain retired input");
+        RecoveryLedger ledger{{"history", "workspace_history", encode_workspace_history_record(capture.document(),
+            capture_workspace_history_record(capture), capture.active_boundary())}};
+        if (capture.active_boundary()) ledger.push_back({"active", "boundary_active",
+            encode_boundary_active_recovery(*capture.active_boundary())});
+        const ProjectArchiveSnapshot source(capture.document(), ledger, ArchiveRole::ordinary);
+        require(ProjectStore::required_semantic_format_version(source) == 261,
+            "current, discarded, undone and retired v3 inputs require native261");
+        const auto path = temp.path / ("area-defaults-" + std::to_string(state) + ".bldproj");
+        (void)ProjectStore::save_archive(path, source);
+        sqlite3* database = nullptr;
+        require(sqlite3_open_v2(path.string().c_str(), &database, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK,
+            "open area defaults markers read-only");
+        const auto format = metadata_value(database, "format_version");
+        const auto pragma = sqlite_user_version(database);
+        sqlite3_close(database);
+        require(format == "261" && pragma == 261, "both native markers must declare defaults reader261");
+        const auto loaded = ProjectStore::load_archive(path, ArchiveRole::ordinary);
+        require(loaded.supported() && loaded.archive && loaded.archive->recovery().size() == ledger.size(),
+            "supported defaults archive must reopen");
+        for (const auto& expected : ledger) {
+            const auto& records = loaded.archive->recovery();
+            const auto actual = std::find_if(records.begin(), records.end(), [&](const auto& row) {
+                return row.record_id == expected.record_id;
+            });
+            require(actual != records.end() && actual->record_kind == expected.record_kind &&
+                actual->envelope == expected.envelope, "reopen preserves the whole defaults ledger exactly");
+        }
+        const auto extracted = temp.path / ("defaults-exchange-" + std::to_string(state));
+        extract_project_archive(*loaded.archive, extracted);
+        std::ifstream input(extracted / "project.json");
+        const auto manifest = nlohmann::json::parse(input);
+        require(manifest.at("exchange_version") == 259 && manifest.at("recovery_records").size() == ledger.size(),
+            "native261 defaults archives retain exchange259 and every recovery record");
+        for (const auto& expected : ledger) {
+            const auto& records = manifest.at("recovery_records");
+            const auto actual = std::find_if(records.begin(), records.end(), [&](const auto& row) {
+                return row.at("record_id") == expected.record_id;
+            });
+            require(actual != records.end() && actual->at("envelope") == expected.envelope,
+                "exchange259 retains defaults and archived input JSON exactly");
+        }
+
+        // Algorithm scanning precedes source interpretation, including nested historical inputs.
+        auto future = ledger;
+        bool mutated = false;
+        for (auto& row : future) {
+            if (state == 0 && row.record_kind == "boundary_active") {
+                row.envelope["area_defaults"]["version"] = 2;
+                row.envelope["source"] = nullptr;
+                mutated = true;
+            }
+            if (state != 0 && row.record_kind == "workspace_history") {
+                for (auto& event : row.envelope["events"]) {
+                    auto& value = event["input"];
+                    if (!value.is_object() || !value["value"].is_object()) continue;
+                    value["value"]["area_defaults"]["version"] = 2;
+                    value["value"]["source"] = nullptr;
+                    mutated = true;
+                }
+                // The future scan must also cover retired input values, even before
+                // interpreting the reference-only schema of today's retired rows.
+                if (state == 3) {
+                    row.envelope["retired"].front()["input"]["value"] = encode_boundary_active_recovery(active);
+                    row.envelope["retired"].front()["input"]["value"]["area_defaults"]["version"] = 2;
+                    row.envelope["retired"].front()["input"]["value"]["source"] = nullptr;
+                    // Keep owner events current to isolate the retired dialect scan.
+                    for (auto& event : row.envelope["events"]) {
+                        auto& value = event["input"];
+                        if (value.is_object() && value["value"].is_object())
+                            value["value"] = encode_boundary_active_recovery(active);
+                    }
+                }
+            }
+        }
+        require(mutated, "future algorithm fixture must actually change an input");
+        const auto decoded = decode_recovery_ledger(capture.document(), future, ArchiveRole::ordinary);
+        require(decoded.opaque() && !decoded.decoded && decoded.original_ledger &&
+            decoded.original_ledger->size() == future.size(),
+            "future defaults algorithm makes the entire ledger opaque before malformed source interpretation");
+        for (std::size_t i = 0; i < future.size(); ++i)
+            require(decoded.original_ledger->at(i).record_id == future[i].record_id &&
+                decoded.original_ledger->at(i).record_kind == future[i].record_kind &&
+                decoded.original_ledger->at(i).envelope == future[i].envelope,
+                "opaque algorithm preserves every known sibling and nested payload");
+
+        if (state == 0) {
+            const auto opaque_path = temp.path / "defaults-unknown-malformed.bldproj";
+            std::filesystem::copy_file(path, opaque_path);
+            execute_sql(opaque_path,
+                "UPDATE project_recovery_records SET envelope_json=json_set(envelope_json,'$.checkpoint.actions[0].kind','invalid-action') WHERE record_kind='boundary_active';"
+                "INSERT INTO project_recovery_records(record_id,record_kind,envelope_json) VALUES('unknown','future_kind','{\"version\":1,\"values\":[null,\"preserve-me\",1.5]}')");
+            rewrite_logical_digest(opaque_path);
+            const auto opaque_hash = ProjectStore::file_sha256(opaque_path);
+            auto expected_opaque = ledger;
+            for (auto& row : expected_opaque) if (row.record_kind == "boundary_active")
+                row.envelope["checkpoint"]["actions"][0]["kind"] = "invalid-action";
+            expected_opaque.push_back({"unknown", "future_kind",
+                {{"version", 1}, {"values", nlohmann::json::array({nullptr, "preserve-me", 1.5})}}});
+            const auto opaque = ProjectStore::load_archive(opaque_path, ArchiveRole::ordinary);
+            require(!opaque.supported() && !opaque.archive && opaque.recovery.opaque() &&
+                !opaque.recovery.decoded && opaque.recovery.original_ledger->size() == expected_opaque.size(),
+                "native261 unknown ledger remains wholly opaque despite malformed current defaults checkpoint");
+            for (const auto& expected : expected_opaque) {
+                const auto& records = *opaque.recovery.original_ledger;
+                const auto actual = std::find_if(records.begin(), records.end(), [&](const auto& row) {
+                    return row.record_id == expected.record_id;
+                });
+                require(actual != records.end() && actual->record_kind == expected.record_kind &&
+                    actual->envelope.dump() == expected.envelope.dump(),
+                    "opaque native261 load preserves every known and unknown record exactly");
+            }
+            require(ProjectStore::file_sha256(opaque_path) == opaque_hash,
+                "opaque native261 inspection preserves original file bytes");
+        }
+
+        execute_sql(path, "PRAGMA user_version=260; UPDATE metadata SET value='260' WHERE key='format_version'");
+        rewrite_logical_digest(path);
+        const auto downgraded_hash = ProjectStore::file_sha256(path);
+        require_error([&] { (void)ProjectStore::load_archive(path, ArchiveRole::ordinary); },
+            StorageErrorCode::unsupported_format, "checksum-valid native260 must refuse supported defaults input");
+        require(ProjectStore::file_sha256(path) == downgraded_hash,
+            "downgrade refusal preserves exact file bytes");
+    }
+}
+
 void test_styled_dimension_checkpoint_archive_roundtrip() {
     using namespace sketch;
     TempDirectory temporary;
@@ -4514,6 +4681,7 @@ int main() {
         test_translated_physical_source_native53_storage();
         test_native_room_topology_is_validated_on_restore();
         test_reviewed_physical_room_repair_floor_and_downgrade();
+        test_area_defaults_archive_reader_floor_and_future_algorithm();
         test_styled_dimension_checkpoint_archive_roundtrip();
         test_save_reopen_preserves_exact_revision_history_and_assets();
         test_save_rejects_reparse_parent_directory();

@@ -12,6 +12,7 @@ bool semantics(const BoundaryActiveRecovery& a, const BoundaryActiveRecovery& b)
     const auto& x = a.checkpoint;
     const auto& y = b.checkpoint;
     return a.source == b.source && a.extensions.dump() == b.extensions.dump() &&
+        a.auto_subtract_target_id == b.auto_subtract_target_id && a.area_defaults == b.area_defaults &&
         x.version == y.version && x.replay_version == y.replay_version && x.mode == y.mode &&
         x.identity_namespace == y.identity_namespace && x.options == y.options &&
         x.actions == y.actions && x.history_position == y.history_position &&

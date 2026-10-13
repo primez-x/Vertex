@@ -898,15 +898,14 @@ void test_keyboard_only_boundary_authoring() {
         const auto geometry=sketch::boundary_geometry(sketch::decode_identified_boundary_entity(owner));
         require(geometry.size()==4 && std::abs(std::abs(sketch::signed_area(geometry))-96*0.3048*0.3048)<1e-8,
             "keyboard-only rectangle must calculate exactly 96 square feet");
-        // The area is one command; the residential appraisal setup and the
-        // area's facts from its type follow as one more.
-        require(after.revision()==before.revision()+2,"keyboard boundary must publish the area, then its setup and facts");
+        require(after.revision()==before.revision()+1,
+            "keyboard boundary, residential setup and area facts must publish one revision");
         require(owner.properties.value("appraisal_category",std::string{})=="above_grade_finished" &&
             owner.properties.at("appraisal_facts").value("finish",std::string{})=="finished",
             "the chosen Living area must carry its category and facts");
-        require(window.undoCommand() && window.undoCommand() && window.document().snapshot().entities()==before.entities() &&
-            window.redoCommand() && window.redoCommand() && window.document().snapshot().entities()==after.entities(),
-            "keyboard commit and its facts must undo and redo");
+        require(window.undoCommand() && window.document().snapshot().entities()==before.entities() &&
+            window.redoCommand() && window.document().snapshot().entities()==after.entities(),
+            "one Undo and Redo must restore the complete keyboard area creation maps");
         QTemporaryDir directory; require(directory.isValid(),"keyboard fixture directory unavailable");
         const auto path=directory.filePath("keyboard-boundary.bldproj");
         require(window.saveProjectAs(path) && window.openProject(path) &&
@@ -1083,11 +1082,13 @@ void test_define_first_pending_dimension_keys_and_persistence() {
         require(count == 2, "suppressed dimensions must not render committed linework in either canvas");
     }
     const auto path = directory.filePath(QStringLiteral("pending-style-committed.bldproj"));
+    require(window.undoCommand() && window.redoCommand() &&
+                window.document().snapshot().entities() == committed.entities(),
+            "pending dimension style must survive document undo/redo in its creation session");
     require(window.saveProjectAs(path) && window.openProject(path) &&
                 window.document().snapshot().entities() == committed.entities() &&
-                window.undoCommand() && window.redoCommand() &&
-                window.document().snapshot().entities() == committed.entities(),
-            "pending dimension style must survive reopen and document undo/redo");
+                !window.undoCommand() && !window.redoCommand(),
+            "pending dimension style must survive reopen at the new session history floor");
 }
 
 void test_define_first_pending_space_gesture_and_context_guards() {
@@ -1734,11 +1735,13 @@ void test_receipt_boundary_offset_copy() {
         same_point(moved_proof->joint_translation->owner_transformations.front().transform.offset, {1, 2}) &&
         moved.entities().at(boundary_id) == source.entities().at(boundary_id),
         "in-place move must retain a typed history proof and preserve the other boundary");
+    require(window.undoCommand() && window.document().snapshot().entities() == copied.entities() &&
+        window.redoCommand() && window.document().snapshot().entities() == moved.entities(),
+        "translated receipts and dimensions must undo and redo exactly in the current session");
     require(window.saveProjectAs(path) && window.openProject(path) &&
         window.document().snapshot().entities() == moved.entities() &&
-        window.undoCommand() && window.document().snapshot().entities() == copied.entities() &&
-        window.redoCommand() && window.document().snapshot().entities() == moved.entities(),
-        "translated receipts and dimensions must save, reopen, undo, and redo exactly");
+        !window.undoCommand() && !window.redoCommand(),
+        "translated receipts and dimensions must reopen exactly at a new history floor");
     require(window.selectEntity(QString::fromStdString(boundary_id)) &&
         window.transformSelectedBoundary("90",true,false,"8 m","0",true),
         "receipt-backed copy must support rotation and reflection without rewriting measurements");
@@ -1763,10 +1766,14 @@ void test_receipt_boundary_offset_copy() {
     require(window.transformSelectedBoundary("0",false,false,"0","3 m",false),
         "a transformed receipt copy must support subsequent in-place offsets");
     const auto shifted_rotated = window.document().snapshot();
-    require(window.saveProjectAs(path) && window.openProject(path) &&
-        window.document().snapshot().entities() == shifted_rotated.entities() &&
-        window.undoCommand() && window.document().snapshot().entities() == rotated_state.entities(),
-        "composed receipt transforms must survive storage and undo exactly");
+    require(window.saveProjectAs(path), "save composed receipt transforms");
+    const auto stored_shifted = sketch::ProjectStore::load_archive(
+        std::filesystem::path(path.toStdWString()), sketch::ArchiveRole::ordinary);
+    require(stored_shifted.supported() &&
+        stored_shifted.archive->document().entities() == shifted_rotated.entities(),
+        "composed receipt transforms must survive storage exactly");
+    require(window.undoCommand() && window.document().snapshot().entities() == rotated_state.entities(),
+        "composed receipt transforms must undo exactly in their editing session");
     require(window.selectEntity(QString::fromStdString(boundary_id)) &&
         window.transformSelectedBoundary("90",true,false,"3 m","-1 m",false),
         "an original measured boundary must rotate and reflect in place");
@@ -1802,11 +1809,13 @@ void test_receipt_boundary_offset_copy() {
             "in-place rotation must transform dimension placement while retaining its identity and target");
     }
     require_both_canvas_labels(window,12);
+    require(window.undoCommand() && window.document().snapshot().entities() == rotated_state.entities() &&
+        window.redoCommand() && window.document().snapshot().entities() == in_place.entities(),
+        "in-place rotation and dimensions must undo and redo exactly in the editing session");
     require(window.saveProjectAs(path) && window.openProject(path) &&
         window.document().snapshot().entities() == in_place.entities() &&
-        window.undoCommand() && window.document().snapshot().entities() == rotated_state.entities() &&
-        window.redoCommand() && window.document().snapshot().entities() == in_place.entities(),
-        "in-place rotation and dimensions must save, reopen, undo and redo exactly");
+        !window.undoCommand() && !window.redoCommand(),
+        "in-place rotation and dimensions must reopen exactly at the new history floor");
 }
 
 void test_unified_pointer_clicks_to_draw_and_drags_to_pan() {
@@ -2356,12 +2365,10 @@ void test_define_first_enter_anchors_cursor_and_continues() {
                     "Enter-anchored measurements must preserve the exact quantity and original typed expression");
         }
         if (snap) capture_inline_widget(window, QStringLiteral("define-first-enter-completed.png"));
-        // The area is one command; the residential setup and the Living area
-        // facts recorded from its type follow as one more.
-        require(committed.revision() == original.revision() + 2 && window.undoCommand() && window.undoCommand() &&
+        require(committed.revision() == original.revision() + 1 && window.undoCommand() &&
                     window.document().snapshot().entities() == original.entities() && window.redoCommand() &&
-                    window.redoCommand() && window.document().snapshot().entities() == committed.entities(),
-                "Enter-anchored boundary and its area facts must commit, undo and redo");
+                    window.document().snapshot().entities() == committed.entities(),
+                "Enter-anchored boundary, setup and facts must commit, undo and redo in one command");
         QTemporaryDir directory;
         require(directory.isValid(), "Enter anchor persistence fixture needs a temporary directory");
         const auto path = directory.filePath(QStringLiteral("enter-anchored-boundary.bldproj"));
@@ -3104,14 +3111,16 @@ void test_dimension_presentation_editing() {
     require_both_canvas_labels(window,3);
     QTemporaryDir directory;
     const auto path = directory.filePath("styled-dimensions.bldproj");
-    require(directory.isValid() && window.saveProjectAs(path) && window.openProject(path) &&
-        window.document().snapshot().entities() == hidden.entities(), "dimension style and visibility must survive save/reopen");
-    require_both_canvas_labels(window,3);
     require(window.undoCommand() && window.document().snapshot().entities() == shown.entities(),
-        "visibility change must undo after reopening");
+        "visibility change must undo in its editing session");
     require_both_canvas_labels(window,4);
     require(window.redoCommand() && window.document().snapshot().entities() == hidden.entities(),
         "visibility change must redo exactly");
+    require(directory.isValid() && window.saveProjectAs(path) && window.openProject(path) &&
+        window.document().snapshot().entities() == hidden.entities() &&
+        !window.undoCommand() && !window.redoCommand(),
+        "dimension style and visibility must survive reopen at the new session floor");
+    require_both_canvas_labels(window,3);
     require(window.selectEntity(QString::fromStdString(original.boundary_id)) &&
         window.transformSelectedBoundary("90",false,true,"0","0",false),
         "styled dimensions must remain attached during a boundary transform");
@@ -3400,8 +3409,8 @@ void test_area_type_defaults_compute_gla_without_setup() {
                 "a new project starts without appraisal declarations");
         const auto living = draw_square_area(window, *drawing, {0, 0}, QStringLiteral("above_grade_finished"));
         const auto after = window.document().snapshot();
-        require(after.revision() == before.revision() + 2,
-                "the area is one command and its setup and facts are one more");
+        require(after.revision() == before.revision() + 1,
+                "area geometry, residential Setup and classification facts must be one revision");
         const auto& property = after.entities().at("property-1").properties;
         require(property.value("calculation_workflow", std::string{}) == "appraisal" &&
                     property.at("appraisal_policy") == nlohmann::json({{"policy_kind", "residential_declared"}, {"version", 1},
@@ -3427,9 +3436,31 @@ void test_area_type_defaults_compute_gla_without_setup() {
         require(report.configured && std::abs(category_square_metres(report, Category::above_grade_finished) - 4.0) < 1e-12,
                 "a drawn Living area must compute GLA with no Setup or Edit facts step");
 
+        require(window.undoCommand() && window.document().snapshot().entities() == before.entities(),
+                "one Undo must remove the first area, Setup and floor defaults together");
+        require(window.redoCommand() && window.document().snapshot().entities() == after.entities(),
+                "one Redo must restore the exact first-area geometry, Setup, facts and provenance");
+        QTemporaryDir directory;
+        require(directory.isValid(), "atomic area fixture directory");
+        const auto path = directory.filePath(QStringLiteral("atomic-area-facts.bldproj"));
+        require(window.saveProjectAs(path) && window.openProject(path) &&
+                    window.document().snapshot().entities() == after.entities() &&
+                    !window.undoCommand() && !window.redoCommand(),
+                "archived atomic Finish must validate and reopen with a new session floor");
+
         // A garage records non-GLA use; facts that cannot change its
         // category are declared Unknown rather than guessed.
+        const auto before_garage = window.document().snapshot();
         const auto garage = draw_square_area(window, *drawing, {3, 0}, {}, QStringLiteral("garage"));
+        const auto after_garage = window.document().snapshot();
+        require(after_garage.revision() == before_garage.revision() + 1 &&
+                    window.undoCommand() && window.document().snapshot().entities() == before_garage.entities() &&
+                    window.redoCommand() && window.document().snapshot().entities() == after_garage.entities(),
+                "one Undo and Redo must restore the exact garage creation maps in an opened workspace");
+        require(window.saveProject() && window.openProject(path) &&
+                    window.document().snapshot().entities() == after_garage.entities() &&
+                    !window.undoCommand() && !window.redoCommand(),
+                "garage Finish facts and provenance must survive lifecycle replay without restoring session Undo");
         require(facts_of(window, garage) == nlohmann::json({{"finish", "unknown"}, {"access", "unknown"},
                     {"ceiling_eligibility", "unknown"}, {"area_use", "garage"}, {"boundary_role", "measured_area"}}),
                 "Garage must record garage use and leave irrelevant facts Unknown");
@@ -3494,7 +3525,12 @@ void test_area_type_defaults_compute_gla_without_setup() {
                 "the user declares the floor below grade");
         require(!window.document().snapshot().entities().at("floor-1").properties.contains("appraisal_fact_defaults"),
                 "a changed floor grade is the user's own, not a default");
+        const auto before_living = window.document().snapshot();
         const auto living = draw_square_area(window, *drawing, {3, 0}, {}, QStringLiteral("above_grade_finished"));
+        const auto after_living = window.document().snapshot();
+        require(after_living.revision() == before_living.revision() + 1 &&
+                    after_living.entities().at(garage) == before_living.entities().at(garage),
+                "Living area creation must be one revision and preserve the existing garage exactly");
         require(facts_of(window, "floor-1") == nlohmann::json({{"grade", "below"}}) &&
                     facts_of(window, living).value("finish", std::string{}) == "finished",
                 "area type defaults must never overwrite a declared floor grade");
@@ -3504,6 +3540,9 @@ void test_area_type_defaults_compute_gla_without_setup() {
         require(std::abs(category_square_metres(report, Category::below_grade_finished) - 4.0) < 1e-12 &&
                     category_square_metres(report, Category::above_grade_finished) == 0.0,
                 "declared facts, not the area type, decide the category");
+        require(window.undoCommand() && window.document().snapshot().entities() == before_living.entities() &&
+                    window.redoCommand() && window.document().snapshot().entities() == after_living.entities(),
+                "one Undo and Redo must preserve the declared grade and existing garage while navigating Living area creation");
     }
 }
 

@@ -78,6 +78,10 @@ Json encode_boundary_active_recovery(const BoundaryActiveRecovery& value,
                                      const BoundaryAuthoringResourcePolicy& policy) {
     validate_source(value.source);
     if (!value.extensions.is_object()) invalid("extensions must be an object");
+    if (value.area_defaults) {
+        validate_boundary_area_defaults_intent(*value.area_defaults);
+        if (value.extensions.contains("desktop_operation")) invalid("redraw cannot contain creation defaults");
+    }
     if (value.auto_subtract_target_id) {
         identifier(*value.auto_subtract_target_id);
         if (value.auto_subtract_target_id->find('\0') != std::string::npos) invalid("target identifier contains NUL");
@@ -86,9 +90,14 @@ Json encode_boundary_active_recovery(const BoundaryActiveRecovery& value,
     // Preflight caller-owned extension trees before copying them into a record.
     detail::validate_authoring_recovery_json(value.extensions, policy);
     auto checkpoint = encode_boundary_authoring_recovery(value.checkpoint, policy);
-    Json result{{"version", value.auto_subtract_target_id ? 2 : 1}, {"replay_version", 1}, {"source", write_source(value.source)},
+    Json result{{"version", value.area_defaults ? 3 : value.auto_subtract_target_id ? 2 : 1}, {"replay_version", 1}, {"source", write_source(value.source)},
                 {"checkpoint", std::move(checkpoint)}, {"extensions", value.extensions}};
     if (value.auto_subtract_target_id) result["auto_subtract_target_id"] = *value.auto_subtract_target_id;
+    if (value.area_defaults) {
+        result["auto_subtract_target_id"] = value.auto_subtract_target_id ? Json(*value.auto_subtract_target_id) : Json(nullptr);
+        result["area_defaults"] = {{"version", value.area_defaults->version},
+            {"staged_category", value.area_defaults->staged_category ? Json(*value.area_defaults->staged_category) : Json(nullptr)}};
+    }
     detail::validate_authoring_recovery_json(result, policy);
     return result;
 }
@@ -100,10 +109,23 @@ BoundaryActiveRecoveryDecodeResult decode_boundary_active_recovery(
     if (!envelope.is_object()) invalid("envelope must be an object");
     const auto version = positive_version(envelope, "version");
     const auto replay_version = positive_version(envelope, "replay_version");
-    if ((version != 1 && version != 2) || replay_version != 1)
+    if ((version != 1 && version != 2 && version != 3) || replay_version != 1)
         return {std::nullopt, envelope, "unsupported boundary active recovery version or replay version"};
     if (version == 1) exact_keys(envelope, {"version", "replay_version", "source", "checkpoint", "extensions"});
-    else exact_keys(envelope, {"version", "replay_version", "source", "checkpoint", "extensions", "auto_subtract_target_id"});
+    else if (version == 2) exact_keys(envelope, {"version", "replay_version", "source", "checkpoint", "extensions", "auto_subtract_target_id"});
+    else exact_keys(envelope, {"version", "replay_version", "source", "checkpoint", "extensions", "auto_subtract_target_id", "area_defaults"});
+    std::optional<BoundaryAreaDefaultsIntent> defaults;
+    if (version == 3) {
+        const auto& payload = envelope.at("area_defaults");
+        const auto algorithm = positive_version(payload, "version");
+        if (algorithm != 1)
+            return {std::nullopt, envelope, "unsupported area defaults algorithm version"};
+        exact_keys(payload, {"version", "staged_category"});
+        defaults = BoundaryAreaDefaultsIntent{};
+        if (!payload.at("staged_category").is_null())
+            defaults->staged_category = string(payload.at("staged_category"));
+        validate_boundary_area_defaults_intent(*defaults);
+    }
     // A future checkpoint dialect makes the enclosing record wholly opaque.
     // Do not interpret provenance or produce a partially recovered record.
     auto checkpoint = decode_boundary_authoring_recovery(envelope.at("checkpoint"), policy);
@@ -112,14 +134,16 @@ BoundaryActiveRecoveryDecodeResult decode_boundary_active_recovery(
     auto source = read_source(envelope.at("source"));
     if (!envelope.at("extensions").is_object()) invalid("extensions must be an object");
     std::optional<std::string> target;
-    if (version == 2) {
+    if (version == 2 || (version == 3 && !envelope.at("auto_subtract_target_id").is_null())) {
         target = string(envelope.at("auto_subtract_target_id"));
         identifier(*target);
         if (target->find('\0') != std::string::npos) invalid("target identifier contains NUL");
         if (envelope.at("extensions").contains("desktop_operation")) invalid("redraw and Auto-Subtract cannot be combined");
     }
+    if (defaults && envelope.at("extensions").contains("desktop_operation"))
+        invalid("redraw cannot contain creation defaults");
     return {BoundaryActiveRecovery{std::move(source), std::move(*checkpoint.checkpoint),
-                                   envelope.at("extensions"), std::move(target)}, std::nullopt, {}};
+                                   envelope.at("extensions"), std::move(target), std::move(defaults)}, std::nullopt, {}};
 }
 
 }  // namespace sketch

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/boundary_authoring_recovery.hpp"
+#include "sketch/boundary_area_defaults.hpp"
 #include "sketch/boundary_recovery_source.hpp"
 
 #include <nlohmann/json.hpp>
@@ -16,6 +17,7 @@ struct BoundaryActiveRecovery {
     BoundaryAuthoringCheckpoint checkpoint;
     nlohmann::json extensions = nlohmann::json::object();
     std::optional<std::string> auto_subtract_target_id;
+    std::optional<BoundaryAreaDefaultsIntent> area_defaults;
     bool operator==(const BoundaryActiveRecovery&) const = default;
 };
 

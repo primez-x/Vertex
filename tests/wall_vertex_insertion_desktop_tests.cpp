@@ -1,4 +1,5 @@
 #include "sketch/desktop/main_window.hpp"
+#include "support/fresh_open_history.hpp"
 #include "sketch/document.hpp"
 #include "sketch/vertical_levels.hpp"
 #include "sketch/wall_measurement.hpp"
@@ -301,9 +302,8 @@ void splitting_a_measured_source_wall_preserves_current_receipt_and_persistence(
     require(reopened.entities() == after.entities() &&
                 wall_measurement_source_current(reopened, reopened.entities().at(owner_id.toStdString())),
             "save/reopen retains exact split entities and current measured provenance");
-    require(window.undoCommand() && window.document().snapshot().entities() == before.entities() &&
-                window.redoCommand() && window.document().snapshot().entities() == after.entities(),
-            "saved atomic split history remains undoable and redoable after reopen");
+    require(sketch::testing::saved_undo_redo(window, before, after),
+            "fresh session refuses inherited Undo/Redo while saved atomic split history replays independently");
 }
 
 } // namespace

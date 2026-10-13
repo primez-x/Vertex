@@ -125,8 +125,8 @@ void check_subtraction_schema() {
     rejected([&] { (void)decode_boundary_active_recovery(bad); });
     bad = wire; bad["version"] = 2.0;
     rejected([&] { (void)decode_boundary_active_recovery(bad); });
-    bad = wire; bad["version"] = 3;
-    require(decode_boundary_active_recovery(bad).opaque(), "future active v3 target must remain opaque");
+    bad = wire; bad["version"] = 4;
+    require(decode_boundary_active_recovery(bad).opaque(), "future active target must remain opaque");
     active.extensions["desktop_operation"] = {{"kind", "redefine_boundary"}};
     rejected([&] { (void)encode_boundary_active_recovery(active); });
 }
@@ -165,10 +165,51 @@ void check_opaque_and_budgets() {
     auto value = record(session); value.extensions["number"] = std::numeric_limits<double>::quiet_NaN();
     rejected([&] { (void)encode_boundary_active_recovery(value); });
 }
+void check_area_defaults_schema() {
+    for (const auto mode : {BoundaryAuthoringMode::draw_first, BoundaryAuthoringMode::define_first}) {
+        BoundaryAuthoringSession session(mode);
+        auto active = record(session);
+        require(!decode_boundary_active_recovery(encode_boundary_active_recovery(active)).active->area_defaults,
+            "legacy v1 retains absent creation defaults");
+        active.auto_subtract_target_id = "parent";
+        require(!decode_boundary_active_recovery(encode_boundary_active_recovery(active)).active->area_defaults,
+            "legacy v2 retains absent creation defaults");
+        active.area_defaults = BoundaryAreaDefaultsIntent{1, std::string{"garage"}};
+        const auto wire = encode_boundary_active_recovery(active);
+        require(wire.at("version") == 3 && *decode_boundary_active_recovery(wire).active == active,
+            "staged category and subtraction intent round trip in unfinished draft v3");
+        active.auto_subtract_target_id.reset();
+        active.area_defaults->staged_category.reset();
+        const auto unstaged = encode_boundary_active_recovery(active);
+        require(unstaged.at("auto_subtract_target_id").is_null() &&
+            *decode_boundary_active_recovery(unstaged).active == active,
+            "unstaged creation algorithm round trips without a subtraction target");
+        for (const Json category : {Json("none"), Json("arbitrary"), Json(4), Json(true), Json("")}) {
+            auto bad = wire; bad["area_defaults"]["staged_category"] = category;
+            rejected([&] { (void)decode_boundary_active_recovery(bad); });
+        }
+        for (const Json version : {Json(0), Json(-1), Json(1.0), Json(true)}) {
+            auto bad = wire; bad["area_defaults"]["version"] = version;
+            rejected([&] { (void)decode_boundary_active_recovery(bad); });
+        }
+        auto bad = wire; bad["area_defaults"]["changes"] = Json::array();
+        rejected([&] { (void)decode_boundary_active_recovery(bad); });
+        bad = wire; bad["area_defaults"].erase("staged_category");
+        rejected([&] { (void)decode_boundary_active_recovery(bad); });
+        bad = wire; bad["area_defaults"]["version"] = 2; bad["source"] = "future source";
+        const auto opaque = decode_boundary_active_recovery(bad);
+        require(opaque.opaque() && *opaque.original_envelope == bad,
+            "future defaults algorithm keeps the entire envelope opaque");
+        active.extensions["desktop_operation"] = {{"kind", "redefine"}};
+        rejected([&] { (void)encode_boundary_active_recovery(active); });
+        bad = unstaged; bad["extensions"]["desktop_operation"] = {{"kind", "redefine"}};
+        rejected([&] { (void)decode_boundary_active_recovery(bad); });
+    }
+}
 }
 int main() {
     sketch::testing::noninteractive_errors();
-    try { check_sessions(); check_schema(); check_subtraction_schema(); check_opaque_and_budgets(); }
+    try { check_sessions(); check_schema(); check_subtraction_schema(); check_opaque_and_budgets(); check_area_defaults_schema(); }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
     return 0;
 }

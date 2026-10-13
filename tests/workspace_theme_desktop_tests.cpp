@@ -108,6 +108,29 @@ QString label_for(const QToolButton* button) {
     return button->text().isEmpty() ? button->objectName() : button->text();
 }
 
+void test_theme_before_first_show_and_library_heading() {
+    desktop::MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.resize(1366, 768);
+    window.setWorkspaceTheme(WorkspaceTheme::dark);
+    window.setWorkspaceTheme(WorkspaceTheme::light);
+    window.setWorkspace(desktop::Workspace::architectural);
+    window.show();
+    QApplication::processEvents();
+    auto* navigator = window.findChild<QWidget*>(QStringLiteral("navigatorPanel"));
+    auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("sidebarTabs"));
+    auto* heading = window.findChild<QLabel*>(QStringLiteral("componentLibraryHeading"));
+    require(navigator && tabs && heading, "startup theme and library controls exist");
+    const auto image = window.grab(QRect(navigator->mapTo(&window, QPoint()), navigator->size())).toImage();
+    require(image.pixelColor(qRound(5*image.devicePixelRatio()), qRound(20*image.devicePixelRatio())) == design::light_theme().surface_1,
+        "theme selected before first show paints the sidebar with the light surface token");
+    tabs->setCurrentIndex(1);
+    QApplication::processEvents();
+    const auto text_bounds = heading->fontMetrics().boundingRect(heading->contentsRect(),
+        Qt::AlignLeft | Qt::AlignVCenter | (heading->wordWrap() ? Qt::TextWordWrap : 0), heading->text());
+    require(heading->contentsRect().contains(text_bounds), "architectural Library context heading fits without clipping");
+}
+
 void test_runtime_theme_switching(const QString& captures) {
     desktop::MainWindow window;
     window.setAttribute(Qt::WA_DontShowOnScreen);
@@ -150,6 +173,14 @@ void test_runtime_theme_switching(const QString& captures) {
         const auto expected_ink = theme == WorkspaceTheme::high_contrast ? QColor(Qt::white) : tokens.ink;
         require(window.palette().color(QPalette::ButtonText) == expected_ink,
                 std::string("window palette must carry the ") + theme_name(theme) + " ink token");
+        auto* navigator = window.findChild<QWidget*>(QStringLiteral("navigatorPanel"));
+        require(navigator != nullptr, "the themed navigator exists");
+        const auto panel_image = window.grab(QRect(navigator->mapTo(&window, QPoint()), navigator->size())).toImage();
+        const auto expected_panel = theme == WorkspaceTheme::high_contrast ? QColor(Qt::black) : tokens.surface_1;
+        const auto panel_pixel = panel_image.pixelColor(qRound(5*panel_image.devicePixelRatio()),
+            qRound(20*panel_image.devicePixelRatio()));
+        require(panel_pixel == expected_panel,
+            std::string("rendered sidebar padding follows ") + theme_name(theme) + ": " + panel_pixel.name().toStdString());
 
         // Theme menu marks the theme in effect.
         for (const auto& [id, value] : {std::pair{"themeLight", WorkspaceTheme::light},
@@ -366,6 +397,7 @@ int main(int argc, char** argv) {
         }
         const auto captures = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
         if (!captures.isEmpty()) require(QDir().mkpath(captures), "capture directory");
+        test_theme_before_first_show_and_library_heading();
         test_runtime_theme_switching(captures);
         test_dialog_verb_is_default();
         test_theme_choice_persists();

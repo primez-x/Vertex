@@ -8,6 +8,7 @@
 #include "sketch/wall_measurement.hpp"
 #include "sketch/geometry_operations.hpp"
 #include "support/noninteractive_errors.hpp"
+#include "support/fresh_open_history.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 
 #include <QAction>
@@ -286,14 +287,14 @@ void boundary_point_removal_workflow() {
     MainWindow reopened({},nullptr,directory.filePath(QStringLiteral("other-library.json")));
     require(reopened.openProject(path) && reopened.document().is_editable() && reopened.document().snapshot().entities()==changed.entities(),
         "point removal must reopen with exact entities");
-    require(reopened.undoCommand() && reopened.document().snapshot().entities()==original.entities(),
-        "reopened history must restore removed point");
-    require(reopened.selectEntity(id),"reselect restored boundary");
+    require(sketch::testing::saved_undo_redo(reopened,original,changed),
+        "saved history must restore and remove the point independently of the fresh UI session");
+    require(reopened.selectEntity(id),"reselect reopened triangle");
     const auto restored=reopened.document().snapshot();
     require(!reopened.removeSelectedBoundaryVertex(QStringLiteral("missing")) &&
         reopened.document().snapshot().entities()==restored.entities(),"unknown point must refuse unchanged");
 
-    require(reopened.redoCommand() && reopened.selectEntity(id),"restore triangle for invalid removal");
+    require(reopened.selectEntity(id),"select reopened triangle for invalid removal");
     const auto triangle=reopened.document().snapshot();
     auto& reopened_action=child<QAction>(reopened,"removeBoundaryVertex");
     modal_interaction(reopened,"boundaryVertexRemovalDialog",[&]{reopened_action.trigger();},[&](QDialog& dialog){
@@ -569,10 +570,8 @@ void exact_vertex_editor(bool metric) {
     require(reopened.openProject(project) && reopened.document().is_editable() &&
         reopened.document().snapshot().entities()==after.entities(),
         "exact coordinates and dependencies must survive persisted reopening with editable ownership");
-    require(reopened.undoCommand() && reopened.document().snapshot().entities()==before.entities(),
-        "one restored Undo must atomically restore exact corner and all related owners");
-    require(reopened.redoCommand() && reopened.document().snapshot().entities()==after.entities(),
-        "one restored Redo must atomically restore persisted exact corner and all related owners");
+    require(sketch::testing::saved_undo_redo(reopened,before,after),
+        "saved history must atomically restore exact corner and all related owners independently");
 }
 
 void source_corner_editor(bool metric) {
@@ -671,7 +670,7 @@ void source_corner_editor(bool metric) {
     MainWindow reopened({},nullptr,directory.filePath("other-text-library.json"));
     require(reopened.openProject(project) && reopened.document().is_editable() && reopened.document().snapshot().entities()==after.entities(),
         "source proof and physical correspondence survive editable reopen");
-    require(reopened.undoCommand() && reopened.document().snapshot().entities()==before.entities(),"restored source corner Undo is atomic");
+    require(sketch::testing::saved_undo_redo(reopened,before,after),"saved source corner Undo/Redo is atomic independently of the fresh UI session");
     reopened.setAttribute(Qt::WA_DontShowOnScreen);reopened.resize(1100,780);reopened.show();
     reopened.setWorkspace(sketch::desktop::Workspace::measurement);
     require(reopened.selectEntity(area),"select restored sourced exterior for actual handle drag");
@@ -685,6 +684,15 @@ void source_corner_editor(bool metric) {
       require(reopened.selectEntity(area),"retain measured owner after initial window focus settles");
       canvas->setSnapEnabled(false);
       const auto drag_before=reopened.document().snapshot();
+    const auto persisted=sketch::decode_identified_boundary_entity(drag_before.entities().at(area.toStdString()));
+    const auto drag_start=persisted.segments.front().segment.start;
+    const sketch::Vec2 drag_target{drag_start.x+0.25,drag_start.y-0.125};
+    auto drag_intent=intent;
+    drag_intent.boundary_vertex_move->edit.target_position=drag_target;
+    const auto drag_preview=sketch::preview_constraint_authoring(drag_before,drag_intent);
+    require(drag_preview.accepted(),"persisted source corner admits a genuine new nonzero drag");
+    const auto drag_candidate=sketch::preview_constraint_authoring_snapshot(drag_before,drag_preview);
+    const auto expected_drag_report=sketch::build_appraisal_document_report(drag_candidate,property);
     const auto mouse=[&](QEvent::Type type,sketch::Vec2 world) {
         const auto center=QRectF(canvas->rect()).center();const auto view=canvas->viewCenter();
         const QPointF pixel{center.x()+(world.x-view.x)*canvas->viewScale(),center.y()-(world.y-view.y)*canvas->viewScale()};
@@ -693,7 +701,7 @@ void source_corner_editor(bool metric) {
             type==QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,Qt::NoModifier);
         QApplication::sendEvent(canvas,&event);
     };
-    mouse(QEvent::MouseButtonPress,point);mouse(QEvent::MouseMove,target);
+    mouse(QEvent::MouseButtonPress,drag_start);mouse(QEvent::MouseMove,drag_target);
     auto* poll=reopened.findChild<QTimer*>("boundaryVertexPreviewPoll");
     require(poll && poll->isActive(),"actual source corner drag requests deferred preview");
     QEventLoop loop;QTimer observe,deadline;observe.setInterval(10);deadline.setSingleShot(true);
@@ -716,7 +724,7 @@ void source_corner_editor(bool metric) {
         std::any_of(projected.begin(),projected.end(),[&](const auto& value){return walls.contains(value.id);}),
         "actual source drag previews both measured exterior and physical walls");
     capture(*canvas,QStringLiteral("source-corner-drag-%1.png").arg(metric ? "metric" : "imperial"));
-      mouse(QEvent::MouseButtonRelease,target);
+      mouse(QEvent::MouseButtonRelease,drag_target);
       const auto dragged=reopened.document().snapshot();
       if (!reopened.lastError().isEmpty() || dragged.revision()!=drag_before.revision()+1) {
           std::cerr << "source drag release: revision=" << dragged.revision()
@@ -736,9 +744,13 @@ void source_corner_editor(bool metric) {
             }),"source corner release matches every previewed physical and measured object");
     }
     const auto dragged_report=sketch::build_appraisal_document_report(dragged,property);
-    require(dragged_report.qualified && dragged_report.calculation &&
-        dragged_report.calculation->property.gla().total.display.text==proposed_report.calculation->property.gla().total.display.text,
+    require(dragged_report.qualified && dragged_report.calculation && expected_drag_report.qualified && expected_drag_report.calculation &&
+        dragged_report.calculation->property.gla().total.display.text==expected_drag_report.calculation->property.gla().total.display.text,
         "actual canvas edit updates GLA consistently with numeric exterior correction");
+    require(reopened.undoCommand() && reopened.document().snapshot().entities()==drag_before.entities() &&
+        reopened.document().snapshot().assets()==drag_before.assets() && reopened.redoCommand() &&
+        reopened.document().snapshot().entities()==dragged.entities() && reopened.document().snapshot().assets()==dragged.assets(),
+        "fresh UI history navigates only the new coordinated source-corner drag atomically");
 }
 
 void exact_vertex_refuses_locked_and_stale_context() {

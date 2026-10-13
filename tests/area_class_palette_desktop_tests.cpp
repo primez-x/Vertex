@@ -330,11 +330,12 @@ void named_area_types() {
     auto& rows = child<QListWidget>(window,"areaClassTargets");
     auto& canvas = *dynamic_cast<PlanCanvas*>(&child<QWidget>(window,"measurementPlanCanvas"));
     canvas.setOverviewMapEnabled(false); canvas.fitView();
-    const QStringList expected_labels{"First Floor","Second Floor","Third Floor","Fourth Floor","Gross Building Area",
-        "Finished Basement","Unfinished Basement","Garage","Detached Garage","Accessory Dwelling / ADU",
-        "Shed / Outbuilding","Carport","Porch","Patio","Wood Deck","Balcony","Storage",
-        "Low Ceiling / Non-GLA","Open to Below","Non-Calculated Area","Subject Site"};
+    const QStringList expected_labels{"First floor","Second floor","Third floor","Fourth floor","Gross building area",
+        "Finished basement","Unfinished basement","Garage","Detached garage","Accessory dwelling / ADU",
+        "Shed / outbuilding","Carport","Porch","Patio","Wood deck","Balcony","Storage",
+        "Low ceiling / non-GLA","Open to below","Non-calculated area","Subject site","Clear class"};
     for (const auto& label : expected_labels) require(classes.findItems(label,Qt::MatchFixedString).size()==1,"named type appears once in a new measurement project");
+    require(area_type_presets.back().label=="Undefined / clear","shared clear preset uses sentence case");
     require(classItem(classes,{}),"measurement clear choice is available");
     const auto initial = window.document().snapshot();
     for (const auto& preset : area_type_presets) {
@@ -393,7 +394,7 @@ void named_area_types() {
     }
     require(!drop(canvas,pixel(canvas,{1,1}),QStringLiteral("area-type:UNKNOWN")),"unknown preset refuses");
     require(drop(canvas,pixel(canvas,{1,1}),QStringLiteral("area-type:BSMT-F")),"retained type fixture applies");
-    auto* row=areaRow(rows,area); require(row && row->text().contains("Finished Basement") && row->text().contains("Unqualified"),"type label and qualification both visible");
+    auto* row=areaRow(rows,area); require(row && row->text().contains("Finished basement") && row->text().contains("Unqualified"),"type label and qualification both visible");
     child<QTabWidget>(window,"sidebarTabs").setCurrentIndex(1); child<QTabWidget>(window,"libraryPages").setCurrentIndex(1);
     capture(window,"area-types-appraisal.png");
     const auto retained=window.document().snapshot(); const auto path=files.filePath("types.bldproj");

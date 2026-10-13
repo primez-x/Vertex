@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/boundary_authoring_session.hpp"
+#include "sketch/boundary_area_defaults.hpp"
 #include "sketch/document.hpp"
 #include "sketch/project_organization.hpp"
 
@@ -22,6 +23,7 @@ struct BoundaryCommitIntent {
     DrawingContext context;
     std::string message{"Commit boundary authoring"};
     std::optional<std::string> auto_subtract_target_id;
+    std::optional<BoundaryAreaDefaultsIntent> area_defaults;
 };
 
 // A preview is a sealed, copyable display value. Its public candidate map and
@@ -43,6 +45,7 @@ public:
     candidate_entities() const noexcept;
     [[nodiscard]] const std::vector<std::string>& created_boundary_ids() const noexcept;
     [[nodiscard]] const std::vector<std::string>& diagnostics() const noexcept;
+    [[nodiscard]] const AreaTypeDefaultChanges& area_default_notes() const noexcept;
 
 private:
     BoundaryCommitPreview() = default;
@@ -57,6 +60,7 @@ private:
     std::vector<std::string> created_boundary_ids_;
     std::vector<std::string> diagnostics_;
     BoundaryCommitIntent normalized_intent_;
+    AreaTypeDefaultChanges area_default_notes_;
 
     friend BoundaryCommitPreview preview_boundary_commit(
         const DocumentSnapshot&, const BoundaryCommitIntent&);

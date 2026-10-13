@@ -6,6 +6,7 @@
 #include "../src/desktop/plan_canvas.hpp"
 
 #include <QApplication>
+#include <QAction>
 #include <QComboBox>
 #include <QDir>
 #include <QFontDatabase>
@@ -70,6 +71,132 @@ void name_area(MainWindow& window,const QString& id,const char* name) {
     entity.properties["name"]=name;
     window.document().apply(ApplyEntityChanges{source.revision(),{EntityChange::upsert(entity)}, {},"Name test area"});
     require(window.selectEntity(id),"select named native area");
+}
+
+CanvasLabel dimension_label(PlanCanvas& drawing,const QString& id) {
+    for (const auto& label:drawing.labels()) if (label.id==id) return label;
+    throw std::runtime_error("Expected fixed dimension label missing");
+}
+QRectF output_label_bounds(const CanvasLabel& label,QFont font) {
+    PlanCanvas output;output.setFont(font);output.setLabels({label});
+    const auto recording=output.recordSketchContent(80.0);
+    require(recording.has_value(),"actual vector output records the retained label");
+    return recording->ink_bounds.translated(recording->model_center.x*80.0,
+        -recording->model_center.y*80.0);
+}
+void fixed_dimensions_are_area_label_obstacles() {
+    for (const auto angle : {QStringLiteral("0"),QStringLiteral("45")}) {
+        QTemporaryDir files;require(files.isValid(),"label collision fixture has isolated storage");
+        MainWindow window({},nullptr,files.filePath("collision-text.json"));display(window);
+        const auto area=window.createBoundary(square(),"living");
+        require(!area.isEmpty() && window.selectEntity(area),"collision fixture creates actual area");
+        name_area(window,area,"Authored Room / ADU");
+        const auto unobstructed=labels(canvas(window),area);
+        require(unobstructed.size()==1,"fixture starts with one automatic combined area label");
+        const auto anchor=unobstructed.front().position;
+        const auto owner=decode_identified_boundary_entity(window.document().snapshot().entities().at(area.toStdString()));
+        const auto dimension=window.createLengthDimension(area,
+            QString::fromStdString(owner.segments.front().segment_id),anchor);
+        require(!dimension.isEmpty() && window.editBoundaryDimension(dimension,
+            QString::number(anchor.x,'g',17)+" m",QString::number(anchor.y,'g',17)+" m",
+            "4.2","#713ba2",true,false,true,angle),"fixed dimension text occupies area centroid");
+        const auto source=window.document().snapshot();
+        require(window.selectEntity(area),"refresh projection without changing document");
+        QApplication::processEvents();
+        auto& drawing=canvas(window);
+        const auto fixed=dimension_label(drawing,dimension);
+        const auto automatic=labels(drawing,area);
+        require(automatic.size()==1 && automatic.front().text.contains("Authored Room / ADU"),
+            "authored area name retains its original spelling and acronyms");
+        require(fixed.position.x==anchor.x && fixed.position.y==anchor.y && !fixed.automatic_linear_placement,
+            "collision avoidance keeps authored dimension placement exact");
+        const auto area_bounds=drawing.labelScreenBounds({area,{},automatic.front().selection_type});
+        const auto dimension_bounds=drawing.labelScreenBounds({dimension,{},fixed.selection_type});
+        require(area_bounds && dimension_bounds && !area_bounds->intersects(*dimension_bounds),
+            "automatic area text avoids the painted fixed dimension including rotation");
+        require(!output_label_bounds(automatic.front(),drawing.font()).intersects(output_label_bounds(fixed,drawing.font())),
+            "committed vector output retains separated area and dimension ink");
+        require(window.document().snapshot().entities()==source.entities() && window.document().revision()==source.revision(),
+            "derived placement preserves exact geometry, dimension state and history");
+        require(window.editBoundaryDimension(dimension,QString::number(anchor.x,'g',17)+" m",
+            QString::number(anchor.y,'g',17)+" m","4.2","#713ba2",true,false,false,angle),
+            "hide the fixed dimension through its public presentation API");
+        require(window.selectEntity(area),"refresh hidden dimension projection");
+        const auto hidden=window.document().snapshot();
+        const auto restored=labels(drawing,area);
+        require(restored.size()==1 && restored.front().position.x==anchor.x && restored.front().position.y==anchor.y,
+            "hidden dimension does not reserve an invisible area-label obstacle");
+        require(window.document().snapshot().entities()==hidden.entities(),"hidden-label projection is presentation only");
+        require(window.undoCommand() && window.selectEntity(area) && window.setSelectedPlanLabelPosition(anchor),
+            "explicit manual area placement can overlap the restored dimension");
+        const auto manual=window.document().snapshot();
+        require(window.selectEntity(area),"refresh manual area placement");
+        const auto pinned=labels(drawing,area);
+        require(pinned.size()==1 && pinned.front().plan_label_offset &&
+            pinned.front().position.x==anchor.x && pinned.front().position.y==anchor.y &&
+            dimension_label(drawing,dimension).position.x==anchor.x && dimension_label(drawing,dimension).position.y==anchor.y,
+            "manual area and fixed dimension anchors both remain authored even when overlapping");
+        require(window.document().snapshot().entities()==manual.entities() && window.document().revision()==manual.revision(),
+            "manual placement refresh changes no document geometry or dimension state");
+    }
+}
+
+void site_fixed_dimensions_in_other_frames_are_area_label_obstacles() {
+    // Omitting fixed dimensions from the Site obstacle index, or comparing
+    // their untransformed source coordinates, must leave this ink overlapping.
+    for (const auto frame_rotation : {0.0,std::numbers::pi/2})
+    for (const auto angle : {QStringLiteral("0"),QStringLiteral("45")}) {
+        QTemporaryDir files;require(files.isValid(),"Site label fixture has isolated storage");
+        MainWindow window({},nullptr,files.filePath("site-collision-text.json"));display(window);
+        const auto area=window.createBoundary(square(),"living");
+        require(!area.isEmpty() && window.selectEntity(area),"Site fixture creates area owner");
+        name_area(window,area,"Authored Room / ADU");
+        const auto building=window.createBuilding("property-1","Dimension building");
+        const auto floor=window.createFloor(building,"Ground");
+        const auto layer=window.createLayer(floor,"Dimensions");
+        require(window.setActiveLayer(layer),"dimension uses a separate Site source frame");
+        auto remote=square();
+        for (auto& edge:remote) {edge.start.x+=20;edge.end.x+=20;}
+        const auto measured=window.createBoundary(remote,"living");
+        require(!measured.isEmpty(),"Site dimension has its own analytical owner");
+        const auto owner=decode_identified_boundary_entity(window.document().snapshot().entities().at(measured.toStdString()));
+        const auto dimension=window.createLengthDimension(measured,
+            QString::fromStdString(owner.segments.front().segment_id),{22,2});
+        require(!dimension.isEmpty() && window.editBoundaryDimension(dimension,"22 m","2 m",
+            "4.2","#713ba2",true,false,true,angle),"remote fixed dimension has authored typography");
+        auto source=window.document().snapshot();auto placed=source.entities().at(building.toStdString());
+        const auto frame_offset=frame_rotation==0.0 ? Vec2{-20,0} : Vec2{4,-20};
+        placed.properties["site_placement"]={{"version",1},
+            {"translation_m",{frame_offset.x,frame_offset.y,0}},{"rotation_radians",frame_rotation}};
+        auto framed=source.entities().at(measured.toStdString());
+        framed.properties["presentation_frame"]={{"version",1},{"mode","building"}};
+        window.document().apply(ApplyEntityChanges{source.revision(),
+            {EntityChange::upsert(placed),EntityChange::upsert(framed)}, {},"Place Site dimension frame"});
+        require(window.selectEntity(measured) && window.setSelectedPlanLabelPosition({25,7}),
+            "remote area callout is pinned away from the fixed dimension");
+        require(window.setActiveLayer("layer-1"),"return to visible area source layer");
+        window.setWorkspace(Workspace::architectural);control<QAction>(window,"sitePlan").trigger();
+        require(window.selectEntity(area),"publish actual Site area and dimension");
+        QApplication::processEvents();
+        auto& drawing=canvas(window,"architecturalPlanCanvas");
+        const auto automatic=labels(drawing,area);const auto fixed=dimension_label(drawing,dimension);
+        require(automatic.size()==1 && std::abs(fixed.position.x-2)<1e-9 && std::abs(fixed.position.y-2)<1e-9,
+            "Site presents the remote fixed dimension at the local area centroid");
+        const auto area_bounds=drawing.labelScreenBounds({area,{},automatic.front().selection_type});
+        const auto fixed_bounds=drawing.labelScreenBounds({dimension,{},fixed.selection_type});
+        require(area_bounds && fixed_bounds && !area_bounds->intersects(*fixed_bounds),
+            "Site automatic area text avoids fixed dimension ink from another frame");
+        require(!output_label_bounds(automatic.front(),drawing.font()).intersects(output_label_bounds(fixed,drawing.font())),
+            "Site vector output separates fixed dimension and area ink");
+        const auto shown=window.document().snapshot();
+        require(window.selectEntity(area) && window.document().snapshot().entities()==shown.entities() &&
+            window.document().revision()==shown.revision(),"Site layout preserves exact authored source and history");
+        require(window.editBoundaryDimension(dimension,"22 m","2 m","4.2","#713ba2",true,false,false,angle) &&
+            window.selectEntity(area),"hide remote fixed dimension through its public presentation API");
+        const auto restored=labels(drawing,area);
+        require(restored.size()==1 && restored.front().position.x==2 && restored.front().position.y==2,
+            "hidden remote dimension reserves no Site obstacle");
+    }
 }
 
 void independent_live_callouts_and_reopen() {
@@ -296,6 +423,7 @@ int main(int argc,char** argv) {
     try {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"))>=0,"bundled font loads for actual native captures");
         app.setFont(QFont(QStringLiteral("Inter"),10));
+        fixed_dimensions_are_area_label_obstacles();site_fixed_dimensions_in_other_frames_are_area_label_obstacles();
         independent_live_callouts_and_reopen();generic_measurement_callouts_do_not_claim_appraisal();stale_physical_calculation_is_withheld();
         std::cout<<"area_callout_desktop_tests passed\n";return 0;
     } catch(const std::exception& error) {std::cerr<<"area_callout_desktop_tests: "<<error.what()<<'\n';return 1;}

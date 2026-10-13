@@ -96,6 +96,15 @@ void run(BoundaryAuthoringMode mode, bool subtraction = false, std::uint32_t dia
     same_opaque(decode_recovery_ledger(snapshot.document(), future, ArchiveRole::recovery_copy), future);
     future = ledger; future[1].envelope["checkpoint"]["version"] = 4;
     same_opaque(decode_recovery_ledger(snapshot.document(), future, ArchiveRole::recovery_copy), future);
+    // Only the direct owner carries a future defaults algorithm; history stays current.
+    future = ordinary;
+    future[1].envelope["version"] = 3;
+    future[1].envelope["auto_subtract_target_id"] = nullptr;
+    future[1].envelope["area_defaults"] = {{"version", 2}, {"staged_category", "future-category"}};
+    future[1].envelope["source"] = nullptr;
+    const auto future_defaults = decode_recovery_ledger(snapshot.document(), future, ArchiveRole::ordinary);
+    same_opaque(future_defaults, future);
+    require(!future_defaults.decoded, "direct future defaults must not grant a decoded workspace");
     future = ledger; future.push_back({"unknown", "future_kind", {{"number", 1.0}, {"values", Json::array({nullptr, "x"})}}});
     // Unknown aggregate must be recognized before canonical replay of an otherwise malformed known payload.
     future[1].envelope["checkpoint"]["actions"][0]["kind"] = "invalid-action";

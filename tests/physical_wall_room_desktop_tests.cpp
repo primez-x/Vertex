@@ -1,5 +1,6 @@
 #include "support/detached_document_snapshot.hpp"
 #include "sketch/desktop/main_window.hpp"
+#include "support/fresh_open_history.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/physical_wall_room.hpp"
@@ -441,19 +442,36 @@ void workflow() {
             "; error="+window.lastError().toStdString());
     require(window.undoCommand() && window.document().snapshot().entities()==stale_source.entities(),"repair Undo restores retained stale evidence");
     require(window.redoCommand() && window.document().snapshot().entities()==repaired.entities(),"repair Redo restores exact reviewed destination");
-    require(window.saveProjectAs(files.filePath("repaired-room.bldproj")) && window.openProject(files.filePath("repaired-room.bldproj")) && window.selectEntity(id),
-        "native repaired room saves and reopens");
-    require(window.document().snapshot().entities()==repaired.entities() && physical_wall_room_checks(window.document().snapshot()).at(id.toStdString()).current,
-        "reopened repair replays source authority and retains identity");
-    require(label(drawing,area_dimension).contains("9.9 m²") && !window.document().snapshot().entities().contains(length_dimension.toStdString()),
-        "reopened reviewed command retains the kept dimension and explicit reference removal");
-    require(window.undoCommand() && window.document().snapshot().entities()==stale_source.entities(),"reopened repair Undo restores prior source evidence");
+    require(window.undoCommand() && window.document().snapshot().entities()==stale_source.entities(),"repair Undo restores prior source evidence before save");
     require(window.undoCommand() && physical_wall_room_checks(window.document().snapshot()).at(id.toStdString()).current &&
             geometry(drawing, id) && label(drawing, id).contains("10.2 m²"),
             "Undo source edit repairs room projection and derived area");
     require(label(drawing,area_dimension).contains("10.2 m²") && label(drawing,length_dimension).contains("3.8") && geometry(drawing,length_dimension),
         "Undo reviewed removal and source edit restores both dimension identities and their original current values");
     current_details(window);
+    require(window.redoCommand() && window.document().snapshot().entities()==stale_source.entities() &&
+            window.redoCommand() && window.document().snapshot().entities()==repaired.entities(),
+        "Redo source edit and reviewed repair restores exact saved destination");
+    require(window.saveProjectAs(files.filePath("repaired-room.bldproj")) && window.openProject(files.filePath("repaired-room.bldproj")) && window.selectEntity(id),
+        "native repaired room saves and reopens");
+    require(window.document().snapshot().entities()==repaired.entities() && physical_wall_room_checks(window.document().snapshot()).at(id.toStdString()).current,
+        "reopened repair replays source authority and retains identity");
+    require(label(drawing,area_dimension).contains("9.9 m²") && !window.document().snapshot().entities().contains(length_dimension.toStdString()),
+        "reopened reviewed command retains the kept dimension and explicit reference removal");
+    require(sketch::testing::saved_undo_redo(window, stale_source, repaired),
+        "fresh session refuses inherited Undo/Redo while saved repair independently replays exact source evidence");
+    auto history=sketch::testing::fresh_open_history_document(window);
+    history.undo(history.revision());
+    history.undo(history.revision());
+    require(physical_wall_room_checks(history.snapshot()).at(id.toStdString()).current &&
+        history.snapshot().entities().at(area_dimension.toStdString())==dimension_source.entities().at(area_dimension.toStdString()) &&
+        history.snapshot().entities().at(length_dimension.toStdString())==dimension_source.entities().at(length_dimension.toStdString()),
+        "saved source edit history independently restores current room and both exact dimension identities");
+    assert_near(area_value.resolve(history.snapshot()).area(),10.24);
+    assert_near(length_value.resolve(history.snapshot()).segment_length(),3.8);
+    require(window.document().snapshot().entities()==repaired.entities() &&
+        label(drawing,area_dimension).contains("9.9 m²") && !geometry(drawing,length_dimension),
+        "independent saved history replay leaves reopened runtime and rendered dimensions in the saved repaired state");
 }
 } // namespace
 int main(int argc, char** argv) {

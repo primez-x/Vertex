@@ -696,11 +696,106 @@ void test_explicit_pending_and_undeclared_legacy_area_types_remain_usable() {
     require(sketch::area_subtraction_type(source,pending)=="role:open_to_below","explicit pending authoring exclusion TYPE must remain usable without fabricated facts");
 }
 
+void test_versioned_area_defaults_atomic_reconstruction() {
+    const auto options = options_for(BoundaryAuthoringMode::draw_first);
+    auto chain = rectangle(BoundaryAuthoringMode::draw_first, options);
+    chain.classification = "measurement";
+    auto document = make_document();
+    auto property = document.snapshot().entities().at("property-1");
+    const json profile{{"id", "user-measurement"}, {"version", 3U}, {"decimal_places", 3U},
+        {"display_unit", "square_metre"}, {"extensions", {{"custom", "retained"}}}};
+    property.properties["calculation_profile"] = profile;
+    auto floor = document.snapshot().entities().at("floor-1");
+    floor.properties["appraisal_facts"] = {{"grade", "below"}};
+    floor.properties["appraisal_fact_defaults"] = {{"version", 1}, {"source", "existing"}, {"facts", {{"grade", "below"}}}};
+    const auto other_chain = rectangle(BoundaryAuthoringMode::draw_first, options);
+    auto other_area = sketch::encode_identified_boundary_entity(other_chain.boundary);
+    other_area.properties["property_id"] = "property-2";
+    other_area.properties["building_id"] = "building-2";
+    other_area.properties["floor_id"] = "floor-2";
+    other_area.properties["layer_id"] = "layer-2";
+    other_area.properties["classification"] = "garage";
+    (void)document.apply(sketch::ApplyEntityChanges{document.revision(),
+        {EntityChange::upsert(property), EntityChange::upsert(floor),
+         EntityChange::upsert(entity("property-2", "property")),
+         EntityChange::upsert(entity("building-2", "building", {{"property_id", "property-2"}})),
+         EntityChange::upsert(entity("floor-2", "floor", {{"building_id", "building-2"}})),
+         EntityChange::upsert(entity("layer-2", "layer", {{"floor_id", "floor-2"}})),
+         EntityChange::upsert(other_area)}, {}, "declare source"});
+    const auto source = document.snapshot();
+    auto intent = intent_for(chain, options);
+    intent.area_defaults = sketch::BoundaryAreaDefaultsIntent{1, std::string{"above_grade_finished"}};
+    const auto preview = sketch::preview_boundary_commit(source, intent);
+    require(preview.accepted() && preview.area_default_notes().set_up,
+        "typed defaults must preview residential setup with geometry");
+    require(preview.candidate_entities().at("property-1").properties.at("measurement_calculation_profile") == profile &&
+        preview.candidate_entities().at("floor-1") == floor &&
+        preview.candidate_entities().at(other_area.id) == other_area,
+        "setup preserves profile, grade provenance and other-property classifications exactly");
+    const auto& area = preview.candidate_entities().at(chain.boundary.id);
+    require(area.properties.at("appraisal_category") == "above_grade_finished" &&
+        area.properties.at("appraisal_facts").at("finish") == "finished" &&
+        area.properties.at("appraisal_fact_defaults").at("source") == "classification",
+        "the sealed candidate includes category, facts and default provenance");
+    sketch::validate_historical_boundary_commit(source, intent, preview.candidate_entities());
+    (void)sketch::apply_boundary_commit(document, preview);
+    const auto after = document.snapshot();
+    require(after.revision() == source.revision() + 1,
+        "geometry and defaults publish exactly one revision");
+    (void)document.undo(document.revision());
+    require(document.snapshot().entities() == source.entities(), "one undo removes all creation effects");
+    (void)document.redo(document.revision());
+    require(document.snapshot().entities() == after.entities(), "one redo restores all creation effects");
+    auto extra = preview.candidate_entities(); extra.at("building-1").properties["tampered"] = true;
+    expect_document_unchanged(document, [&] { sketch::validate_historical_boundary_commit(source, intent, extra); },
+        "historical defaults must reject unrelated extra edits");
+    auto tampered = intent; tampered.area_defaults->staged_category = "garage";
+    expect_document_unchanged(document, [&] {
+        sketch::validate_historical_boundary_commit(source, tampered, preview.candidate_entities());
+    }, "historical Finish must bind the exact staged category");
+    auto legacy = intent; legacy.area_defaults.reset();
+    const auto old_preview = sketch::preview_boundary_commit(source, legacy);
+    require(old_preview.accepted() && old_preview.candidate_entities().at("property-1") == property &&
+        !old_preview.candidate_entities().at(chain.boundary.id).properties.contains("appraisal_facts"),
+        "absent intent retains geometry-only historical meaning");
+    sketch::validate_historical_boundary_commit(source, legacy, old_preview.candidate_entities());
+    expect_document_unchanged(document, [&] {
+        sketch::validate_historical_boundary_commit(source, legacy, preview.candidate_entities());
+    }, "legacy proof must not accept newly injected defaults");
+    tampered = intent; tampered.area_defaults->version = 2;
+    require_rejected(sketch::preview_boundary_commit(source, tampered), "unsupported defaults version must reject live creation");
+    tampered = intent; tampered.area_defaults->staged_category = "unknown-category";
+    require_rejected(sketch::preview_boundary_commit(source, tampered), "unknown defaults category must reject live creation");
+}
+
+void test_area_defaults_failure_does_not_publish_geometry() {
+    const auto options = options_for(BoundaryAuthoringMode::draw_first);
+    auto chain = rectangle(BoundaryAuthoringMode::draw_first, options);
+    chain.classification = "above_grade_finished";
+    auto document = make_document();
+    auto property = document.snapshot().entities().at("property-1");
+    property.properties["calculation_workflow"] = "appraisal";
+    property.properties["appraisal_policy"] = {{"version", 1}, {"policy_kind", "residential_declared"},
+        {"property_kind", "detached_single_family"}, {"measurement_basis", "exterior"}};
+    auto floor = document.snapshot().entities().at("floor-1");
+    floor.properties["appraisal_facts"] = {{"grade", "invalid"}};
+    (void)document.apply(sketch::ApplyEntityChanges{document.revision(),
+        {EntityChange::upsert(property), EntityChange::upsert(floor)}, {}, "invalid declaration fixture"});
+    auto intent = intent_for(chain, options);
+    intent.area_defaults = sketch::BoundaryAreaDefaultsIntent{};
+    const auto preview = sketch::preview_boundary_commit(document.snapshot(), intent);
+    require_rejected(preview, "invalid floor declaration must reject the entire area preview");
+    expect_document_unchanged(document, [&] { (void)sketch::apply_boundary_commit(document, preview); },
+        "fact failure must never leave partially created geometry");
+}
+
 }  // namespace
 
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_versioned_area_defaults_atomic_reconstruction();
+        test_area_defaults_failure_does_not_publish_geometry();
         test_subtraction_requires_active_phase_members_in_both_directions();
         test_phase_invalid_existing_deductions_reject_additions_but_allow_removal();
         test_subtraction_rejects_multiple_phase_registries();

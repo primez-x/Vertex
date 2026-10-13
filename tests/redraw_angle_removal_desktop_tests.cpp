@@ -1,8 +1,10 @@
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/project_store.hpp"
+#include "sketch/project_workspace.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
+#include "support/fresh_open_history.hpp"
 
 #include <QApplication>
 #include <QAction>
@@ -20,6 +22,7 @@
 #include <QTemporaryDir>
 #include <QTimer>
 #include <cmath>
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
@@ -164,6 +167,8 @@ void exercise() {
     const auto& edit = after.history().back().boundary_geometry_edit;
     require(edit && edit->allow_automatic_angle_removal && encode_boundary_geometry_edit(*edit).at("version") == 5,
         "drawn Finish must retain the strict version-five automatic-angle removal proof");
+    const auto finished_path = project.filePath("redraw-angle.bldproj");
+    require(window.saveProjectAs(finished_path), "save finished redraw with its complete workspace recovery ledger");
     require(window.undoCommand(), "Undo Finish must retain its reviewed checkpoint");
     require(!canvas->boundaryDraftPreview(), "Undo Finish must retain completed input without restarting drawing");
     if (!window.saveProjectAs(project.filePath("redraw-undone.bldproj")))
@@ -177,17 +182,39 @@ void exercise() {
     require(operation.at("version") == 3 && operation.at("allow_automatic_angle_removal") == true &&
         operation.at("replacement_removed_reference_ids") == nlohmann::json::array({angle.id}),
         "archived desktop_operation v3 must retain the explicit automatic-angle removal decision");
-    require(window.openProject(project.filePath("redraw-undone.bldproj")) && window.redoCommand() &&
-        window.document().snapshot().entities() == after.entities(), "recovered reviewed checkpoint must redo Finish exactly");
+    require(window.openProject(project.filePath("redraw-undone.bldproj")) &&
+        window.document().snapshot().entities() == before.entities() &&
+        window.document().snapshot().assets() == before.assets() && !canvas->boundaryDraftPreview(),
+        "ordinary Open retains the undone reviewed checkpoint without restarting drawing");
+    (void)sketch::testing::fresh_open_history_document(window);
+    auto archived_workspace = ProjectWorkspace::restore_archive(*undone.archive, *undone.recovery.decoded);
+    require(archived_workspace->can_redo(), "saved workspace retains reviewed Finish Redo independently of UI session history");
+    auto finish_redo = archived_workspace->prepare_redo();
+    (void)archived_workspace->commit(finish_redo);
+    const auto retains_finish_input = [&](const auto& events) {
+        return std::any_of(events.begin(), events.end(), [&](const auto& event) {
+            return event.kind == WorkspaceLifecycleKind::boundary_finish && event.input &&
+                event.input->value && event.input->value->extensions.contains("desktop_operation") &&
+                event.input->value->extensions.at("desktop_operation") == operation;
+        });
+    };
+    require(archived_workspace->snapshot().entities() == after.entities() &&
+        archived_workspace->snapshot().assets() == after.assets() && !archived_workspace->active_boundary() &&
+        archived_workspace->capture().retired_boundaries().empty() &&
+        retains_finish_input(archived_workspace->capture().lifecycle_history()),
+        "independent archived Workspace Redo restores exact Finish and assets while retaining completed input");
+    const auto finished = ProjectStore::load_archive(std::filesystem::path(finished_path.toStdWString()), ArchiveRole::ordinary);
+    require(finished.supported() && !finished.recovery.decoded->active && finished.recovery.decoded->history &&
+        finished.recovery.decoded->history->retired.empty() &&
+        retains_finish_input(finished.recovery.decoded->history->events),
+        "saved finished fixture preserves lifecycle input and the exact reviewed removal decision");
     desktop::MainWindow reopened;
     reopened.setAttribute(Qt::WA_DontShowOnScreen);
-    require(project.isValid() && window.saveProjectAs(project.filePath("redraw-angle.bldproj")) &&
-        window.createNewProject() && reopened.openProject(project.filePath("redraw-angle.bldproj")) &&
+    require(window.createNewProject() && reopened.openProject(finished_path) &&
         reopened.document().snapshot().is_editable() &&
         reopened.document().snapshot().entities() == after.entities(), "reviewed removal must save and reopen exactly");
-    require(reopened.undoCommand() && reopened.document().snapshot().entities() == before.entities() &&
-        reopened.redoCommand() && reopened.document().snapshot().entities() == after.entities(),
-        "saved drawn Finish must retain atomic Undo and Redo after reopen");
+    require(sketch::testing::saved_undo_redo(reopened,before,after),
+        "saved drawn Finish retains exact atomic document Undo/Redo independently of the fresh UI session");
 }
 }
 int main(int argc,char** argv) {

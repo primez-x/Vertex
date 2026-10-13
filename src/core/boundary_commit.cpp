@@ -8,6 +8,7 @@
 #include "sketch/document_digest.hpp"
 
 #include <cstddef>
+#include <algorithm>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -60,8 +61,8 @@ Entity encode_boundary(const AcceptedBoundaryChain& chain,
     auto& properties = result.properties;
     add_context(properties, context);
     properties["classification"] = chain.classification;
-    // Historical active-v1 finishes reconstruct this exact classification-only
-    // payload. Normalization belongs exclusively to the explicit v2 adjustment.
+    // Historical geometry-only finishes reconstruct this classification-only
+    // payload. Explicit subtraction/default intents opt into normalization.
     if (normalize_classification) properties["measurement_classification"] = chain.classification;
     const auto& property = snapshot.entities().at(context.property_id);
     if (normalize_classification && property.properties.value("calculation_workflow", std::string{"measurement"}) == "appraisal") {
@@ -155,7 +156,7 @@ std::vector<Entity> encode_new_entities(const DocumentSnapshot& snapshot,
         }
 
         result.push_back(encode_boundary(chain, intent.options, intent.context, snapshot,
-            intent.auto_subtract_target_id.has_value()));
+            intent.auto_subtract_target_id.has_value() || intent.area_defaults.has_value()));
         for (const auto& dimension : chain.dimensions) {
             require_new_entity_id(snapshot.entities(), created_entity_ids,
                                   dimension.id, "dimension");
@@ -191,6 +192,32 @@ ApplyEntityChanges command_for(const DocumentSnapshot& snapshot,
     };
 }
 
+// Live previews and historical proofs select the same defaults reconstruction.
+// Merge by identity before the final trial so geometry and declarations publish
+// one revision, with no supplemental caller-supplied entity edits.
+ApplyEntityChanges reconstruct_command(const DocumentSnapshot& snapshot,
+    const BoundaryCommitIntent& intent, const std::vector<Entity>& created,
+    const std::vector<std::string>& boundary_ids, AreaTypeDefaultChanges* notes = nullptr) {
+    auto command = command_for(snapshot, intent, created);
+    if (!intent.area_defaults) return command;
+    validate_boundary_area_defaults_intent(*intent.area_defaults);
+    const auto geometry = Document::preview_command(snapshot, Command{command});
+    const auto defaults = boundary_area_default_changes(geometry, intent.context.property_id,
+        boundary_ids, *intent.area_defaults);
+    for (const auto& change : defaults.changes) {
+        const auto found = std::find_if(command.entity_changes.begin(), command.entity_changes.end(),
+            [&](const EntityChange& current) { return current.entity.id == change.entity.id; });
+        if (found == command.entity_changes.end()) command.entity_changes.push_back(change);
+        else *found = change;
+    }
+    if (notes) {
+        notes->set_up = defaults.set_up;
+        notes->defaulted_type = defaults.defaulted_type;
+        notes->kept_notes = defaults.kept_notes;
+    }
+    return command;
+}
+
 }  // namespace
 
 void validate_historical_boundary_commit(const DocumentSnapshot& snapshot,
@@ -198,11 +225,9 @@ void validate_historical_boundary_commit(const DocumentSnapshot& snapshot,
     const std::map<std::string, Entity, std::less<>>& expected_after_entities) {
     std::vector<std::string> boundary_ids;
     const auto created = encode_new_entities(snapshot, intent, boundary_ids, &expected_after_entities);
-    auto candidate = snapshot.entities();
-    for (const auto& entity : created) candidate.insert_or_assign(entity.id, entity);
-    const auto trial = Document::preview_command(snapshot, Command{command_for(snapshot, intent, created)});
-    if (entity_map_digest(trial.entities()) != entity_map_digest(candidate) ||
-        entity_map_digest(candidate) != entity_map_digest(expected_after_entities))
+    const auto command = reconstruct_command(snapshot, intent, created, boundary_ids);
+    const auto trial = Document::preview_command(snapshot, Command{command});
+    if (entity_map_digest(trial.entities()) != entity_map_digest(expected_after_entities))
         invalid("Finish geometry does not match its archived input");
 }
 
@@ -231,12 +256,11 @@ public:
             std::vector<std::string> created_boundary_ids;
             const auto created = encode_new_entities(
                 snapshot, result.normalized_intent_, created_boundary_ids);
+            const auto command = reconstruct_command(snapshot, result.normalized_intent_, created, created_boundary_ids,
+                &result.area_default_notes_);
             auto candidate = snapshot.entities();
-            for (const auto& entity : created) {
-                candidate.insert_or_assign(entity.id, entity);
-            }
-
-            const auto command = command_for(snapshot, result.normalized_intent_, created);
+            for (const auto& change : command.entity_changes)
+                candidate.insert_or_assign(change.entity.id, change.entity);
             const auto trial = Document::preview_command(snapshot, Command{command});
             if (trial.entities() != candidate) {
                 invalid("boundary commit trial does not match its encoded candidate");
@@ -254,6 +278,7 @@ public:
             result.candidate_digest_.clear();
             result.trial_snapshot_digest_.clear();
             result.created_boundary_ids_.clear();
+            result.area_default_notes_ = {};
             result.diagnostics_.clear();
             result.diagnostics_.push_back(error.what());
             return result;
@@ -279,6 +304,9 @@ const std::vector<std::string>& BoundaryCommitPreview::created_boundary_ids() co
 }
 const std::vector<std::string>& BoundaryCommitPreview::diagnostics() const noexcept {
     return diagnostics_;
+}
+const AreaTypeDefaultChanges& BoundaryCommitPreview::area_default_notes() const noexcept {
+    return area_default_notes_;
 }
 
 BoundaryCommitPreview preview_boundary_commit(const DocumentSnapshot& snapshot,
@@ -312,6 +340,9 @@ Revision apply_boundary_commit(Document& document,
     if (!recomputed.accepted_ || recomputed.candidate_digest_ != preview.candidate_digest_ ||
         recomputed.created_boundary_ids_ != preview.created_boundary_ids_ ||
         recomputed.diagnostics_ != preview.diagnostics_ ||
+        recomputed.area_default_notes_.set_up != preview.area_default_notes_.set_up ||
+        recomputed.area_default_notes_.defaulted_type != preview.area_default_notes_.defaulted_type ||
+        recomputed.area_default_notes_.kept_notes != preview.area_default_notes_.kept_notes ||
         recomputed.trial_snapshot_digest_ != preview.trial_snapshot_digest_) {
         throw DocumentError(DocumentErrorCode::stale_revision,
                             "boundary commit preview no longer reproduces the shown result");

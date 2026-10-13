@@ -23,7 +23,48 @@ template<class F> void rejects(F operation) {
     try { operation(); } catch (const std::invalid_argument&) { return; }
     throw std::runtime_error("corrupt lifecycle ordering was accepted");
 }
+void test_area_defaults_lifecycle() {
+    const auto document = Document::create({{"p", "property", {{"name", "Property"}}},
+        {"b", "building", {{"property_id", "p"}}}, {"f", "floor", {{"building_id", "b"}}},
+        {"l", "layer", {{"floor_id", "f"}}}});
+    ProjectWorkspace workspace(document.snapshot());
+    BoundaryAuthoringSession session(BoundaryAuthoringMode::draw_first);
+    session.set_classification("measurement");
+    (void)session.anchor({0, 0});
+    BoundaryActiveRecovery active{capture_boundary_recovery_source(workspace.snapshot(), {"p", "b", "f", "l"}),
+        session.recovery_checkpoint()};
+    active.area_defaults = BoundaryAreaDefaultsIntent{1, std::string{"garage"}};
+    commit(workspace, workspace.prepare_boundary_checkpoint(active));
+    require(*decode_boundary_active_recovery(encode_boundary_active_recovery(*workspace.active_boundary())).active == active,
+        "unfinished staged category survives archival checkpoint");
+    (void)session.add_line_to({4, 0}); (void)session.add_line_to({4, 3});
+    (void)session.add_line_to({0, 3}); (void)session.add_closing_segment(); (void)session.close_chain();
+    active.checkpoint = session.recovery_checkpoint();
+    commit(workspace, workspace.prepare_boundary_checkpoint(active));
+    const auto before = workspace.snapshot();
+    commit(workspace, workspace.prepare_finish_boundary());
+    const auto captured = workspace.capture();
+    require(captured.document().revision() == before.revision() + 1 &&
+        captured.document().entities().at("p").properties.at("calculation_workflow") == "appraisal",
+        "workspace Finish commits setup and area in one revision");
+    validate_workspace_finish_deltas(captured.document(), captured.lifecycle_history());
+    auto events = captured.lifecycle_history();
+    auto altered = *events.back().input->value;
+    altered.area_defaults->staged_category = "above_grade_finished";
+    events.back().input->value = std::make_shared<const BoundaryActiveRecovery>(altered);
+    rejects([&] { validate_workspace_finish_deltas(captured.document(), events); });
+    altered = *captured.lifecycle_history().back().input->value;
+    altered.area_defaults.reset();
+    events.back().input->value = std::make_shared<const BoundaryActiveRecovery>(altered);
+    rejects([&] { validate_workspace_finish_deltas(captured.document(), events); });
+    commit(workspace, workspace.prepare_undo());
+    require(workspace.snapshot().entities() == before.entities(), "workspace undo removes setup and area together");
+    commit(workspace, workspace.prepare_redo());
+    require(workspace.snapshot().entities() == captured.document().entities(), "workspace redo restores exact atomic Finish map");
+}
+
 void run() {
+    test_area_defaults_lifecycle();
     auto document = Document::create({{"p", "property", {{"name", "Property"}}}, {"b", "building", {{"property_id", "p"}}},
         {"f", "floor", {{"building_id", "b"}}}, {"l", "layer", {{"floor_id", "f"}}},
         {"label", "label", {{"text", "Original"}}}});

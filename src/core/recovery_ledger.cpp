@@ -65,7 +65,9 @@ const Json& array(const Json& value) {
     return value;
 }
 bool scan_input_versions(const Json& value) {
-    if (future(value, 2)) return true;
+    if (future(value, 3)) return true;
+    if (value.at("version")==3 && value.at("area_defaults").at("version").is_number_integer() &&
+        value.at("area_defaults").at("version")>1) return true;
     return future(value.at("checkpoint"), boundary_authoring_recovery_version_v3);
 }
 bool scan_history_versions(const Json& history) {
@@ -155,11 +157,11 @@ RecoveryLedgerDecodeResult decode_recovery_ledger(const DocumentSnapshot& docume
             else { unsupported = true; continue; }
             if (*slot) invalid("duplicate known record kind");
             *slot = &row.envelope;
-            const bool outer_future = future(row.envelope, slot == &active ? 2 : 1);
+            const bool outer_future = future(row.envelope, slot == &active ? 3 : 1);
             unsupported = unsupported || outer_future;
             if (!outer_future) {
                 if (slot == &active) {
-                    const bool nested = future(row.envelope.at("checkpoint"), boundary_authoring_recovery_version_v3);
+                    const bool nested = scan_input_versions(row.envelope);
                     unsupported = unsupported || nested;
                 } else if (slot == &history) {
                     const bool nested = scan_history_versions(row.envelope);

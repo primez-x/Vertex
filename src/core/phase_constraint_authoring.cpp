@@ -362,6 +362,8 @@ void selections(const Json& value) {
 
 struct CoordinatedReplacements {
     int version{1};
+    // Direct inner10 is separate from the historical family-body dialect.
+    bool new_slab_geometry_authority{false};
     bool complete_hosted_component_dimensions{false};
     bool complete_wall_component_dimensions{false};
     bool complete_stair_component_dimensions{false};
@@ -381,9 +383,34 @@ struct CoordinatedReplacements {
 };
 CoordinatedReplacements coordinated(const Json& value,const PhaseConstraintAuthoringIntent& enclosing,
     bool allow_dimension_wrapper=true,bool allow_stair_dimension_copies=false,bool allow_wall_dimension_copies=false,
-    bool allow_roof_dimension_copies=false,bool allow_slab_dimension_copies=false,bool allow_structural_dimension_copies=false) {
+    bool allow_roof_dimension_copies=false,bool allow_slab_dimension_copies=false,bool allow_structural_dimension_copies=false,
+    bool new_slab_geometry_authority=false) {
     resource_shape(value);
     if (value.dump().size()>proof_budget) invalid("Coordinated replacement proof byte budget exceeded");
+    if (value.is_object() && value.contains("version") && value.at("version")==10) {
+        if (!allow_dimension_wrapper) invalid("Direct coordinated slab authority cannot nest inside a historical wrapper");
+        (void)phase_constraint_coordinated_authoring_body(value);
+        const auto declared=[&](const char* field) { return value.contains(field); };
+        auto body=value;
+        for (const auto* field:{"complete_hosted_component_dimensions","complete_wall_component_dimensions",
+            "complete_stair_component_dimensions","complete_roof_component_dimensions",
+            "complete_slab_component_dimensions","complete_structural_component_dimensions"}) body.erase(field);
+        const bool wall=body.at("wall_authoring").is_object() &&
+            body.at("wall_authoring").contains("wall_replacement") &&
+            !body.at("wall_authoring").at("wall_replacement").is_null();
+        body["version"]=wall ? 5 : 4;
+        auto result=coordinated(body,enclosing,false,declared("complete_stair_component_dimensions"),
+            declared("complete_wall_component_dimensions"),declared("complete_roof_component_dimensions"),
+            declared("complete_slab_component_dimensions"),declared("complete_structural_component_dimensions"),true);
+        result.complete_hosted_component_dimensions=true;
+        result.complete_family_component_dimensions=true;
+        result.complete_wall_component_dimensions=declared("complete_wall_component_dimensions");
+        result.complete_stair_component_dimensions=declared("complete_stair_component_dimensions");
+        result.complete_roof_component_dimensions=declared("complete_roof_component_dimensions");
+        result.complete_slab_component_dimensions=declared("complete_slab_component_dimensions");
+        result.complete_structural_component_dimensions=declared("complete_structural_component_dimensions");
+        return result;
+    }
     if (value.is_object() && value.contains("version") &&
         (value.at("version")==6 || value.at("version")==7 || value.at("version")==8 || value.at("version")==9)) {
         if (!allow_dimension_wrapper) invalid("Coordinated dimension authoring cannot nest wrappers");
@@ -430,6 +457,7 @@ CoordinatedReplacements coordinated(const Json& value,const PhaseConstraintAutho
     bounded_array(value.at("ordinary_slab_geometry"));
     CoordinatedReplacements result;
     result.version=hosted_walls?5:stairs?4:structural?3:walls?2:1;
+    result.new_slab_geometry_authority=new_slab_geometry_authority;
     if (hosted_walls && value.at("wall_authoring").is_null())
         invalid("Coordinated qualified wall authoring requires an actual hosted wall replacement");
     if (walls && !value.at("wall_authoring").is_null()) {
@@ -483,9 +511,9 @@ CoordinatedReplacements coordinated(const Json& value,const PhaseConstraintAutho
             invalid("Coordinated slab component dimension copies require matching explicit authority");
         if (result.slab->coordinate_hosted_profiles)
             invalid("Coordinated replacement dialects cannot borrow slab elevation carry authority");
-        if (result.slab->coordinate_hosted_directional_geometry)
+        if (!new_slab_geometry_authority && result.slab->coordinate_hosted_directional_geometry)
             invalid("Historical coordinated replacement dialects cannot borrow directional slab geometry authority");
-        if (result.slab->preserve_slab_planar_source_geometry)
+        if (!new_slab_geometry_authority && result.slab->preserve_slab_planar_source_geometry)
             invalid("Historical coordinated replacement dialects cannot borrow mapped slab geometry authority");
         if (result.slab->slab_geometry.empty() || !result.slab->slab_profiles.empty() || !result.slab->slab_stacks.empty() ||
             encode_phase_slab_replacement_authoring(*result.slab).dump()!=leaf.dump())
@@ -508,6 +536,9 @@ CoordinatedReplacements coordinated(const Json& value,const PhaseConstraintAutho
     if (stairs && !value.at("stair_replacement").is_null()) {
         const auto& leaf=value.at("stair_replacement");
         result.stair=decode_phase_stair_replacement_authoring(leaf);
+        if (new_slab_geometry_authority && (!result.stair->dependency_rail_ids.empty() ||
+            !result.stair->dependency_dispositions.empty()))
+            invalid("Direct coordinated slab authority cannot borrow stair dependency review");
         if (result.stair->complete_scalar_dependencies ||
             result.stair->complete_component_dimensions!=allow_stair_dimension_copies ||
             result.stair->complete_ordinary_component_dimensions!=allow_stair_dimension_copies ||
@@ -525,9 +556,9 @@ CoordinatedReplacements coordinated(const Json& value,const PhaseConstraintAutho
     }
     for (const auto& row:value.at("ordinary_slab_geometry")) {
         auto edit=decode_slab_geometry_edit_intent(row);
-        if (edit.kind == SlabGeometryEditKind::resize_plan && edit.coordinate_world_hosted_geometry)
+        if (!new_slab_geometry_authority && edit.kind == SlabGeometryEditKind::resize_plan && edit.coordinate_world_hosted_geometry)
             invalid("Historical coordinated ordinary slabs cannot borrow directional geometry authority");
-        if (edit.preserve_planar_source_geometry)
+        if (!new_slab_geometry_authority && edit.preserve_planar_source_geometry)
             invalid("Historical coordinated ordinary slabs cannot borrow mapped source geometry authority");
         if (encode_slab_geometry_edit_intent(edit).dump()!=row.dump() || !slab_targets.insert(edit.slab_id).second)
             invalid("Coordinated ordinary slabs require unique canonical typed geometry");
@@ -553,6 +584,17 @@ CoordinatedReplacements coordinated(const Json& value,const PhaseConstraintAutho
                 invalid("Coordinated ordinary stair transforms require unique canonical typed operators");
             result.ordinary_stairs.push_back(std::move(edit));
         }
+    }
+    if (new_slab_geometry_authority) {
+        const auto directional=[](const auto& edits) {
+            return std::any_of(edits.begin(),edits.end(),[](const auto& edit) {
+                return edit.preserve_planar_source_geometry ||
+                    (edit.kind==SlabGeometryEditKind::resize_plan && edit.coordinate_world_hosted_geometry);
+            });
+        };
+        if (!directional(result.ordinary_slabs) && !(result.slab &&
+            (directional(result.slab->slab_geometry) || directional(result.slab->ordinary_geometry))))
+            invalid("Direct coordinated slab authority requires an actual directional or mapped slab intent");
     }
     const auto roof_lanes=static_cast<int>(result.roof.has_value())+static_cast<int>(!result.ordinary_roofs.empty());
     const auto slab_lanes=static_cast<int>(result.slab.has_value())+static_cast<int>(!result.ordinary_slabs.empty());
@@ -892,6 +934,19 @@ Entity merge_hosted_instance_placements(const Entity& source,const std::vector<c
     return merged;
 }
 
+Entity merge_coordinated_directional_catalog(const Entity& source,const std::vector<const Entity*>& candidates) {
+    auto merged=source;
+    for (const auto* candidate:candidates) {
+        auto envelope=*candidate;
+        envelope.properties.at("model")=source.properties.at("model");
+        if (!exact(source,envelope))
+            invalid("Coordinated directional catalog changed fields outside its actual model");
+        merged.properties.at("model")=merge_disjoint_directionally_resized_hosted_assembly_models(
+            source.properties.at("model"),merged.properties.at("model"),candidate->properties.at("model"));
+    }
+    return merged;
+}
+
 Entity compose_source_container(const Entity& source,const std::vector<const Entity*>& candidates,
     const std::set<std::string,std::less<>>& permitted_retirements={}) {
     return source.type=="assembly_model" ? merge_hosted_instance_placements(source,candidates,permitted_retirements) :
@@ -1073,6 +1128,8 @@ Entity merge_component_membership_rows(const Entity& original,const std::vector<
 Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthoringIntent& enclosing,
     const Entities* inspected_wall=nullptr,const std::vector<std::string>* inspected_wall_fresh=nullptr) {
     const auto lanes=coordinated(enclosing.coordinated_replacements,enclosing);
+    if (lanes.new_slab_geometry_authority && source.size()>100000)
+        invalid("Direct coordinated slab source entity budget exceeded");
     const bool coordinated_hosted=lanes.version==5 || (lanes.roof && lanes.roof->include_hosted_instances) ||
         std::any_of(lanes.ordinary_roofs.begin(),lanes.ordinary_roofs.end(),
             [](const auto& edit) { return edit.coordinate_world_hosted_geometry; }) ||
@@ -1116,13 +1173,33 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
                 ordinary_dimension_protected_baselines.insert(model.baseline_ids().begin(),model.baseline_ids().end());
         }
     }
+    std::map<std::pair<std::string,std::string>,Json> authenticated_ordinary_rows;
     const auto collect_ordinary_dimension_hosts=[&](Entities& candidate,
-        std::initializer_list<std::string_view> physical_types) {
+        std::initializer_list<std::string_view> physical_types,
+        const std::vector<SlabGeometryEditIntent>& slab_intents=std::vector<SlabGeometryEditIntent>{},
+        bool wall_dependencies=false) {
         if (!lanes.complete_hosted_component_dimensions) return;
         coordinated_map_budget(candidate);
         // This map has just been derived by the family's actual-source typed
         // producer. No replacement or composed map can supply host authority.
         std::vector<std::string> candidate_hosts;
+        const bool directional=lanes.new_slab_geometry_authority &&
+            std::any_of(slab_intents.begin(),slab_intents.end(),[](const auto& edit) {
+                return edit.kind==SlabGeometryEditKind::resize_plan && edit.coordinate_world_hosted_geometry;
+            });
+        std::set<std::string,std::less<>> unit_authority;
+        if (directional) for (const auto& edit:slab_intents)
+            if (edit.kind==SlabGeometryEditKind::resize_plan && edit.coordinate_world_hosted_geometry)
+                unit_authority.insert(edit.slab_id);
+        // Match the complete wall leaf's dependency discovery: an opening's
+        // local fields can stay exact while its changed parent moves its frame.
+        std::set<std::string,std::less<>> changed_walls;
+        if (wall_dependencies) for (const auto& [key,original]:source) if (original.type=="wall") {
+            const auto found=candidate.find(key);
+            if (found==candidate.end() || found->second.id!=key || found->second.type!=original.type)
+                invalid("Coordinated ordinary wall hosts must retain actual owner identity and type");
+            if (!exact(original,found->second)) changed_walls.insert(key);
+        }
         for (const auto& [key,original]:source) {
             const auto found=candidate.find(key);
             if (can_recognize_boundary_dimension_entity_type(original.type) &&
@@ -1133,8 +1210,11 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
             if (lanes.complete_family_component_dimensions && found==candidate.end()) continue;
             if (found==candidate.end() || found->second.id!=key || found->second.type!=original.type)
                 invalid("Coordinated ordinary dimension hosts must retain actual owner identity and type");
+            const bool parent_changed=wall_dependencies && original.type=="opening" &&
+                changed_walls.contains(original.properties.at("wall_id").get<std::string>());
             if (exact_json(original.properties,found->second.properties) &&
-                exact_json(original.extensions,found->second.extensions)) continue;
+                exact_json(original.extensions,found->second.extensions) && !unit_authority.contains(key) &&
+                !parent_changed) continue;
             if (ordinary_dimension_scope->inactive_owner_ids.contains(key) ||
                 ordinary_dimension_protected_baselines.contains(key))
                 invalid("Coordinated ordinary dimension hosts require active nonbaseline authority");
@@ -1156,10 +1236,13 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
                         invalid("Coordinated leaf changed a protected original copied dimension");
                     changed.push_back(key);
                 }
-            if (!changed.empty()) {
+            if (!changed.empty() || lanes.new_slab_geometry_authority) {
                 auto normalized=candidate;
                 for (const auto& key:changed) normalized.at(key)=source.at(key);
-                const auto proven=carry_hosted_assembly_dimension_transform_entities(source,normalized,candidate_hosts);
+                const auto proven=wall_dependencies ?
+                    carry_wall_hosted_assembly_dimension_transform_entities(source,normalized,candidate_hosts) : directional ?
+                    carry_hosted_assembly_directional_resize_dimension_entities(source,normalized,slab_intents) :
+                    carry_hosted_assembly_dimension_transform_entities(source,normalized,candidate_hosts);
                 std::map<std::string,const Entity*,std::less<>> contributions;
                 for (const auto& dimension:proven) contributions.emplace(dimension.id,&dimension);
                 validate_ordinary_assembly_dimension_changes(source,changed);
@@ -1168,6 +1251,22 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
                     if (contribution==contributions.end() || !exact(candidate.at(key),*contribution->second))
                         invalid("Coordinated leaf dimension change lacks its proven actual ordinary host contribution");
                     candidate.at(key)=source.at(key);
+                }
+            }
+        }
+        if (lanes.new_slab_geometry_authority) {
+            const std::set<std::string,std::less<>> hosts(candidate_hosts.begin(),candidate_hosts.end());
+            for (const auto& [catalog,entity]:source) if (entity.type=="assembly_model") {
+                const auto& before=entity.properties.at("model").at("instances");
+                const auto& after=candidate.at(catalog).properties.at("model").at("instances");
+                if (before.size()!=after.size()) invalid("Coordinated ordinary roots changed source row inventory");
+                for (std::size_t i=0;i<before.size();++i) if (before[i].contains("placement") &&
+                    hosts.contains(before[i].at("placement").at("host_entity_id").get<std::string>())) {
+                    const std::pair root{catalog,before[i].at("id").get<std::string>()};
+                    if (!authenticated_ordinary_rows.emplace(root,after[i]).second)
+                        invalid("Coordinated independent ordinary root contributions overlap");
+                    if (authenticated_ordinary_rows.size()>4096)
+                        invalid("Coordinated ordinary component root budget exceeded");
                 }
             }
         }
@@ -1199,6 +1298,8 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
             candidates.push_back(replay_phase_constraint_authoring(source,encode_phase_constraint_authoring_intent(child)));
             family_fresh.push_back(coordinated_wall_fresh(child));
         }
+        if (lanes.new_slab_geometry_authority)
+            collect_ordinary_dimension_hosts(candidates.back(),{"wall","opening"},{},true);
         if (lanes.version==5) {
             // Reserve aliases only after actual leaf replay, from exact copied
             // catalog/local destinations. Detached fresh IDs alone omit them.
@@ -1235,19 +1336,21 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
             leaf.complete_component_dimensions);
         auto replay=replay_phase_slab_replacement(source,plan,leaf.identities,leaf.slab_profiles,
             leaf.slab_stacks,leaf.slab_geometry,leaf.ordinary_geometry,leaf.hosted_instance_identities,
-            leaf.coordinate_ordinary_hosted_geometry,leaf.coordinate_hosted_profiles,leaf.dimension_identities);
+            leaf.coordinate_ordinary_hosted_geometry,leaf.coordinate_hosted_profiles,leaf.dimension_identities,
+            leaf.coordinate_hosted_directional_geometry,leaf.preserve_slab_planar_source_geometry);
         candidates.push_back(std::move(replay.entities)); family_fresh.push_back(std::move(replay.fresh_identity_ids));
         retained_baselines.insert(plan.seed_slab_ids.begin(),plan.seed_slab_ids.end());
         retained_baselines.insert(plan.required_dimension_ids.begin(),plan.required_dimension_ids.end());
         if (leaf.complete_component_dimensions)
             register_dimension_copies(plan.required_hosted_instance_ids,leaf.identities,leaf.hosted_instance_identities,leaf.dimension_identities);
-        if (lanes.complete_family_component_dimensions) collect_ordinary_dimension_hosts(candidates.back(),{"slab"});
+        if (lanes.complete_family_component_dimensions)
+            collect_ordinary_dimension_hosts(candidates.back(),{"slab"},leaf.ordinary_geometry);
     } else if (!lanes.ordinary_slabs.empty()) {
         const auto partition=partition_phase_slab_geometry_edits(source,lanes.ordinary_slabs);
         if (partition.replacement || !partition.baseline_geometry.empty())
             invalid("Coordinated ordinary slab lane requires actual ordinary/proposed membership");
         candidates.push_back(replay_slab_geometry_with_hosted_entities(source,lanes.ordinary_slabs));
-        collect_ordinary_dimension_hosts(candidates.back(),{"slab"});
+        collect_ordinary_dimension_hosts(candidates.back(),{"slab"},lanes.ordinary_slabs);
         family_fresh.emplace_back();
     }
     if (lanes.structural) {
@@ -1360,6 +1463,27 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
         collect_ordinary_dimension_hosts(candidates.back(),{"stair","railing"});
         family_fresh.emplace_back();
     }
+    if (lanes.new_slab_geometry_authority) {
+        std::size_t changed_families=0;
+        for (const auto& candidate:candidates) {
+            const auto physical=[](std::string_view type) {
+                return type=="wall" || type=="roof" || type=="slab" || type=="column" ||
+                    type=="beam" || type=="stair" || type=="railing";
+            };
+            bool changed=false;
+            for (const auto& [key,entity]:source) if (physical(entity.type)) {
+                const auto found=candidate.find(key);
+                if (found==candidate.end() || !exact(entity,found->second)) { changed=true; break; }
+            }
+            if (!changed) for (const auto& [key,entity]:candidate)
+                if (!source.contains(key) && physical(entity.type)) { changed=true; break; }
+            if (changed) ++changed_families;
+        }
+        if (changed_families<2 || changed_families>5)
+            invalid("Direct coordinated slab authority requires two to five changed physical families");
+        if (!permitted_catalog_retirements.empty())
+            invalid("Direct coordinated slab authority cannot retire hosted rows");
+    }
     if (lanes.version>=3) for (const auto& candidate:candidates) coordinated_map_budget(candidate);
     std::set<std::string,std::less<>> fresh;
     for (const auto& destinations:family_fresh) for (const auto& destination:destinations) {
@@ -1392,6 +1516,8 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
             // Only independently replayed same-source leaves reach this typed
             // partition merge; retain the original companion carrier and order.
             result.at(key)=merge_component_membership_rows(original,changes);
+        else if (!changes.empty() && lanes.new_slab_geometry_authority && original.type=="assembly_model")
+            result.at(key)=merge_coordinated_directional_catalog(original,changes);
         else if (changes.size()==1) result.at(key)=lanes.version>=3 && original.type=="assembly_model" ?
             merge_hosted_instance_placements(original,changes,permitted) : *changes.front();
         else if (changes.size()>1)
@@ -1407,6 +1533,8 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
                 invalid("Coordinated replacement new entity destination is unreserved or overlapping");
         }
     }
+    if (lanes.new_slab_geometry_authority && result.size()>100000)
+        invalid("Direct coordinated slab result entity budget exceeded");
     if (lanes.version>=2) for (const auto& [key,entity]:source) if (entity.type=="model_phases") {
         (void)key;
         const auto model=ModelPhases::from_json(entity.properties.at("model"));
@@ -1454,7 +1582,66 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
         validate_document_assembly_instances(result);
     }
     std::size_t copied_dimension_count=0;
-    if (lanes.complete_family_component_dimensions) {
+    if (lanes.new_slab_geometry_authority) {
+        std::vector<std::pair<std::string,std::string>> roots=copied_dimension_roots;
+        for (const auto& [root,row]:authenticated_ordinary_rows) {
+            if (copied_dimension_root_destinations.contains(root))
+                invalid("Coordinated ordinary and cloned component roots overlap");
+            roots.push_back(root);
+            if (roots.size()>4096) invalid("Coordinated combined component root budget exceeded");
+            const auto& rows=result.at(root.first).properties.at("model").at("instances");
+            const auto found=std::find_if(rows.begin(),rows.end(),[&](const auto& value) { return value.at("id")==root.second; });
+            if (found==rows.end() || !exact_json(*found,row))
+                invalid("Coordinated final ordinary row differs from its authenticated family consequence");
+        }
+        // Counts associations, not changed outputs: no-upsert units consume the
+        // same 1000-target budget as baseline clones and changed sibling roots.
+        const auto roster=inspect_embedded_assembly_dimension_clone_roster(source,roots);
+        auto framed=result;
+        std::vector<AssemblyDimensionTransformRequest> requests;
+        std::map<std::pair<std::string,std::string>,std::size_t> requests_by_root;
+        std::set<std::string,std::less<>> discovered_copies;
+        for (const auto& [original,target]:roster) {
+            if (!exact(source.at(original),framed.at(original)))
+                invalid("Coordinated final batch requires exact original dimension envelopes");
+            const std::pair root{target.catalog_id,target.instance_id};
+            const auto destination=copied_dimension_root_destinations.find(root);
+            const bool clone=destination!=copied_dimension_root_destinations.end();
+            const auto [request,inserted]=requests_by_root.emplace(root,requests.size());
+            if (inserted) {
+                auto qualified=target; qualified.part_path.clear();
+                auto proposed=qualified;
+                if (clone) { proposed.catalog_id=destination->second.first; proposed.instance_id=destination->second.second; }
+                requests.push_back({std::move(qualified),std::move(proposed),clone ?
+                    AssemblyDimensionTransformMode::clone : AssemblyDimensionTransformMode::move,{}});
+            }
+            if (clone) {
+                const auto identity=copied_dimension_identities.find(original);
+                if (identity==copied_dimension_identities.end() || !framed.erase(identity->second))
+                    invalid("Coordinated final clone inventory is incomplete");
+                discovered_copies.insert(original);
+                requests.at(request->second).fresh_dimension_ids.emplace(original,identity->second);
+            } else if (copied_dimension_identities.contains(original))
+                invalid("Coordinated ordinary root borrowed clone authority");
+        }
+        if (discovered_copies.size()!=copied_dimension_identities.size())
+            invalid("Coordinated dimension identities differ from the actual combined clone roster");
+        const auto dimensions=requests.empty() ? std::vector<Entity>{} :
+            carry_assembly_dimension_transform_entities(source,framed,requests);
+        std::vector<std::string> changed;
+        std::size_t copies=0;
+        for (const auto& dimension:dimensions) {
+            if (source.contains(dimension.id)) changed.push_back(dimension.id);
+            else {
+                ++copies;
+                if (!result.contains(dimension.id) || !exact(dimension,result.at(dimension.id)))
+                    invalid("Coordinated final clone differs from the independent leaf contribution");
+            }
+        }
+        if (copies!=discovered_copies.size()) invalid("Coordinated final clone output inventory differs");
+        validate_ordinary_assembly_dimension_changes(source,changed);
+        for (const auto& dimension:dimensions) if (source.contains(dimension.id)) result.at(dimension.id)=dimension;
+    } else if (lanes.complete_family_component_dimensions) {
         // Independently discover the union from actual roots, rather than
         // treating declared mappings as association or clone authority.
         const auto roster=inspect_embedded_assembly_dimension_clone_roster(source,copied_dimension_roots);
@@ -1486,7 +1673,7 @@ Entities replay_coordinated(const Entities& source,const PhaseConstraintAuthorin
             if (!exact(copy,result.at(copy.id)))
                 invalid("Coordinated dimension copy differs from its actual source-to-final component frame");
     }
-    if (lanes.complete_hosted_component_dimensions) {
+    if (lanes.complete_hosted_component_dimensions && !lanes.new_slab_geometry_authority) {
         const std::vector<std::string> host_roster(ordinary_dimension_hosts.begin(),ordinary_dimension_hosts.end());
         auto dimensions=carry_hosted_assembly_dimension_transform_entities(source,result,host_roster,1000-copied_dimension_count);
         std::vector<std::string> changed_dimension_ids;
@@ -1526,6 +1713,47 @@ nlohmann::json encode_phase_constraint_authoring_child_intent(const ConstraintAu
 }
 
 const nlohmann::json& phase_constraint_coordinated_authoring_body(const Json& value) {
+    if (value.is_object() && value.contains("version") && value.at("version")==10) {
+        resource_shape(value);
+        if (value.dump().size()>proof_budget) invalid("Coordinated replacement proof byte budget exceeded");
+        for (const auto* key:{"version","wall_authoring","roof_replacement","slab_replacement",
+            "structural_replacement","stair_replacement","ordinary_roof_edits","ordinary_slab_geometry",
+            "ordinary_structural_edits","ordinary_stair_transforms","complete_hosted_component_dimensions"})
+            if (!value.contains(key)) invalid("Direct coordinated slab authoring requires its closed fields");
+        const std::set<std::string,std::less<>> fields{"version","wall_authoring","roof_replacement","slab_replacement",
+            "structural_replacement","stair_replacement","ordinary_roof_edits","ordinary_slab_geometry",
+            "ordinary_structural_edits","ordinary_stair_transforms"};
+        const std::set<std::string,std::less<>> flags{"complete_hosted_component_dimensions","complete_wall_component_dimensions",
+            "complete_stair_component_dimensions","complete_roof_component_dimensions",
+            "complete_slab_component_dimensions","complete_structural_component_dimensions"};
+        for (const auto& [key,field]:value.items()) if (!fields.contains(key) &&
+            (!flags.contains(key) || !field.is_boolean() || field!=true))
+            invalid("Direct coordinated slab authoring requires known literal true flags and no wrapper");
+        if (!value.at("version").is_number_integer()) invalid("Direct coordinated slab version must be integral");
+        for (const auto* key:{"wall_authoring","roof_replacement","slab_replacement",
+            "structural_replacement","stair_replacement"})
+            if (!value.at(key).is_null() && !value.at(key).is_object())
+                invalid("Direct coordinated slab children must be nullable objects");
+        for (const auto* key:{"ordinary_roof_edits","ordinary_slab_geometry",
+            "ordinary_structural_edits","ordinary_stair_transforms"}) bounded_array(value.at(key));
+        const auto child=[&](const char* field,std::initializer_list<int> versions) {
+            const auto& leaf=value.at(field);
+            return leaf.is_object() && leaf.contains("version") && leaf.at("version").is_number_integer() &&
+                std::find(versions.begin(),versions.end(),leaf.at("version").get<int>())!=versions.end();
+        };
+        const auto& wall=value.at("wall_authoring");
+        const bool wall_copies=wall.is_object() && wall.contains("version") && wall.at("version")==36 &&
+            wall.contains("wall_edit_version") && wall.at("wall_edit_version")==2 &&
+            wall.contains("wall_replacement") && wall.at("wall_replacement").is_object() &&
+            wall.at("wall_replacement").contains("version") && wall.at("wall_replacement").at("version")==12;
+        if (value.contains("complete_wall_component_dimensions")!=wall_copies ||
+            value.contains("complete_stair_component_dimensions")!=child("stair_replacement",{8}) ||
+            value.contains("complete_roof_component_dimensions")!=child("roof_replacement",{11}) ||
+            value.contains("complete_slab_component_dimensions")!=child("slab_replacement",{8,10,12}) ||
+            value.contains("complete_structural_component_dimensions")!=child("structural_replacement",{5}))
+            invalid("Direct coordinated slab flags must match actual complete children exactly");
+        return value;
+    }
     if (!value.is_object() || !value.contains("version") ||
         (value.at("version")!=6 && value.at("version")!=7 && value.at("version")!=8 && value.at("version")!=9)) return value;
     resource_shape(value);
@@ -1672,7 +1900,8 @@ nlohmann::json encode_phase_constraint_authoring_intent(const PhaseConstraintAut
         {"source_saved_revision",value.source_saved_revision ? Json(*value.source_saved_revision) : Json(nullptr)},
         {"phase_selections",value.phase_selections},{"intent",encode_intent(value.intent)}};
     if (joint_similarity) result["version"]=22;
-    if (coordinated_lanes && coordinated_lanes->complete_family_component_dimensions) result["version"]=41;
+    if (coordinated_lanes && coordinated_lanes->new_slab_geometry_authority) result["version"]=46;
+    else if (coordinated_lanes && coordinated_lanes->complete_family_component_dimensions) result["version"]=41;
     else if (coordinated_wall_dimensions) result["version"]=37;
     else if (coordinated_stair_dimensions) result["version"]=34;
     if (!value.component_demolition.is_null()) {
@@ -1896,7 +2125,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         (value.is_object() && value.contains("version") && value.at("version")==5);
     const bool slab_demolition=value.is_object() && value.contains("version") && value.at("version")==6;
     const bool coordinated_replacements=value.is_object() && value.contains("version") &&
-        (value.at("version")==7 || value.at("version")==8 || value.at("version")==10 || value.at("version")==14 || value.at("version")==29 || value.at("version")==31 || value.at("version")==34 || value.at("version")==37 || value.at("version")==41);
+        (value.at("version")==7 || value.at("version")==8 || value.at("version")==10 || value.at("version")==14 || value.at("version")==29 || value.at("version")==31 || value.at("version")==34 || value.at("version")==37 || value.at("version")==41 || value.at("version")==46);
     const bool structural_dimensions=value.is_object() && value.contains("version") && value.at("version")==40;
     if (structural_dimensions && (!value.contains("structural_edit_version") || !value.at("structural_edit_version").is_number_integer() ||
         (value.at("structural_edit_version")!=9 && value.at("structural_edit_version")!=24)))
@@ -1961,7 +2190,7 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         "source_entities_digest","source_saved_revision","phase_selections","intent","ordinary_roof_edits"});
     else keys(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
         "source_entities_digest","source_saved_revision","phase_selections","intent"});
-    if (!value.at("version").is_number_integer() || value.at("version")<1 || value.at("version")>45 ||
+    if (!value.at("version").is_number_integer() || value.at("version")<1 || value.at("version")>46 ||
         !value.at("expected_revision").is_number_unsigned()) invalid("Phase constraint proof version or revision is invalid");
     if (!value.at("source_saved_revision").is_null() && !value.at("source_saved_revision").is_number_unsigned())
         invalid("Phase constraint saved revision is invalid");
@@ -2016,9 +2245,11 @@ PhaseConstraintAuthoringIntent decode_phase_constraint_authoring_intent(const Js
         result.coordinated_replacements=value.at("coordinated_replacements");
         if (result.coordinated_replacements.is_null()) invalid("Coordinated authoring requires replacement decisions");
         const auto inner=coordinated(result.coordinated_replacements,result);
-        const bool family_dimensions=value.at("version")==41;
+        const bool direct_slab=value.at("version")==46;
+        const bool family_dimensions=value.at("version")==41 || direct_slab;
         const bool wall_dimensions=value.at("version")==37;
-        if (family_dimensions!=inner.complete_family_component_dimensions ||
+        if (direct_slab!=inner.new_slab_geometry_authority ||
+            family_dimensions!=inner.complete_family_component_dimensions ||
             (value.at("version")==31 || value.at("version")==34 || wall_dimensions || family_dimensions)!=inner.complete_hosted_component_dimensions ||
             (!family_dimensions && wall_dimensions!=inner.complete_wall_component_dimensions) ||
             (!family_dimensions && !wall_dimensions && (value.at("version")==34)!=inner.complete_stair_component_dimensions) ||

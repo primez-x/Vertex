@@ -1,4 +1,5 @@
 #include "sketch/desktop/main_window.hpp"
+#include "support/fresh_open_history.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/measurement_linework_source.hpp"
 #include "sketch/appraisal_document.hpp"
@@ -357,8 +358,12 @@ void delete_shared_source_preserves_areas() {
     require(window.selectEntity("left-area"), "select retained stale measured area for actual Details capture");
     capture(window, "linework-shared-source-deleted.png");
     persist(window, directory.filePath("deleted-shared-source.bldproj")); check_shared_sources(window.document().snapshot(), false);
-    require(window.undoCommand() && window.document().snapshot().entities() == before.entities(), "native Undo after reopen restores shared source and all observations exactly");
-    check_shared_sources(window.document().snapshot(), true);
+    require(sketch::testing::saved_undo_redo(window, before, deleted),
+        "fresh session refuses inherited Undo/Redo while saved history independently restores shared source and all observations exactly");
+    auto history = sketch::testing::fresh_open_history_document(window);
+    history.undo(history.revision());
+    check_shared_sources(history.snapshot(), true);
+    check_shared_sources(window.document().snapshot(), false);
 }
 void unsafe_models_and_payloads_are_atomic() {
     QTemporaryDir directory; MainWindow author({}, nullptr, directory.filePath("safe-source.json")); prepare(author);
