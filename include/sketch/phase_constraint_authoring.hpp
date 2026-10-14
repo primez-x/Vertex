@@ -2,6 +2,7 @@
 
 #include "sketch/constraint_authoring.hpp"
 #include "sketch/assembly_instance_property_edit.hpp"
+#include "sketch/roof_opening_group_edit.hpp"
 
 #include <vector>
 #include <set>
@@ -361,6 +362,16 @@ struct ComponentSlabDirectionalResizeComposition {
     const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditPreparation&,
     std::span<const SlabGeometryEditIntent>,
     const std::optional<ComponentSlabDirectionalResizeAllocation>&, std::string_view);
+struct ComponentRoofOpeningDirectionalResizeComposition {
+    CoordinatedComponentPropertyComposition components;
+    std::map<std::pair<std::string,std::string>,RoofOpeningGroupMember> roof_children;
+    std::vector<nlohmann::json> phase_authorings;
+};
+// Reconstruct existing ordinary roof-child leaves and their complete phase32
+// proof internally. Both lanes share the private original-to-final carry.
+[[nodiscard]] ComponentRoofOpeningDirectionalResizeComposition compose_component_roof_opening_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditPreparation&,
+    std::span<const RoofOpeningDirectionalResizeRequest>, std::string_view);
 [[nodiscard]] CoordinatedComponentPropertyComposition compose_coordinated_component_property_dependencies(
     const DocumentSnapshot& actual,
     const PhaseAssemblyInstancePropertyEditPreparation& assemblies,

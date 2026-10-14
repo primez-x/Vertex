@@ -151,6 +151,25 @@ void test_display_round_trip_is_exact_and_non_mutating() {
                  "centimetre display value");
 }
 
+void test_existing_scalars_keep_exact_values() {
+    // Every 17..1 digit decimal spelling reparses to a different double here.
+    constexpr double scalar = 10.047702480523391;
+    for (const double value : {scalar, -scalar, 0.0, 1.5}) {
+        const auto captured = sketch::quantity_from_metres(value);
+        const auto parsed = sketch::parse_quantity(captured.original_expression, Unit::metre);
+        require(captured.metres == value && parsed.metres == value &&
+            parsed.exact_metres == captured.exact_metres, "captured scalar must reparse exactly");
+    }
+    require_exact(sketch::quantity_from_metres(scalar), 1414088410850461, 140737488355328,
+        "decimal rounding disagreement must use the exact binary fraction");
+    for (const double value : {1e-300, 1e300}) {
+        bool refused = false;
+        try { (void)sketch::quantity_from_metres(value); }
+        catch (const std::invalid_argument&) { refused = true; }
+        require(refused, "unsupported scalar range must refuse without rounding");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -160,5 +179,6 @@ int main() {
     test_scientific_decimals_are_exact();
     test_invalid_and_overflowing_input_is_rejected();
     test_display_round_trip_is_exact_and_non_mutating();
+    test_existing_scalars_keep_exact_values();
     return 0;
 }

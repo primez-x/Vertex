@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cmath>
 #include <limits>
 #include <numbers>
@@ -169,18 +168,7 @@ struct AxisResize {
     }
 };
 RoofOpeningQuantityInput quantity(double metres) {
-    if (!std::isfinite(metres)) invalid("Skylight group dimensions must be finite");
-    std::array<char, 64> buffer{};
-    for (int digits = 17; digits > 0; --digits) {
-        const auto spelling = std::to_chars(buffer.data(), buffer.data() + buffer.size(), metres,
-            std::chars_format::general, digits);
-        if (spelling.ec != std::errc{}) continue;
-        try {
-            auto parsed = parse_quantity(std::string(buffer.data(), spelling.ptr) + " m", Unit::metre);
-            if (parsed.metres == metres) return {std::move(parsed), Unit::metre};
-        } catch (const std::invalid_argument&) {} catch (const std::overflow_error&) {}
-    }
-    invalid("Skylight group position has no exact supported measurement");
+    return {quantity_from_metres(metres), Unit::metre};
 }
 std::optional<double> property_metres(const std::optional<RoofOpeningQuantityInput>& input,
     bool positive = true) {
@@ -309,8 +297,10 @@ Vec2 roof_opening_group_clone_anchor_world(const std::vector<RoofOpeningGroupClo
     return centroid(points);
 }
 
-std::vector<RoofEditIntent> prepare_roof_opening_group_transform(const Entities& actual,
-    const RoofOpeningGroupTransform& request) {
+namespace {
+void derive_roof_opening_group_transform(const Entities& actual,
+    const RoofOpeningGroupTransform& request, Hosts& hosts, MemberIds& ids,
+    std::map<std::string, RoofOpeningEditIntent, std::less<>>& grouped) {
     bounded_group(request.members.size());
     finite(request.world_pivot); finite(request.world_translation);
     if (!std::isfinite(request.rotation_radians) || !std::isfinite(request.uniform_scale) || request.uniform_scale <= 0.0)
@@ -339,9 +329,6 @@ std::vector<RoofEditIntent> prepare_roof_opening_group_transform(const Entities&
     const bool reflected_half_turn = reflected && std::abs(angle) == std::numbers::pi;
     const auto c = angle == 0.0 ? 1.0 : reflected_half_turn ? -1.0 : std::cos(angle);
     const auto s = angle == 0.0 || reflected_half_turn ? 0.0 : std::sin(angle);
-    Hosts hosts;
-    MemberIds ids;
-    std::map<std::string, RoofOpeningEditIntent, std::less<>> grouped;
     for (const auto& member : request.members) {
         unique(ids, member.roof_id, member.opening_id);
         const auto& owner = actual_host(actual, hosts, member.roof_id);
@@ -399,15 +386,54 @@ std::vector<RoofEditIntent> prepare_roof_opening_group_transform(const Entities&
         }
         entry->second.upserts.push_back(std::move(row));
     }
+}
+std::vector<RoofEditIntent> grouped_transform_intents(
+    std::map<std::string, RoofOpeningEditIntent, std::less<>>& grouped, bool sorted_children = false) {
     std::vector<RoofEditIntent> result;
     result.reserve(grouped.size());
-    for (auto& [id, opening] : grouped) result.push_back(composite(std::move(opening)));
+    for (auto& [id, opening] : grouped) {
+        (void)id;
+        if (sorted_children) std::sort(opening.upserts.begin(), opening.upserts.end(), [](const auto& left, const auto& right) {
+            return left.opening_id < right.opening_id;
+        });
+        result.push_back(composite(std::move(opening)));
+    }
+    return result;
+}
+} // namespace
+
+std::vector<RoofEditIntent> prepare_roof_opening_group_transform(const Entities& actual,
+    const RoofOpeningGroupTransform& request) {
+    Hosts hosts;
+    MemberIds ids;
+    std::map<std::string, RoofOpeningEditIntent, std::less<>> grouped;
+    derive_roof_opening_group_transform(actual, request, hosts, ids, grouped);
+    auto result = grouped_transform_intents(grouped);
     const auto admitted = replay_roof_edit_entities(actual, result);
     // Retained-only intents validate every requested source, including identity
     // operations. They never become authored edits or promote an unchanged roof.
     if (!request.retain_invariant_members)
         std::erase_if(result, [&](const auto& edit) { return admitted.at(edit.roof_id) == actual.at(edit.roof_id); });
     return result;
+}
+
+PreparedRoofOpeningDirectionalResizes prepare_roof_opening_directional_resizes(const Entities& actual,
+    std::span<const RoofOpeningDirectionalResizeRequest> requests) {
+    bounded_group(requests.size());
+    Hosts hosts;
+    MemberIds ids;
+    std::map<std::string, RoofOpeningEditIntent, std::less<>> grouped;
+    for (const auto& row : requests) {
+        RoofOpeningGroupTransform request;
+        request.members = {row.target};
+        request.world_pivot = row.anchor_m;
+        request.axis_scale = {row.sx, row.sy};
+        request.axis_rotation_radians = row.frame_rotation_radians;
+        derive_roof_opening_group_transform(actual, request, hosts, ids, grouped);
+    }
+    auto intents = grouped_transform_intents(grouped, true);
+    auto candidate = replay_roof_edit_entities(actual, intents);
+    return {std::move(intents), std::move(candidate)};
 }
 
 std::vector<RoofEditIntent> prepare_roof_opening_group_properties(const Entities& actual,

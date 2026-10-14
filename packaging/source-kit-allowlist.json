@@ -1815,6 +1815,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/design/vertex-mixed-component-skylight-resize.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/design/vertex-mixed-component-slab-resize.md"
     },
     {
@@ -6868,6 +6872,18 @@
     {
       "category": "source",
       "path": "tests/measurement_linework_transform_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/mixed_axis_resize_canvas_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/mixed_component_skylight_resize_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/mixed_component_skylight_resize_tests.cpp"
     },
     {
       "category": "source",

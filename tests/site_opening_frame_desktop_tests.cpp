@@ -40,7 +40,8 @@ PlanCanvas& showSite(MainWindow& window,const OpeningFrameFixture& f) {
     window.resize(1300,900);window.show();require(window.setActiveLayer("layer-1"),"opening active layer");
     window.setWorkspace(Workspace::architectural);control<QAction>(window,"sitePlan").trigger();
     QApplication::processEvents();auto& canvas=control<PlanCanvas>(window,"architecturalPlanCanvas");
-    canvas.setOverviewMapEnabled(false);canvas.setGridEnabled(true);canvas.setSnapEnabled(true);
+    // Isolate exact host-frame conversion from the separately tested grid snap.
+    canvas.setOverviewMapEnabled(false);canvas.setGridEnabled(true);canvas.setSnapEnabled(false);
     canvas.setViewTransform({27+f.translation,.04},40);
     const auto& host=item(canvas,f.wall);
     require(host.snap_points.size()==2,"displayed physical host baseline exists");
@@ -78,9 +79,15 @@ void checkOpening(const DocumentSnapshot& before,const DocumentSnapshot& after,
     for(const auto& [owner,entity]:before.entities())require(after.entities().at(owner)==entity,
         "opening command preserves all pre-existing source owners");
 }
+void waitOpeningPreview(const PlanCanvas& canvas) {
+    QElapsedTimer timer;timer.start();
+    while(canvas.componentPlacementPreviewPending()&&timer.elapsed()<5000){QApplication::processEvents();QThread::msleep(1);}
+    require(!canvas.componentPlacementPreviewPending(),"native opening hover preview finishes");
+}
 void previewOnHost(const PlanCanvas& canvas,double translation) {
-    require(canvas.boundaryDraftPreview()&&!canvas.boundaryDraftPreview()->segments.empty(),"native opening hover supplies actual assembly preview");
-    for(const auto& edge:canvas.boundaryDraftPreview()->segments)for(const auto p:{edge.start,edge.end})
+    waitOpeningPreview(canvas);
+    require(canvas.componentPlacementPreview()&&!canvas.componentPlacementPreview()->segments.empty(),"native opening hover supplies actual assembly preview");
+    for(const auto& edge:canvas.componentPlacementPreview()->segments)for(const auto p:{edge.start,edge.end})
         require(p.x>20+translation&&p.x<24+translation,"opening preview uses exact host presentation rather than active building");
 }
 void paletteFrames() {
@@ -198,13 +205,14 @@ void rotatedHosts() {
         MainWindow window(f.document);window.setMetricUnits(true);window.setAttribute(Qt::WA_DontShowOnScreen);
         window.resize(1300,900);window.show();window.setWorkspace(Workspace::architectural);
         control<QAction>(window,"sitePlan").trigger();QApplication::processEvents();
-        auto& canvas=control<PlanCanvas>(window,"architecturalPlanCanvas");canvas.setOverviewMapEnabled(false);canvas.setSnapEnabled(true);
+        auto& canvas=control<PlanCanvas>(window,"architecturalPlanCanvas");canvas.setOverviewMapEnabled(false);canvas.setSnapEnabled(false);
         const auto target=presented({22.13,.04});canvas.setViewTransform(target,40);
         armOpening(window,"Doorway");const auto before=window.document().snapshot();
         mouse(canvas,QEvent::MouseMove,target);
-        require(canvas.boundaryDraftPreview()&&canvas.boundaryDraftPreview()->segments.size()==4,"rotated bare doorway has four physical jamb edges");
+        waitOpeningPreview(canvas);
+        require(canvas.componentPlacementPreview()&&canvas.componentPlacementPreview()->segments.size()==4,"rotated bare doorway has four physical jamb edges");
         const std::array<Vec2,4> expected{presented({21.73,.11}),presented({22.53,.11}),presented({22.53,-.03}),presented({21.73,-.03})};
-        for(const auto p:expected)require(std::any_of(canvas.boundaryDraftPreview()->segments.begin(),canvas.boundaryDraftPreview()->segments.end(),[&](const auto& edge) {
+        for(const auto p:expected)require(std::any_of(canvas.componentPlacementPreview()->segments.begin(),canvas.componentPlacementPreview()->segments.end(),[&](const auto& edge) {
             return std::hypot(p.x-edge.start.x,p.y-edge.start.y)<1e-6;
         }),"native preview rotates through exact host frame once");
         click(canvas,target);wait(window,before.revision()+1);checkOpening(before,window.document().snapshot(),f,1.73,"opening");

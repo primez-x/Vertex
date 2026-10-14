@@ -12,6 +12,76 @@ constitute user acceptance.
 
 ## Current delivery state
 
+### October 13 component and typed skylight resizing
+
+Independent components and separately selected typed skylights on unselected
+ordinary roofs now share the analytical side-grip gesture. Closed Properties40
+under command52 derives both lanes from the original snapshot, groups child
+edits once per roof, reconstructs complete ordinary phase32 proof, and reuses
+the final catalog/dimension batch. Every requested roof must be absent from all
+phase registries, including unit requests. Reader263/extraction261 preserves
+retained and undone authority without promoting opaque command-shaped metadata.
+
+Focused core, canvas and quantity checks pass. The full-run native skylight lifecycle
+passes in 94.24 seconds: both selection orders, exact manufactured roof/component
+preview, committed output exclusion, one-command Undo/Redo, Cancel/Remove review,
+stale source/view/selection refusal, and editable save/reopen. Ordinary Open
+preserves saved history and starts a fresh Undo session. Root inspected captures.
+
+Qualification found and corrected an ordinary-owner/compatibility-union selection
+guard and an omitted roof rendering correspondence. The latter remains local to
+preview projection and grants no containing-roof selection authority. Oblique
+geometry also exposed decimal receipt conversion disagreement; the shared
+quantity producer now retains accepted decimal spellings and adds an exact,
+bounded binary-fraction fallback. Parser rounding and historical meanings stay
+unchanged. Equivalent roof/corner/opening receipt producers share the correction.
+Independent reviews resolved the selection finding and found no further concrete
+issue in the new numeric fallback; runtime checks remain the evidence.
+
+The additional native component/slab Site, curved and baseline-phase fixtures
+pass in the full run (64.24 seconds). Actual Site Select all keeps the existing
+primary component and exposes the mixed grips. Idle admission uses the current
+displayed publication; pointer press captures edit authority. Retained selection
+refresh renews validated authority before computing controls and checks the
+source again afterwards. Independent review found no actionable authority issue.
+
+The whole Release build passes. CTest registers 329 tests, 328 active. The
+standard full run passed 322/326 active tests in 602.70 seconds, excluding the two
+protected import fixtures. Preserve that failed log: it is not a final green
+full-suite run. All four failed workflows subsequently pass in isolated immutable
+protected runtimes. Site standalone Delete/Cut now uses the existing strict
+dialect17 authority projection. Pinc import adopts its new document's session
+identity so its authored import command remains one Undo. Ordinary Open still
+retains history and starts a fresh Undo session. Fixtures now use actual async
+opening previews, exact measured-edge callout identities, settled reference
+viewports, and the one-decimal display contract; exact geometry remains checked.
+
+The final complete Release rebuild passes (`final-release-build.log`). All 12
+final focused checks pass in 341.41 seconds: both core/native mixed resize lanes,
+canvas and async opening preview, complete desktop recovery, quantity and three
+source-kit checks. All six protected import fixtures pass again against the final
+runtime, including DXF/IFC. Eight rebuilt-app smoke cases pass at 100%, 150% and
+200% scaling; root inspected final Plan captures in both workspaces. These legacy
+smoke seeds retain their prior withheld GLA; they do not qualify the new-room GLA
+flow. The tracked-path allowlist has 2,068 entries and passes its check.
+Evidence, including original failures, is under
+`artifacts/codex-mixed-skylight-20261013/`: `full-ctest.log`,
+`final-release-build.log`, `final-focused-ctest.log`,
+`protected-runtime-final-qualified-wps10/result.json`,
+`protected-runtime-annotation-diagnostic-wps6/result.json`,
+`protected-runtime-opening-qualified-wps6/result.json`,
+`protected-runtime-reference-diagnostic-wps6/result.json`, and
+`protected-runtime-pinc-qualified-wps9/result.json`, `qualified-desktop-smoke.log`,
+and `qualified-desktop-smoke/`.
+
+Root integrated review and verification are complete. Git records the scoped
+checkpoint; reconcile local and remote refs before resuming.
+Installed candidate and human acceptance remain
+unchanged. The user has no real Apex project files available; original Apex and
+device compatibility is still unverified. Remaining mixed physical families
+still require closure; canonical rectangular columns and horizontal straight
+beams are the next source-derived resize lane.
+
 ### October 13 mixed component and slab resizing
 
 Independent components and slabs now share an analytical side-grip frame and

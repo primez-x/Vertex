@@ -520,7 +520,9 @@ public:
     [[nodiscard]] QString emptyDrawingHint() const { return m_empty_drawing_hint; }
     // True when the hint is currently painted (empty drawing, idle canvas).
     [[nodiscard]] bool emptyDrawingHintVisible() const;
-    // Explicit independent-root side resize. The host supplies analytical axes;
+    // Explicit independent-root/selected-child side resize. IDs remain ordinary
+    // owners only; typed children come from the actual canvas selection.
+    // The host supplies analytical axes;
     // ordinary multi-selection and corner transforms retain their own opt-ins.
     void setSelectionAxisResizeCohort(QStringList ids, std::optional<CanvasSelectionFrame> frame);
     [[nodiscard]] std::optional<CanvasSelectionFrame> selectionAxisResizeCohortFrame() const;
@@ -557,6 +559,9 @@ public:
     // A pending library component is never part of committed geometry,
     // selection, snapping, content bounds, minimap, print or export.
     void setComponentPlacementPreview(std::optional<CanvasEntity> preview);
+    [[nodiscard]] const std::optional<CanvasEntity>& componentPlacementPreview() const noexcept {
+        return m_component_placement_preview;
+    }
     void setComponentPlacementGroupPreview(std::vector<CanvasEntity> entities,
         std::vector<CanvasLabel> labels = {}, std::optional<Bounds2> crop = std::nullopt);
     void clearComponentPlacementPreview();
@@ -840,6 +845,9 @@ public:
     // Screen-only horizontal mouth controls. Publish after setEntities, which
     // retires their source capture. Duplicate identities/invalid frames refuse.
     void setRoofOpeningControls(std::vector<CanvasRoofOpeningControls> controls);
+    [[nodiscard]] std::uint64_t roofOpeningControlsGeneration() const noexcept {
+        return m_roof_opening_controls_generation;
+    }
     void setSelectedRoofOpenings(std::vector<CanvasRoofOpeningTarget> targets);
     void setSelectedRoofOpening(std::optional<CanvasRoofOpeningTarget> target);
     [[nodiscard]] const std::vector<CanvasRoofOpeningControls>& roofOpeningControls() const noexcept {
@@ -1130,6 +1138,7 @@ private:
         std::optional<std::vector<CanvasRoofOpeningControls>> child_controls = std::nullopt,
         std::optional<CanvasSelectionFrame> cohort_frame = std::nullopt);
     [[nodiscard]] bool axisResizeCohortEnabled() const;
+    [[nodiscard]] bool axisResizeCohortChildrenQualified() const;
     [[nodiscard]] bool axisResizeCohortCaptureCurrent() const;
     [[nodiscard]] bool validAxisResizeCohortPreview(const std::vector<CanvasEntity>& entities,
         const std::vector<CanvasLabel>& labels, const std::vector<CanvasReference>& references) const;

@@ -38,6 +38,10 @@ struct Quantity {
     std::string_view expression,
     Unit default_unit = default_input_unit);
 
+// Captures an existing scalar as a bounded, parseable metre input without
+// rounding it. Throws when no admitted int64 rational reproduces the scalar.
+[[nodiscard]] Quantity quantity_from_metres(double metres);
+
 [[nodiscard]] double quantity_value(const Quantity& quantity, Unit unit);
 
 // Produces an exact, parseable representation without changing quantity.

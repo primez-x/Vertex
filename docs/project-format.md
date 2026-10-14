@@ -1,4 +1,13 @@
-# Vertex project formats v1 through v262
+# Vertex project formats v1 through v263
+
+Reader263/native extraction261 retains closed Properties40 component/skylight
+directional resize composition under command52. Sorted qualified child operators
+reconstruct existing selected skylight edits on ordinary roofs from the original
+snapshot. Roof bodies and unselected children retain their source authority;
+generated ordinary phase32 proof is reconstructed rather than supplied. Retained
+and undone commands preserve this floor. Canonical command/proof slots determine
+the floor, including histories that already require reader262; opaque metadata
+does not acquire this authority. Load refuses an underfloor marker.
 
 Reader262/native extraction260 retains closed Properties39 component/slab
 directional resize composition under command52. Both lanes independently replay

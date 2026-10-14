@@ -350,6 +350,9 @@ void referenceDocumentLifecycle(){
     referencePose(pinned,pinned,seed.entities().at(f.reference.toStdString()));
     for(const auto gesture:{ReferenceGesture::move,ReferenceGesture::rotate,ReferenceGesture::scale}){
         require(window.selectEntity(f.reference),"publish reference before independent lifecycle gesture");
+        // Save/reopen and selection can queue a layout change. Capture the
+        // next gesture only after its displayed viewport has settled.
+        QApplication::processEvents();
         const auto before=window.document().snapshot();const auto digest=document_snapshot_digest(before);
         const auto retained=referenceItem(canvas,f.reference);const auto baseline_art=referenceArtwork(canvas);
         const auto [start,end]=referenceGesturePoints(canvas,retained,gesture);
@@ -370,6 +373,7 @@ void referenceDocumentLifecycle(){
         };
         const auto initial_gesture_state=repeat_state("initial gesture geometry");
         referenceMouse(canvas,QEvent::MouseButtonPress,start);
+        const auto initial_press_state=repeat_state("after initial press");
         referenceMouse(canvas,QEvent::MouseMove,start+(end-start)*.6);
         const auto first_serial=gesture==ReferenceGesture::move?canvas.entitiesMovePreviewSerial():canvas.entityTransformPreviewSerial();
         referenceMouse(canvas,QEvent::MouseMove,end);
@@ -378,6 +382,11 @@ void referenceDocumentLifecycle(){
         require(document_snapshot_digest(window.document().snapshot())==digest,"reference preview leaves complete source snapshot and retained history unchanged");
         referencePose(referenceItem(canvas,f.reference),pinned,before.entities().at(f.reference.toStdString()));
         const auto preview_art=referenceArtwork(canvas);const auto preview_frame=relativeSelectionFrame(canvas);
+        if(preview_art==baseline_art) {
+            const auto name=gesture==ReferenceGesture::move?"move":gesture==ReferenceGesture::rotate?"rotate":"scale";
+            std::cerr<<"Site initial reference preview gesture="<<name<<'\n'<<initial_gesture_state<<'\n'
+                <<initial_press_state<<'\n'<<repeat_state("after initial preview")<<'\n';
+        }
         require(preview_art!=baseline_art,"real reference preview changes asymmetric artwork");
         escape(canvas);referenceMouse(canvas,QEvent::MouseButtonRelease,end);QApplication::processEvents();
         require(document_snapshot_digest(window.document().snapshot())==digest,"reference Escape and release add no command or history");

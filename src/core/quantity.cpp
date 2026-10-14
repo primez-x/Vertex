@@ -1,6 +1,9 @@
 #include "sketch/quantity.hpp"
 
 #include <algorithm>
+#include <array>
+#include <bit>
+#include <charconv>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -467,6 +470,47 @@ Quantity parse_quantity(std::string_view expression, Unit default_unit) {
     } catch (const std::overflow_error&) {
         throw std::invalid_argument("quantity exceeds exact numeric range");
     }
+}
+
+Quantity quantity_from_metres(double metres) {
+    if (!std::isfinite(metres)) throw std::invalid_argument("quantity scalar must be finite");
+    std::array<char, 64> buffer{};
+    for (int precision = 17; precision > 0; --precision) {
+        const auto encoded = std::to_chars(buffer.data(), buffer.data() + buffer.size(),
+            metres, std::chars_format::general, precision);
+        if (encoded.ec != std::errc{}) continue;
+        try {
+            auto result = parse_quantity(std::string(buffer.data(), encoded.ptr) + " m", Unit::metre);
+            if (result.metres == metres) return result;
+        } catch (const std::invalid_argument&) {} catch (const std::overflow_error&) {}
+    }
+    // Decimal numerator and denominator conversions round separately. A
+    // reduced binary fraction preserves the actual scalar when they disagree.
+    static_assert(std::numeric_limits<double>::is_iec559 &&
+        std::numeric_limits<double>::digits == 53 && sizeof(double) == sizeof(std::uint64_t));
+    const auto bits = std::bit_cast<std::uint64_t>(metres);
+    const auto exponent = static_cast<unsigned>((bits >> 52) & 0x7ff);
+    auto numerator = bits & ((std::uint64_t{1} << 52) - 1);
+    if (exponent) numerator |= std::uint64_t{1} << 52;
+    int shift = exponent ? static_cast<int>(exponent) - 1075 : -1074;
+    if (!numerator) return parse_quantity("0 m", Unit::metre);
+    const auto trailing = std::countr_zero(numerator);
+    numerator >>= trailing;
+    shift += trailing;
+    constexpr auto limit = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+    std::uint64_t denominator = 1;
+    if (shift >= 0) {
+        if (shift >= 63 || numerator > (limit >> shift))
+            throw std::invalid_argument("quantity scalar exceeds its bounded rational range");
+        numerator <<= shift;
+    } else {
+        if (shift <= -63) throw std::invalid_argument("quantity scalar exceeds its bounded rational range");
+        denominator <<= -shift;
+    }
+    auto result = parse_quantity(std::string(bits >> 63 ? "-" : "") + std::to_string(numerator) +
+        "/" + std::to_string(denominator) + " m", Unit::metre);
+    if (result.metres != metres) throw std::invalid_argument("quantity scalar has no exact bounded metre input");
+    return result;
 }
 
 double quantity_value(const Quantity& quantity, Unit unit) {

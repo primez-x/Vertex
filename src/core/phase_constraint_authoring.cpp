@@ -3530,6 +3530,105 @@ AssemblyPropertyRowAdmission component_property_row_admission(const Entities& or
 }
 } // namespace
 
+namespace {
+// Only source-reconstructed physical lanes enter this shared finalization.
+// Provisional carry is discarded before the one original-to-final batch.
+CoordinatedComponentPropertyComposition finalize_component_directional_resize(
+    const DocumentSnapshot& source, const PhaseAssemblyInstancePropertyEditPreparation& replayed,
+    const PhaseAssemblyInstancePropertyEditAuthoring& authoring, const Entities& physical,
+    const std::map<ComponentTarget,ComponentTarget>& destinations,
+    const PhaseSlabReplacementIdentityMap& physical_dimension_ids) {
+    const auto& actual=source.entities();
+    CoordinatedComponentPropertyComposition result;
+    validate_mixed_edit_fresh_destinations(actual,{physical,replayed.preview_entities()});
+    std::set<std::string,std::less<>> promoted;
+    auto rows=component_property_row_admission(actual,replayed.preview_entities(),promoted);
+    const auto physical_rows=component_property_row_admission(actual,physical,promoted);
+    for (const auto& [binding,row]:physical_rows.changed_rows) {
+        const auto [entry,inserted]=rows.changed_rows.emplace(binding,row);
+        if (!inserted && !exact_json(entry->second,row)) invalid("Mixed resize has conflicting independently replayed catalog rows");
+    }
+    rows.catalogs.insert(physical_rows.catalogs.begin(),physical_rows.catalogs.end());
+    PhasePropertyCompositionRetirements retirements;
+    retirements.erased.insert(replayed.result().retired_dimension_ids.begin(),replayed.result().retired_dimension_ids.end());
+    result.entities=compose_mixed_selection_edit_candidates_impl(actual,{physical,replayed.preview_entities()},
+        nullptr,nullptr,nullptr,&promoted,&retirements,&rows);
+    result.original_to_proposed=replayed.result().original_to_proposed;
+    result.reserved_component_identity_ids=replayed.result().fresh_identity_ids;
+    auto framed=result.entities;
+    // Remove only independently inventoried provisional copies. Registries and
+    // presentation references keep their admitted final destination identities.
+    std::map<std::string,std::string,std::less<>> copies=authoring.dimension_identities;
+    for (const auto& [original,proposed]:physical_dimension_ids)
+        if (!copies.emplace(original,proposed).second) invalid("Mixed resize repeats a source dimension allocation");
+    for (const auto& [original,proposed]:copies) {
+        if (!exact(actual.at(original),framed.at(original)) || actual.contains(proposed) || !framed.erase(proposed) ||
+            !result.entities.erase(proposed)) invalid("Mixed resize lost a protected original or provisional dimension copy");
+    }
+    std::map<ComponentTarget,std::size_t> requests_by_root;
+    std::vector<AssemblyDimensionReviewedTransformRequest> requests;
+    std::size_t associations{};
+    for (const auto& [id,entity]:actual) {
+        if (!can_recognize_boundary_dimension_entity_type(entity.type) ||
+            !is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(entity).format)) continue;
+        const auto dimension=decode_boundary_dimension_entity(entity);
+        if (!dimension.dimension || !dimension.dimension->assembly_target) invalid("Mixed resize has an unsupported dimension carrier");
+        const auto root=component_root(dimension.dimension->assembly_target->component);
+        const auto destination=destinations.find(root);
+        if (destination==destinations.end()) continue;
+        if (++associations>1000) invalid("Mixed resize combined dimension association bound exceeded");
+        const auto [request,inserted]=requests_by_root.emplace(root,requests.size());
+        if (inserted) requests.push_back({{root,destination->second,root==destination->second ?
+            AssemblyDimensionTransformMode::move : AssemblyDimensionTransformMode::clone,{}},{},{}});
+        const bool retired=authoring.profile_dimension_decisions.contains(id) && !authoring.profile_dimension_decisions.at(id);
+        if (root!=destination->second && !retired)
+            requests.at(request->second).transform.fresh_dimension_ids.emplace(id,copies.at(id));
+        framed.insert_or_assign(id,entity);
+        if (!retired) result.entities.insert_or_assign(id,entity);
+    }
+    for (const auto& intent:authoring.intents) if (intent.review_profile_topology ||
+        intent.initialize_deformed_profile_topology || intent.review_initial_profile_geometry) {
+        const auto request=requests_by_root.find(component_root(intent.target));
+        if (request!=requests_by_root.end()) requests.at(request->second).reviewed_profile_nodes.push_back(intent.target);
+    }
+    const auto reviews=inspect_phase_assembly_instance_profile_dimension_review_roster(actual,authoring.intents);
+    for (const auto& [id,decision]:authoring.profile_dimension_decisions) {
+        const auto root=component_root(reviews.at(id).component);
+        requests.at(requests_by_root.at(root)).profile_dimension_decisions.emplace(id,decision);
+    }
+    AssemblyDimensionReviewedCarryResult dimensions;
+    if (!requests.empty()) {
+        if (std::none_of(requests.begin(),requests.end(),[](const auto& request) {
+                return !request.reviewed_profile_nodes.empty();
+            })) {
+            std::vector<AssemblyDimensionTransformRequest> ordinary;
+            for (const auto& request:requests) ordinary.push_back(request.transform);
+            dimensions.upserts=carry_assembly_dimension_transform_entities(actual,framed,ordinary);
+        } else dimensions=carry_reviewed_assembly_dimension_transform_entities(actual,framed,requests);
+    }
+    if (dimensions.retired_source_dimension_ids!=replayed.result().retired_dimension_ids)
+        invalid("Mixed resize changed the independently reviewed retirement closure");
+    std::vector<std::string> changed=dimensions.retired_source_dimension_ids;
+    for (const auto& dimension:dimensions.upserts) {
+        if (actual.contains(dimension.id)) changed.push_back(dimension.id);
+        result.entities.insert_or_assign(dimension.id,dimension);
+    }
+    std::sort(changed.begin(),changed.end());
+    validate_ordinary_assembly_dimension_changes(actual,changed);
+    for (const auto& id:dimensions.retired_source_dimension_ids) result.entities.erase(id);
+    std::vector<AssemblyInstancePropertyEditIntent> retained;
+    for (const auto& [original,destination]:result.original_to_proposed) {
+        (void)original;
+        AssemblyInstancePropertyEditIntent intent;
+        intent.target=destination;
+        retained.push_back(std::move(intent));
+    }
+    std::sort(retained.begin(),retained.end(),[](const auto& left,const auto& right) { return left.target<right.target; });
+    (void)replay_phase_assembly_instance_property_edits(result.entities,retained,{});
+    return result;
+}
+} // namespace
+
 ComponentSlabDirectionalResizeComposition compose_component_slab_directional_resize(
     const DocumentSnapshot& source,const PhaseAssemblyInstancePropertyEditPreparation& components,
     std::span<const SlabGeometryEditIntent> slab_geometry,
@@ -3639,91 +3738,73 @@ ComponentSlabDirectionalResizeComposition compose_component_slab_directional_res
             const ComponentTarget root{id,row.at("id").get<std::string>(),std::nullopt,{}};
             destinations.emplace(root,root);
         }
-    validate_mixed_edit_fresh_destinations(actual,{physical,replayed.preview_entities()});
-    std::set<std::string,std::less<>> promoted;
-    auto rows=component_property_row_admission(actual,replayed.preview_entities(),promoted);
-    const auto slab_rows=component_property_row_admission(actual,physical,promoted);
-    for (const auto& [binding,row]:slab_rows.changed_rows) {
-        const auto [entry,inserted]=rows.changed_rows.emplace(binding,row);
-        if (!inserted && !exact_json(entry->second,row)) invalid("Mixed resize has conflicting independently replayed catalog rows");
+    result.components=finalize_component_directional_resize(source,replayed,authoring,physical,destinations,slab_dimension_ids);
+    return result;
+}
+
+ComponentRoofOpeningDirectionalResizeComposition compose_component_roof_opening_directional_resize(
+    const DocumentSnapshot& source,const PhaseAssemblyInstancePropertyEditPreparation& components,
+    std::span<const RoofOpeningDirectionalResizeRequest> requests,std::string_view message) {
+    if (requests.empty() || requests.size()>1000 || message.size()>1024 || message.find('\0')!=std::string_view::npos)
+        invalid("Mixed component/skylight resize roster or message exceeds its bound");
+    const auto replayed=replay_phase_assembly_instance_property_edit_preparation(source,components.request());
+    const auto version=replayed.request().at("version").get<int>();
+    if (version<7 || version>9) invalid("Mixed component/skylight resize requires component geometry request seven, eight or nine");
+    const auto authoring=decode_phase_assembly_instance_property_edit_authoring(replayed.request().at("authoring"));
+    if (authoring.intents.empty() || authoring.intents.size()+requests.size()>1000)
+        invalid("Mixed component/skylight resize selection exceeds its complete roster bound");
+    const auto& actual=source.entities();
+    std::map<ComponentTarget,ComponentTarget> destinations;
+    for (const auto& intent:authoring.intents) {
+        if (!intent.target.document_entity_id || !intent.properties.empty() || !intent.materials.empty() ||
+            !intent.quantities.empty() || intent.pose.operation!=AssemblyInstancePropertyPatchOperation::unchanged ||
+            intent.pose.x_metres || intent.pose.y_metres || intent.pose.z_metres || intent.pose.rotation_radians ||
+            intent.pose.scale || intent.pose.vertical_scale || intent.pose.mirrored_y ||
+            intent.profile_geometry.operation==AssemblyInstancePropertyPatchOperation::unchanged)
+            invalid("Mixed component/skylight resize admits independent document component geometry only");
+        const auto root=component_root(intent.target);
+        const auto destination=component_root(replayed.result().original_to_proposed.at(intent.target));
+        const auto [entry,inserted]=destinations.emplace(root,destination);
+        if (!inserted && entry->second!=destination) invalid("Mixed resize has conflicting component destinations");
     }
-    rows.catalogs.insert(slab_rows.catalogs.begin(),slab_rows.catalogs.end());
-    PhasePropertyCompositionRetirements retirements;
-    retirements.erased.insert(replayed.result().retired_dimension_ids.begin(),replayed.result().retired_dimension_ids.end());
-    result.components.entities=compose_mixed_selection_edit_candidates_impl(actual,{physical,replayed.preview_entities()},
-        nullptr,nullptr,nullptr,&promoted,&retirements,&rows);
-    result.components.original_to_proposed=replayed.result().original_to_proposed;
-    result.components.reserved_component_identity_ids=replayed.result().fresh_identity_ids;
-    auto framed=result.components.entities;
-    // Remove only independently inventoried provisional copies. Registries and
-    // presentation references keep their admitted final destination identities.
-    std::map<std::string,std::string,std::less<>> copies=authoring.dimension_identities;
-    for (const auto& [original,proposed]:slab_dimension_ids)
-        if (!copies.emplace(original,proposed).second) invalid("Mixed resize repeats a source dimension allocation");
-    for (const auto& [original,proposed]:copies) {
-        if (!exact(actual.at(original),framed.at(original)) || actual.contains(proposed) || !framed.erase(proposed) ||
-            !result.components.entities.erase(proposed)) invalid("Mixed resize lost a protected original or provisional dimension copy");
+    ComponentRoofOpeningDirectionalResizeComposition result;
+    std::set<std::string,std::less<>> hosts;
+    std::optional<std::pair<std::string,std::string>> previous;
+    for (const auto& request:requests) {
+        const auto& target=request.target;
+        const std::pair key{target.roof_id,target.opening_id};
+        if (previous && *previous>=key) invalid("Mixed skylight resize requires sorted unique qualified children");
+        previous=key;
+        hosts.insert(target.roof_id);
+        result.roof_children.emplace(key,target);
     }
-    std::map<ComponentTarget,std::size_t> requests_by_root;
-    std::vector<AssemblyDimensionReviewedTransformRequest> requests;
-    std::size_t associations{};
-    for (const auto& [id,entity]:actual) {
-        if (!can_recognize_boundary_dimension_entity_type(entity.type) ||
-            !is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(entity).format)) continue;
-        const auto dimension=decode_boundary_dimension_entity(entity);
-        if (!dimension.dimension || !dimension.dimension->assembly_target) invalid("Mixed resize has an unsupported dimension carrier");
-        const auto root=component_root(dimension.dimension->assembly_target->component);
-        const auto destination=destinations.find(root);
-        if (destination==destinations.end()) continue;
-        if (++associations>1000) invalid("Mixed resize combined dimension association bound exceeded");
-        const auto [request,inserted]=requests_by_root.emplace(root,requests.size());
-        if (inserted) requests.push_back({{root,destination->second,root==destination->second ?
-            AssemblyDimensionTransformMode::move : AssemblyDimensionTransformMode::clone,{}},{},{}});
-        const bool retired=authoring.profile_dimension_decisions.contains(id) && !authoring.profile_dimension_decisions.at(id);
-        if (root!=destination->second && !retired)
-            requests.at(request->second).transform.fresh_dimension_ids.emplace(id,copies.at(id));
-        framed.insert_or_assign(id,entity);
-        if (!retired) result.components.entities.insert_or_assign(id,entity);
+    // Membership is checked before derivation or unit/no-op elimination. Even
+    // baseline-only and inactive/proposed registry members are outside lane40.
+    for (const auto& [id,entity]:actual) if (entity.type=="model_phases") {
+        (void)id;
+        const auto registry=ModelPhases::from_json(entity.properties.at("model"));
+        for (const auto& host:registry.entity_ids())
+            if (hosts.contains(host)) invalid("Mixed skylight resize requires hosts absent from every phase registry");
     }
-    for (const auto& intent:authoring.intents) if (intent.review_profile_topology ||
-        intent.initialize_deformed_profile_topology || intent.review_initial_profile_geometry) {
-        const auto request=requests_by_root.find(component_root(intent.target));
-        if (request!=requests_by_root.end()) requests.at(request->second).reviewed_profile_nodes.push_back(intent.target);
-    }
-    const auto reviews=inspect_phase_assembly_instance_profile_dimension_review_roster(actual,authoring.intents);
-    for (const auto& [id,decision]:authoring.profile_dimension_decisions) {
-        const auto root=component_root(reviews.at(id).component);
-        requests.at(requests_by_root.at(root)).profile_dimension_decisions.emplace(id,decision);
-    }
-    AssemblyDimensionReviewedCarryResult dimensions;
-    if (!requests.empty()) {
-        if (std::none_of(requests.begin(),requests.end(),[](const auto& request) {
-                return !request.reviewed_profile_nodes.empty();
-            })) {
-            std::vector<AssemblyDimensionTransformRequest> ordinary;
-            for (const auto& request:requests) ordinary.push_back(request.transform);
-            dimensions.upserts=carry_assembly_dimension_transform_entities(actual,framed,ordinary);
-        } else dimensions=carry_reviewed_assembly_dimension_transform_entities(actual,framed,requests);
-    }
-    if (dimensions.retired_source_dimension_ids!=replayed.result().retired_dimension_ids)
-        invalid("Mixed resize changed the independently reviewed retirement closure");
-    std::vector<std::string> changed=dimensions.retired_source_dimension_ids;
-    for (const auto& dimension:dimensions.upserts) {
-        if (actual.contains(dimension.id)) changed.push_back(dimension.id);
-        result.components.entities.insert_or_assign(dimension.id,dimension);
-    }
-    std::sort(changed.begin(),changed.end());
-    validate_ordinary_assembly_dimension_changes(actual,changed);
-    for (const auto& id:dimensions.retired_source_dimension_ids) result.components.entities.erase(id);
-    std::vector<AssemblyInstancePropertyEditIntent> retained;
-    for (const auto& [original,destination]:result.components.original_to_proposed) {
-        (void)original;
-        AssemblyInstancePropertyEditIntent intent;
-        intent.target=destination;
-        retained.push_back(std::move(intent));
-    }
-    std::sort(retained.begin(),retained.end(),[](const auto& left,const auto& right) { return left.target<right.target; });
-    (void)replay_phase_assembly_instance_property_edits(result.components.entities,retained,{});
+    auto physical=prepare_roof_opening_directional_resizes(actual,requests);
+    ConstraintAuthoringIntent semantic;
+    semantic.message=std::string(message);
+    auto proof=make_phase_constraint_authoring_intent(source,semantic,nullptr,true);
+    proof.complete_ordinary_roof_component_dimensions=true;
+    proof.ordinary_roof_edits=Json::array();
+    for (const auto& leaf:physical.intents) proof.ordinary_roof_edits.push_back(encode_roof_edit_intent(leaf));
+    result.phase_authorings.push_back(encode_phase_constraint_authoring_intent(proof));
+    // Include embedded roots on every requested host, even when all selected
+    // children are units and the roof and its dimensions receive no upsert.
+    for (const auto& [id,entity]:actual) if (entity.type=="assembly_model")
+        for (const auto& row:entity.properties.at("model").at("instances")) {
+            if (!row.contains("placement") || row.at("placement").is_null() ||
+                !hosts.contains(row.at("placement").at("host_entity_id").get<std::string>())) continue;
+            const ComponentTarget root{id,row.at("id").get<std::string>(),std::nullopt,{}};
+            destinations.emplace(root,root);
+        }
+    result.components=finalize_component_directional_resize(source,replayed,authoring,
+        physical.candidate_entities,destinations,{});
     return result;
 }
 

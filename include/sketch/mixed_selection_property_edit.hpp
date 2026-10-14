@@ -119,9 +119,9 @@ private:
     std::map<std::pair<std::string, std::string>, RoofOpeningGroupMember> roof_children_;
     std::vector<PhysicalWallRoomPhaseReviewInventory> phase_room_reviews_;
     std::vector<std::size_t> phase_room_review_indices_;
-    // Dialect 39's slab contribution is independently sealed, rather than a
+    // Dialects 39/40's physical contribution is independently sealed, rather than a
     // synthetic historical scalar Properties base.
-    std::vector<nlohmann::json> slab_phase_authorings_;
+    std::vector<nlohmann::json> physical_phase_authorings_;
     friend MixedSelectionPropertyEditPreparation replay_mixed_selection_property_edit_preparation(
         const DocumentSnapshot&, const nlohmann::json&);
     friend DocumentSnapshot preview_mixed_selection_property_room_stage(
@@ -146,6 +146,13 @@ private:
     const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
     std::span<const SlabGeometryEditIntent>,
     const std::optional<ComponentSlabDirectionalResizeAllocation>&, std::string_view);
+
+// Closed dialect 40: original source fences, component geometry request7/8/9,
+// reservations, sorted qualified roof_opening_axis_requests, empty room reviews
+// and message. Requested hosts must be absent from every phase registry.
+[[nodiscard]] MixedSelectionPropertyEditPreparation prepare_component_roof_opening_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
+    std::span<const RoofOpeningDirectionalResizeRequest>, std::string_view);
 
 // Closed dialect-five/six/seven/eight envelope: version, expected_revision, source_snapshot_digest,
 // source_authoring_digest, source_entities_digest, source_saved_revision,

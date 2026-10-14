@@ -119,7 +119,7 @@ Quantity numeric_quantity(double metres) {
         } catch (const std::invalid_argument&) { /* Try the next bounded precision. */ }
           catch (const std::overflow_error&) { /* Try a representation that reduces exactly. */ }
     }
-    invalid("Opening capture number has no exact bounded plain decimal quantity");
+    return quantity_from_metres(metres);
 }
 
 bool known_receipt_only(const Json& value) {

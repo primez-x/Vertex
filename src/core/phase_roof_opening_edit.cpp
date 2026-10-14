@@ -9,7 +9,6 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cmath>
 #include <initializer_list>
 #include <numbers>
@@ -265,23 +264,9 @@ RoofOpeningQuantityInput raw_input(const Json& value, double metres, bool positi
     return {admitted, default_unit};
 }
 RoofOpeningQuantityInput numeric_input(double metres, bool positive) {
-    std::array<char, 64> buffer{};
-    // Start with the full double precision. Some redundant decimal tails need
-    // a denominator beyond int64; admit a shorter spelling only if it returns
-    // exactly the same actual scalar, never a rounded replacement.
-    for (int precision = 17; precision > 0; --precision) {
-        const auto converted = std::to_chars(buffer.data(), buffer.data() + buffer.size(),
-            metres, std::chars_format::general, precision);
-        if (converted.ec != std::errc{}) continue;
-        try {
-            RoofOpeningQuantityInput result{parse_quantity(std::string(buffer.data(), converted.ptr) + " m", Unit::metre), Unit::metre};
-            if (result.quantity.metres != metres) continue;
-            (void)input(result, positive);
-            return result;
-        } catch (const std::invalid_argument&) { /* Try the next exact bounded spelling. */ }
-          catch (const std::overflow_error&) { /* The rational may reduce at shorter precision. */ }
-    }
-    invalid("Roof skylight scalar has no exact bounded metre input");
+    RoofOpeningQuantityInput result{quantity_from_metres(metres), Unit::metre};
+    (void)input(result, positive);
+    return result;
 }
 void write_raw_core(Json& receipt, const RoofOpeningQuantityInput& value) {
     receipt["original_expression"] = value.quantity.original_expression;

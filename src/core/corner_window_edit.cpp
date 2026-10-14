@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cmath>
 #include <limits>
 #include <set>
@@ -172,22 +171,13 @@ void validate_receipts(const Entity& entity, const std::array<const char*, N>& p
 }
 
 Json numeric_receipt(double metres) {
-    std::array<char, 64> buffer{};
-    for (int precision = 17; precision > 0; --precision) {
-        const auto encoded = std::to_chars(buffer.data(), buffer.data() + buffer.size(),
-            metres, std::chars_format::general, precision);
-        if (encoded.ec != std::errc{}) continue;
-        try {
-            const auto value = parse_quantity(std::string(buffer.data(), encoded.ptr) + " m", Unit::metre);
-            if (value.metres != metres) continue;
-            Json result{{"version", 1}, {"original_expression", value.original_expression},
-                {"entered_unit", "m"}, {"exact_metres", {{"numerator", value.exact_metres.numerator},
-                                                       {"denominator", value.exact_metres.denominator}}}};
-            if (decode_constraint_quantity_receipt(result).metres == metres) return result;
-        } catch (const std::invalid_argument&) { }
-          catch (const std::overflow_error&) { }
-    }
-    reject("changed dimension has no exact bounded metre receipt");
+    const auto value = quantity_from_metres(metres);
+    Json result{{"version", 1}, {"original_expression", value.original_expression},
+        {"entered_unit", "m"}, {"exact_metres", {{"numerator", value.exact_metres.numerator},
+                                               {"denominator", value.exact_metres.denominator}}}};
+    if (decode_constraint_quantity_receipt(result).metres != metres)
+        reject("changed dimension has no exact bounded metre receipt");
+    return result;
 }
 
 template<std::size_t N>

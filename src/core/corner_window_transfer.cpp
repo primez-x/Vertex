@@ -9,7 +9,6 @@
 #include "sketch/quantity.hpp"
 
 #include <algorithm>
-#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <initializer_list>
@@ -344,26 +343,14 @@ void reserve_identities(const DocumentSnapshot& destination, const std::vector<c
 }
 
 Json numeric_receipt(double metres) {
-    std::array<char, 64> buffer{};
-    // As with roof-opening replay, shorten an int64-overflowing decimal only
-    // when reparsing it reproduces the exact actual double station.
-    for (int precision = 17; precision > 0; --precision) {
-        const auto converted = std::to_chars(buffer.data(), buffer.data() + buffer.size(),
-            metres, std::chars_format::general, precision);
-        if (converted.ec != std::errc{}) continue;
-        try {
-            const auto value = parse_quantity(std::string(buffer.data(), converted.ptr) + " m", Unit::metre);
-            if (value.metres != metres) continue;
-            // The fixed-length encoder excludes zero, while a cut station
-            // may be zero. Use the shared decoder to admit this numeric core.
-            Json result{{"version", 1}, {"original_expression", value.original_expression},
-                {"entered_unit", "m"}, {"exact_metres", {
-                    {"numerator", value.exact_metres.numerator}, {"denominator", value.exact_metres.denominator}}}};
-            if (decode_constraint_quantity_receipt(result).metres == metres) return result;
-        } catch (const std::invalid_argument&) { /* Try a shorter exact bounded spelling. */ }
-          catch (const std::overflow_error&) { /* A shorter decimal may fit the rational range. */ }
-    }
-    reject("changed cut station has no exact bounded metre receipt");
+    const auto value = quantity_from_metres(metres);
+    // Cut stations may be zero; admit their numeric core with the shared decoder.
+    Json result{{"version", 1}, {"original_expression", value.original_expression},
+        {"entered_unit", "m"}, {"exact_metres", {
+            {"numerator", value.exact_metres.numerator}, {"denominator", value.exact_metres.denominator}}}};
+    if (decode_constraint_quantity_receipt(result).metres != metres)
+        reject("changed cut station has no exact bounded metre receipt");
+    return result;
 }
 
 void validate_supported_quantity_entries(const Entity& entity,

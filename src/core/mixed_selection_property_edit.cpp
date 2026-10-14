@@ -277,14 +277,14 @@ bool phase_selection_dialect(const Json& value) {
         value.at("version") == 24 || value.at("version") == 27;
 }
 bool phase_room_dialect(const Json& value) {
-    if (value.at("version")==39) return true;
+    if (value.at("version")==39 || value.at("version")==40) return true;
     return phase_selection_dialect(value) || value.at("version") == 14 || value.at("version") == 16 ||
         value.at("version") == 17 || value.at("version") == 22 || value.at("version") == 23 ||
         value.at("version") == 25 || value.at("version") == 26 || value.at("version") == 28 ||
         value.at("version") == 29 || value.at("version") == 32 || value.at("version") == 33 || value.at("version") == 34 || value.at("version") == 35 || value.at("version") == 36 || value.at("version") == 37 || value.at("version") == 38;
 }
 bool component_dialect(const Json& value) {
-    if (value.at("version")==39) return true;
+    if (value.at("version")==39 || value.at("version")==40) return true;
     return value.at("version") == 14 || value.at("version") == 16 || value.at("version") == 17 ||
         value.at("version") == 22 || value.at("version") == 23 || value.at("version") == 25 ||
         value.at("version") == 26 || value.at("version") == 28 || value.at("version") == 29 || value.at("version") == 32 || value.at("version") == 33 || value.at("version") == 34 || value.at("version") == 35 || value.at("version") == 36 || value.at("version") == 37 || value.at("version") == 38;
@@ -348,6 +348,34 @@ std::vector<SlabGeometryEditIntent> directional_slabs(const Json& rows) {
     }
     return result;
 }
+std::vector<RoofOpeningDirectionalResizeRequest> directional_roof_openings(const Json& rows) {
+    if (!rows.is_array() || rows.empty() || rows.size()>1000)
+        reject("skylight resize requires a nonempty bounded complete roster");
+    std::vector<RoofOpeningDirectionalResizeRequest> result;
+    std::optional<std::pair<std::string,std::string>> previous;
+    for (const auto& row:rows) {
+        fields(row,{"roof_id","opening_id","sx","sy","anchor_m","frame_rotation_radians"});
+        RoofOpeningDirectionalResizeRequest request;
+        request.target={identity(row.at("roof_id")),identity(row.at("opening_id"))};
+        const std::pair key{request.target.roof_id,request.target.opening_id};
+        if (previous && *previous>=key) reject("skylight axis requests must be sorted unique qualified children");
+        previous=key;
+        const auto number=[](const Json& value) {
+            if (!value.is_number()) reject("skylight axis coordinates and factors must be numeric");
+            const auto result=value.get<double>();
+            if (!std::isfinite(result)) reject("skylight axis coordinates and factors must be finite");
+            return result;
+        };
+        request.sx=number(row.at("sx"));request.sy=number(row.at("sy"));
+        if (request.sx<=0 || request.sy<=0) reject("skylight axis factors must be positive");
+        const auto& anchor=row.at("anchor_m");
+        if (!anchor.is_array() || anchor.size()!=2) reject("skylight axis anchor must have exactly two coordinates");
+        request.anchor_m={number(anchor.at(0)),number(anchor.at(1))};
+        request.frame_rotation_radians=number(row.at("frame_rotation_radians"));
+        result.push_back(std::move(request));
+    }
+    return result;
+}
 // Read the already validated historical roster without changing its dialect or
 // translating its authority into a synthetic ordinary request.
 void historical_selected_members(const Json& value, std::set<MemberKey>& selected) {
@@ -371,8 +399,12 @@ void historical_selected_members(const Json& value, std::set<MemberKey>& selecte
 }
 void validate(const Json& value) {
     Budget budget; budget.visit(value);
-    if (value.is_object() && value.contains("version") && value.at("version")==39) {
-        fields(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+    if (value.is_object() && value.contains("version") && (value.at("version")==39 || value.at("version")==40)) {
+        const bool skylight=value.at("version")==40;
+        if (skylight) fields(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+            "source_entities_digest","source_saved_revision","component_request","component_identity_reservations",
+            "roof_opening_axis_requests","room_reviews","phase_room_reviews","message"});
+        else fields(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
             "source_entities_digest","source_saved_revision","component_request","component_identity_reservations",
             "slab_geometry","slab_allocation","room_reviews","phase_room_reviews","message"});
         if (!value.at("version").is_number_integer()) reject("Properties dialect must be an integer");
@@ -385,8 +417,9 @@ void validate(const Json& value) {
         for (const auto* key:{"expected_revision","source_snapshot_digest","source_authoring_digest","source_entities_digest","source_saved_revision"})
             if (component.at(key).dump()!=value.at(key).dump()) reject("component resize fences differ from complete original source");
         const auto authoring=decode_phase_assembly_instance_property_edit_authoring(component.at("authoring"));
-        const auto slabs=directional_slabs(value.at("slab_geometry"));
-        if (authoring.intents.empty() || authoring.intents.size()+slabs.size()>1000) reject("mixed resize complete selected roster exceeds bound");
+        const auto physical_count=skylight ? directional_roof_openings(value.at("roof_opening_axis_requests")).size() :
+            directional_slabs(value.at("slab_geometry")).size();
+        if (authoring.intents.empty() || authoring.intents.size()+physical_count>1000) reject("mixed resize complete selected roster exceeds bound");
         for (const auto& intent:authoring.intents)
             if (!intent.target.document_entity_id || !intent.properties.empty() || !intent.materials.empty() ||
                 !intent.quantities.empty() || intent.pose.operation!=AssemblyInstancePropertyPatchOperation::unchanged ||
@@ -394,7 +427,7 @@ void validate(const Json& value) {
                 intent.pose.scale || intent.pose.vertical_scale || intent.pose.mirrored_y ||
                 intent.profile_geometry.operation==AssemblyInstancePropertyPatchOperation::unchanged)
                 reject("mixed resize admits independent document component geometry only");
-        (void)slab_allocation(value.at("slab_allocation"));
+        if (!skylight) (void)slab_allocation(value.at("slab_allocation"));
         const auto& reservations=value.at("component_identity_reservations");
         if (!reservations.is_array() || reservations.size()>4096) reject("component reservation inventory exceeds bound");
         std::optional<std::string> previous;
@@ -406,7 +439,7 @@ void validate(const Json& value) {
             previous=token;
         }
         for (const auto* key:{"room_reviews","phase_room_reviews"})
-            if (!value.at(key).is_array() || !value.at(key).empty()) reject("mixed component/slab resize has no room review authority");
+            if (!value.at(key).is_array() || !value.at(key).empty()) reject("mixed directional resize has no room review authority");
         if (!value.at("message").is_string() || value.at("message").get_ref<const std::string&>().size()>1024 ||
             value.at("message").get_ref<const std::string&>().find('\0')!=std::string::npos) reject("invalid message");
         if (value.dump().size()>byte_limit) reject("wire byte budget exceeded");
@@ -886,7 +919,7 @@ void require_selected_members_present(const Json& value, const Entities& candida
     bool final_physical_check = true, const MixedSelectionPropertyEditPreparation::ComponentIdentityMap* component_mapping = nullptr) {
     if (component_dialect(value)) {
         if (!component_mapping) reject("component selected targets require their independently reconstructed mapping");
-        const auto base = value.at("version")==39 ? Json(nullptr) : value.at("base_intent");
+        const auto base = (value.at("version")==39 || value.at("version")==40) ? Json(nullptr) : value.at("base_intent");
         if (!base.is_null()) require_selected_members_present(base, candidate, retired_reviewed_rails, phase, final_physical_check);
         const auto authoring = decode_phase_assembly_instance_property_edit_authoring(value.at("component_request").at("authoring"));
         const auto& mapping = *component_mapping;
@@ -909,6 +942,9 @@ void require_selected_members_present(const Json& value, const Entities& candida
                     reject("mixed resize lost an independently reconstructed selected slab");
             }
         }
+        if (value.at("version")==40)
+            for (const auto& request:directional_roof_openings(value.at("roof_opening_axis_requests")))
+                (void)roof_opening_group_member_center_world(candidate,request.target);
         return;
     }
     const auto owner = [&](const std::string& id) -> const Entity& {
@@ -1057,7 +1093,8 @@ struct Stage {
     std::map<std::string,std::string,std::less<>> slab_identity_map;
     std::map<std::string,std::string,std::less<>> slab_selected_identity_map;
     MixedSelectionPropertyEditPreparation::HostedBindingMap slab_hosted_bindings;
-    std::vector<Json> slab_phase_authorings;
+    std::vector<Json> physical_phase_authorings;
+    std::map<std::pair<std::string,std::string>,RoofOpeningGroupMember> roof_children;
 };
 Stage derive_phase(const DocumentSnapshot& source, const Json& value) {
     auto phase = replay_phase_selection_property_edit_preparation(source, value.at("phase_request"));
@@ -1135,6 +1172,24 @@ Stage derive(const DocumentSnapshot& source, const Json& value) {
     validate(value); authenticate(source, value);
     const auto& original = source.entities();
     if (const auto error = validate_active_phase_constraint_integrity(original)) throw std::invalid_argument(*error);
+    if (value.at("version")==40) {
+        auto component=replay_phase_assembly_instance_property_edit_preparation(source,value.at("component_request"));
+        if (value.at("component_identity_reservations")!=Json(component.result().fresh_identity_ids))
+            reject("component reservation receipt differs from actual original-source replay");
+        auto composed=compose_component_roof_opening_directional_resize(source,component,
+            directional_roof_openings(value.at("roof_opening_axis_requests")),value.at("message").get_ref<const std::string&>());
+        Stage stage;
+        stage.entities=std::move(composed.components.entities);
+        stage.component_mapping=std::move(composed.components.original_to_proposed);
+        stage.reserved_component_identity_ids=std::move(composed.components.reserved_component_identity_ids);
+        stage.elided_component_identity_ids=std::move(composed.components.elided_component_identity_ids);
+        stage.reviewed_erased.insert(component.result().retired_dimension_ids.begin(),component.result().retired_dimension_ids.end());
+        stage.component=std::move(component);
+        stage.physical_phase_authorings=std::move(composed.phase_authorings);
+        stage.roof_children=std::move(composed.roof_children);
+        require_selected_members_present(value,stage.entities,{},nullptr,true,&stage.component_mapping);
+        return stage;
+    }
     if (value.at("version")==39) {
         auto component=replay_phase_assembly_instance_property_edit_preparation(source,value.at("component_request"));
         if (value.at("component_identity_reservations")!=Json(component.result().fresh_identity_ids))
@@ -1151,7 +1206,7 @@ Stage derive(const DocumentSnapshot& source, const Json& value) {
         stage.slab_identity_map=std::move(composed.slab_original_to_proposed);
         stage.slab_selected_identity_map=std::move(composed.slab_selected_original_to_proposed);
         stage.slab_hosted_bindings=std::move(composed.slab_hosted_bindings);
-        stage.slab_phase_authorings=std::move(composed.slab_phase_authorings);
+        stage.physical_phase_authorings=std::move(composed.slab_phase_authorings);
         require_selected_members_present(value,stage.entities,{},nullptr,true,&stage.component_mapping);
         return stage;
     }
@@ -1406,7 +1461,7 @@ const std::vector<PhaseWallReplacementAuthoringPreview>& MixedSelectionPropertyE
 }
 const std::vector<Json>& MixedSelectionPropertyEditPreparation::phase_authorings() const noexcept {
     static const std::vector<Json> empty;
-    return phase_ ? phase_->phase_authorings() : !slab_phase_authorings_.empty() ? slab_phase_authorings_ : empty;
+    return phase_ ? phase_->phase_authorings() : !physical_phase_authorings_.empty() ? physical_phase_authorings_ : empty;
 }
 
 namespace {
@@ -1680,6 +1735,31 @@ MixedSelectionPropertyEditPreparation prepare_component_slab_directional_resize(
     value["message"]=std::string(message);
     return replay_mixed_selection_property_edit_preparation(source,value);
 }
+MixedSelectionPropertyEditPreparation prepare_component_roof_opening_directional_resize(const DocumentSnapshot& source,
+    const PhaseAssemblyInstancePropertyEditAuthoring& authoring,
+    std::span<const RoofOpeningDirectionalResizeRequest> requests,std::string_view message) {
+    if (requests.empty() || requests.size()>1000 || authoring.intents.empty() ||
+        authoring.intents.size()+requests.size()>1000 || message.size()>1024 || message.find('\0')!=std::string_view::npos)
+        reject("typed mixed skylight resize request exceeds its complete roster or message bound");
+    const auto component=prepare_phase_assembly_instance_property_edit(source,authoring);
+    std::vector<RoofOpeningDirectionalResizeRequest> sorted(requests.begin(),requests.end());
+    std::sort(sorted.begin(),sorted.end(),[](const auto& left,const auto& right) {
+        return std::tie(left.target.roof_id,left.target.opening_id)<std::tie(right.target.roof_id,right.target.opening_id);
+    });
+    auto value=source_fields(source);
+    value["version"]=40;
+    value["component_request"]=component.request();
+    value["component_identity_reservations"]=component.result().fresh_identity_ids;
+    value["roof_opening_axis_requests"]=Json::array();
+    for (const auto& request:sorted)
+        value["roof_opening_axis_requests"].push_back({{"roof_id",request.target.roof_id},{"opening_id",request.target.opening_id},
+            {"sx",request.sx},{"sy",request.sy},{"anchor_m",{request.anchor_m.x,request.anchor_m.y}},
+            {"frame_rotation_radians",request.frame_rotation_radians}});
+    value["room_reviews"]=Json::array();
+    value["phase_room_reviews"]=Json::array();
+    value["message"]=std::string(message);
+    return replay_mixed_selection_property_edit_preparation(source,value);
+}
 MixedSelectionPropertyEditPreparation replay_mixed_selection_property_edit_preparation(const DocumentSnapshot& source, const Json& value) {
     (void)validate_mixed_selection_property_edit_intent(value);
     if (!value.at("room_reviews").empty() || (phase_room_dialect(value) && !value.at("phase_room_reviews").empty()))
@@ -1691,7 +1771,8 @@ MixedSelectionPropertyEditPreparation replay_mixed_selection_property_edit_prepa
     prepared.identity_map_.insert(stage.slab_identity_map.begin(),stage.slab_identity_map.end());
     prepared.selected_identity_map_.insert(stage.slab_selected_identity_map.begin(),stage.slab_selected_identity_map.end());
     prepared.hosted_bindings_.insert(stage.slab_hosted_bindings.begin(),stage.slab_hosted_bindings.end());
-    prepared.slab_phase_authorings_=std::move(stage.slab_phase_authorings);
+    prepared.physical_phase_authorings_=std::move(stage.physical_phase_authorings);
+    prepared.roof_children_.insert(stage.roof_children.begin(),stage.roof_children.end());
     return prepared;
 }
 void require_mixed_selection_property_edit_source_current(const DocumentSnapshot& source,
@@ -1906,12 +1987,12 @@ std::vector<Json> mixed_selection_property_edit_phase_room_reviews(const Json& v
 bool mixed_selection_property_edit_retires_dependencies(const Json& value) {
     validate(value);
     if (component_dialect(value)) {
-        if (value.at("version") == 36 || value.at("version") == 37 || value.at("version") == 38 || value.at("version")==39)
+        if (value.at("version") == 36 || value.at("version") == 37 || value.at("version") == 38 || value.at("version")==39 || value.at("version")==40)
             for (const auto& [id, decision] : value.at("component_request").at("authoring").at("profile_dimension_decisions").items()) {
                 (void)id;
                 if (decision.at("operation") == "retire") return true;
             }
-        return value.at("version")!=39 && !value.at("base_intent").is_null() &&
+        return value.at("version")!=39 && value.at("version")!=40 && !value.at("base_intent").is_null() &&
             mixed_selection_property_edit_retires_dependencies(value.at("base_intent"));
     }
     if (phase_selection_dialect(value)) return std::any_of(
@@ -1926,6 +2007,7 @@ bool mixed_selection_property_edit_retires_dependencies(const Json& value) {
 }
 bool mixed_selection_property_edit_has_phase_replacements(const Json& value) {
     validate(value);
+    if (value.at("version")==40) return !value.at("component_request").at("authoring").at("allocation").at("roots").empty();
     if (value.at("version")==39) return !value.at("component_request").at("authoring").at("allocation").at("roots").empty() ||
         !value.at("slab_allocation").is_null();
     if (component_dialect(value)) return !value.at("component_request").at("authoring").at("allocation").at("roots").empty() ||

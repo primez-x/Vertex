@@ -1,12 +1,15 @@
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/assembly_document_adapter.hpp"
+#include "sketch/assembly_profile_geometry.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/model_phases.hpp"
 #include "sketch/slab_plan_geometry.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <QApplication>
+#include <QAction>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -28,6 +31,7 @@
 #include <cmath>
 #include <functional>
 #include <iostream>
+#include <numbers>
 #include <stdexcept>
 #include <utility>
 
@@ -62,8 +66,9 @@ Json ring_json(const Boundary& ring) {
 struct Fixture {
     std::shared_ptr<Document> document;
     std::string component, slab, catalog, type, dimension;
+    std::string slab_layer="core";
 };
-Fixture fixture(bool with_dimension=false) {
+Fixture fixture(bool with_dimension=false, bool curved=false) {
     Fixture f;f.component=fresh("component");f.slab=fresh("slab");
     f.catalog=fresh("catalog");f.type=fresh("type");
     // One ordinary layer, no phases, hosts or holes. The ordinary fixture has
@@ -73,6 +78,7 @@ Fixture fixture(bool with_dimension=false) {
     const Json context={{"property_id","property-1"},{"building_id","building-1"},
                         {"floor_id","floor-1"},{"layer_id","layer-1"}};
     AssemblyProfile profile;profile.id="profile";profile.outer=rectangle(0,0,2,1);
+    if (curved) profile.outer.front().sweep_radians=std::numbers::pi/2;
     profile.elevation_m=.25;profile.height_m=1.5;
     if (with_dimension) profile.topology=AssemblyProfileTopology{
         {"source-outer",{"source-e0","source-e1","source-e2","source-e3"},
@@ -194,12 +200,12 @@ Vec2 mapped(Vec2 p, const std::optional<AssemblyProfilePlanarAffine>& map) {
     return {map->target_origin.x+map->xx*x+map->xy*y,
             map->target_origin.y+map->yx*x+map->yy*y};
 }
-Json physical_structure(const DocumentSnapshot& snapshot, const Fixture& f, bool resized) {
+Json physical_structure(const DocumentSnapshot& snapshot, const Fixture& f, bool resized, bool curved=false) {
     AssemblyExpansionBudget budget;
     const auto expanded=expand_document_assembly_instance(snapshot.entities().at(f.component),snapshot.entities(),budget);
     require(expanded.profiles.size()==1,"independent component retains exactly one complete profile");
     const auto& profile=expanded.profiles.front();const auto& pose=profile.transform;
-    require(profile.profile.outer.size()==4 && profile.profile.holes.empty(),"component retains its straight rectangular topology");
+    require(profile.profile.outer.size()==4 && profile.profile.holes.empty(),"component retains its complete four-edge topology");
     const auto expected_component=rectangle(resized ? 7 : 5,1,resized ? 3 : 2,1);
     auto component_points=Json::array();
     for (std::size_t i=0;i<4;++i) {
@@ -210,8 +216,21 @@ Json physical_structure(const DocumentSnapshot& snapshot, const Fixture& f, bool
             (pose.mirrored_y ? -point.y : point.y)*std::cos(pose.rotation_radians));
         require_near(x,expected_component[i].start.x,"component physical vertex X follows the shared opposite-edge anchor");
         require_near(y,expected_component[i].start.y,"component physical vertex Y remains unchanged");
-        require_near(profile.profile.outer[i].sweep_radians,0,"component edges remain straight");
+        require_near(profile.profile.outer[i].sweep_radians,curved && i==0 ? std::numbers::pi/2 : 0,
+                     "component retains each authoritative analytical sweep");
         component_points.push_back({x,y});
+    }
+    if (curved) {
+        if (resized) require(profile.profile.planar_affine.has_value(),"anisotropic curved resize retains an own-profile affine over its analytical source arc");
+        const auto midpoint=assembly_profile_segment_point(profile.profile.outer.front(),
+            profile.profile.planar_affine.value_or(AssemblyProfilePlanarAffine{}),.5);
+        const double reflected_y=pose.mirrored_y ? -midpoint.y : midpoint.y;
+        const Vec2 physical{pose.translation_m.x+pose.scale*(midpoint.x*std::cos(pose.rotation_radians)-reflected_y*std::sin(pose.rotation_radians)),
+                            pose.translation_m.y+pose.scale*(midpoint.x*std::sin(pose.rotation_radians)+reflected_y*std::cos(pose.rotation_radians))};
+        // The quarter-circle's source midpoint is (1, 1-sqrt(2)); after its
+        // original root pose it is (6, 2-sqrt(2)). G changes only physical X.
+        require_near(physical.x,resized ? 8.5 : 6,"curved component analytical midpoint follows the common operator");
+        require_near(physical.y,2-std::sqrt(2.),"curved component analytical bulge survives its own planar affine");
     }
     const double base_z=pose.translation_m.z+pose.scale*pose.vertical_scale*profile.profile.elevation_m;
     const double height=pose.scale*pose.vertical_scale*profile.profile.height_m;
@@ -237,7 +256,7 @@ Json physical_structure(const DocumentSnapshot& snapshot, const Fixture& f, bool
     }
     require_near(slab.at("elevation_m").get<double>(),1.25,"plan resize preserves slab elevation");
     require_near(slab.at("thickness_m").get<double>(),.2,"plan resize preserves slab thickness");
-    require(slab.at("layers")==Json::array({{{"id","core"},{"thickness_m",.2}}}),"slab layers remain exact");
+    require(slab.at("layers")==Json::array({{{"id",f.slab_layer},{"thickness_m",.2}}}),"slab layers remain exact under their actual owner identities");
     for (const auto& id:{f.component,f.slab}) {
         const auto& properties=snapshot.entities().at(id).properties;
         require(properties.at("property_id")=="property-1" && properties.at("building_id")=="building-1" &&
@@ -545,6 +564,284 @@ Json scenario(const QString& directory, bool reverse, bool frame_only) {
             "reopened mixed cohort still offers its four native side grips");frame(*loaded_frame,5.5,9);
     return result;
 }
+
+Fixture site_fixture(bool curved) {
+    auto f=fixture(false,curved);const auto source=f.document->snapshot();
+    auto property=source.entities().at("property-1");
+    property.properties["site_frame"]={{"version",1},{"origin_m",{100,200,30}},
+        {"rotation_radians",std::numbers::pi/2},
+        {"vertical_datum",{{"identifier","mixed-fixture-datum"},{"height_at_origin_m",1500}}}};
+    auto building=source.entities().at("building-1");
+    building.properties["site_placement"]={{"version",1},{"translation_m",{10,20,3}},{"rotation_radians",0}};
+    std::vector<EntityChange> changes{EntityChange::upsert(property),EntityChange::upsert(building)};
+    for (const auto& id:{f.component,f.slab}) {
+        auto owner=source.entities().at(id);
+        owner.properties["presentation_frame"]={{"version",1},{"mode","building"}};
+        changes.push_back(EntityChange::upsert(std::move(owner)));
+    }
+    f.document->apply(ApplyEntityChanges{source.revision(),std::move(changes),{},"Enroll both mixed physical owners in Site"});
+    return f;
+}
+PlanCanvas& site_canvas(MainWindow& window) {
+    auto* drawing=dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>("architecturalPlanCanvas"));
+    require(drawing,"actual architectural Site canvas must exist");return *drawing;
+}
+void display_site(MainWindow& window) {
+    window.setAttribute(Qt::WA_DontShowOnScreen);window.resize(1400,900);window.setMetricUnits(true);window.show();
+    require(window.setActiveLayer("layer-1"),"Site mixed fixture activates its actual source layer");
+    window.setWorkspace(Workspace::architectural);
+    auto* action=window.findChild<QAction*>("sitePlan");require(action,"actual Site Plan action must exist");
+    if (!action->isChecked()) action->trigger();QApplication::processEvents();
+    auto& drawing=site_canvas(window);drawing.setTool(CanvasTool::select);
+    drawing.setOverviewMapEnabled(false);drawing.setGridEnabled(false);drawing.setSnapEnabled(false);drawing.setWallSnapEnabled(false);
+    drawing.setViewTransform({78.5,214},45);
+}
+Vec2 site_point(Vec2 p) { return {80-p.y,210+p.x}; }
+void site_frame(const CanvasSelectionFrame& actual,bool resized) {
+    require_near(actual.center.x,78.5,"Site common canvas centre X");
+    require_near(actual.center.y,resized ? 215.5 : 214,"Site common canvas centre Y");
+    require_near(actual.rotation_radians,0,"Site cohort exposes common canvas axes");
+    require_near(actual.width_metres,3,"Site common canvas width");
+    require_near(actual.depth_metres,resized ? 9 : 6,"Site common canvas depth follows authored X");
+    require_near(actual.center.y-actual.depth_metres/2,211,"Site opposite physical side remains anchored");
+}
+QPointF positive_grip(const PlanCanvas& drawing,bool depth) {
+    const auto frame=drawing.selectionAxisResizeCohortFrame();
+    require(frame.has_value(),"actual cohort must publish its analytical axes");
+    const Vec2 u=depth ? Vec2{-std::sin(frame->rotation_radians),std::cos(frame->rotation_radians)}
+                       : Vec2{std::cos(frame->rotation_radians),std::sin(frame->rotation_radians)};
+    const auto handles=drawing.selectionAxisHandlePositions();
+    require(handles.size()==4,"actual mixed cohort must paint four side grips");
+    return *std::max_element(handles.begin(),handles.end(),[&](QPointF a,QPointF b) {
+        return a.x()*u.x-a.y()*u.y < b.x()*u.x-b.y()*u.y;
+    });
+}
+QPointF begin_axis_preview(MainWindow& window,PlanCanvas& drawing,bool depth,const DocumentSnapshot& before) {
+    const auto frame=drawing.selectionAxisResizeCohortFrame();require(frame.has_value(),"resize has a returned cohort axis");
+    const Vec2 u=depth ? Vec2{-std::sin(frame->rotation_radians),std::cos(frame->rotation_radians)}
+                       : Vec2{std::cos(frame->rotation_radians),std::sin(frame->rotation_radians)};
+    const auto press=positive_grip(drawing,depth);
+    const auto release=press+QPointF(3*drawing.viewScale()*u.x,-3*drawing.viewScale()*u.y);
+    require(drawing.rect().contains(release.toPoint()),"three-metre outward gesture remains inside its real canvas");
+    mouse(drawing,QEvent::MouseButtonPress,press);mouse(drawing,QEvent::MouseMove,release);
+    require(drawing.entityTransformPreviewPending(),"mixed qualification uses the actual asynchronous preview producer");
+    unchanged(window,before);
+    wait(window,[&]{return !drawing.entityTransformPreviewPending() && !drawing.entityTransformPreview().empty();},
+         "bounded mixed qualification preview must complete");
+    unchanged(window,before);return release;
+}
+void site_vertices(const std::vector<CanvasEntity>& scene,const Fixture& f,bool resized) {
+    for (const auto& id:{f.component,f.slab}) {
+        const auto expected=id==f.component ? rectangle(resized ? 7 : 5,1,resized ? 3 : 2,1)
+                                            : rectangle(1,0,resized ? 4.5 : 3,3);
+        for (const auto& edge:expected) {
+            const auto point=site_point(edge.start);bool found=false;
+            for (const auto& item:scene) if (item.id==QString::fromStdString(id))
+                for (const auto& segment:item.segments) for (const auto vertex:{segment.start,segment.end})
+                    if (std::hypot(vertex.x-point.x,vertex.y-point.y)<1e-7) found=true;
+            require(found,"Site physical vertices independently equal F(G(p)), with each owner's frame applied once");
+        }
+    }
+}
+void site_curve_midpoint(const std::vector<CanvasEntity>& scene,const Fixture& f,bool resized) {
+    // F(G(6,2-sqrt(2))) = (78+sqrt(2), 218.5) after resize.
+    // Test the published curve's interior as well as the authoritative source
+    // sweep/midpoint checked by physical_structure; a chord-only candidate fails.
+    const Vec2 expected{78+std::sqrt(2.),resized ? 218.5 : 216};
+    double nearest=10;
+    for (const auto& item:scene) if (item.id==QString::fromStdString(f.component))
+        for (const auto& segment:item.segments) {
+            Vec2 point;
+            if (segment.sweep_radians!=0) point=assembly_profile_segment_point(segment,AssemblyProfilePlanarAffine{},.5);
+            else {
+                const Vec2 delta{segment.end.x-segment.start.x,segment.end.y-segment.start.y};
+                const double squared=delta.x*delta.x+delta.y*delta.y;if (!(squared>0)) continue;
+                const double t=std::clamp(((expected.x-segment.start.x)*delta.x+(expected.y-segment.start.y)*delta.y)/squared,0.,1.);
+                point={segment.start.x+t*delta.x,segment.start.y+t*delta.y};
+            }
+            nearest=std::min(nearest,std::hypot(point.x-expected.x,point.y-expected.y));
+        }
+    require(nearest<.01,"Site curve interior follows F(G(p)) within the derived display-path tolerance");
+}
+class UnexpectedModalGuard {
+public:
+    UnexpectedModalGuard() {
+        m_timer.setInterval(10);QObject::connect(&m_timer,&QTimer::timeout,[this] {
+            if (auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget())) {
+                m_title=dialog->windowTitle();if (m_title.isEmpty()) m_title="unnamed dialog";
+                dialog->reject();
+            }
+        });m_timer.start();
+    }
+    void verify() const { require(m_title.isEmpty(),"dimension-free/profile-review-free qualification opens no unexpected modal"); }
+private:
+    QTimer m_timer;QString m_title;
+};
+void mixed39_command(const DocumentSnapshot& after) {
+    const auto& command=after.history().back().boundary_constraint_changes;
+    require(command && command->mixed_selection_edit_completion && command->mixed_selection_edit_intent.at("version")==39,
+            "native qualification publishes actual canonical mixed39 authority");
+    require(command_to_json(*command).at("version")==52,"native qualification retains the exact enclosing command52 contract");
+}
+void fresh_open(MainWindow& window,const QString& directory,const QString& stem,
+                const std::function<void(MainWindow&,const DocumentSnapshot&)>& inspect) {
+    const auto path=QDir(directory).filePath(stem+".bldproj");require(window.saveProjectAs(path),"qualified mixed native project must save");
+    const auto saved=window.document().snapshot();
+    require(window.createNewProject(),"release qualified project's writer lease before fresh Open");
+    MainWindow reopened({},nullptr,QDir(directory).filePath(stem+"-reopened-library.json"));display(reopened);
+    require(reopened.openProject(path) && reopened.document().is_editable(),"fresh Open obtains actual native writer ownership");
+    const auto loaded=reopened.document().snapshot();
+    require(document_snapshot_digest(loaded)==document_snapshot_digest(saved),"fresh Open preserves the complete retained mixed document and history");
+    auto* undo=reopened.findChild<QAction*>("undoCommand");require(undo && !undo->isEnabled(),"fresh Open starts with its actual Undo action disabled");
+    require(!reopened.undoCommand(),"fresh Open cannot navigate retained history across its session boundary");
+    unchanged(reopened,loaded);inspect(reopened,loaded);
+}
+void site_scenario(const QString& directory,bool curved) {
+    const auto f=site_fixture(curved);const auto stem=curved ? QStringLiteral("site-curved") : QStringLiteral("site-straight");
+    MainWindow window(f.document,nullptr,QDir(directory).filePath(stem+"-library.json"));display_site(window);
+    UnexpectedModalGuard guard;
+    require(window.selectEntity(QString::fromStdString(f.component)),"Site selects its real primary component");
+    require(window.selectAll(),"Site Select all adds the other visible physical owner");
+    require(window.selectedEntityId()==QString::fromStdString(f.component) &&
+            window.selectedEntityIds().size()==2 && window.selectedEntityIds().contains(QString::fromStdString(f.slab)),
+            "Site Select all retains its primary while adding the slab");
+    QApplication::processEvents();auto& drawing=site_canvas(window);
+    const auto before=window.document().snapshot();physical_structure(before,f,false,curved);
+    const auto initial=drawing.selectionAxisResizeCohortFrame();require(initial.has_value(),"Site mixed owners expose their real common canvas cohort");
+    site_frame(*initial,false);site_vertices(drawing.entities(),f,false);
+    if (curved) site_curve_midpoint(drawing.entities(),f,false);
+    const auto committed=output(drawing);const auto release=begin_axis_preview(window,drawing,true,before);
+    site_vertices(drawing.entityTransformPreview(),f,true);
+    if (curved) site_curve_midpoint(drawing.entityTransformPreview(),f,true);
+    require(output(drawing)==committed,"Site exact candidate stays outside committed print/export output");
+    capture(drawing,stem+"-preview.png");mouse(drawing,QEvent::MouseButtonRelease,release);
+    wait(window,[&]{return window.document().revision()==before.revision()+1 && !drawing.entityTransformPreviewPending();},
+         "Site mixed release publishes one exact local candidate");guard.verify();
+    const auto after=window.document().snapshot();
+    require(after.history().size()==before.history().size()+1 && after.assets()==before.assets(),"Site publishes both families as one command and preserves assets");
+    mixed39_command(after);
+    physical_structure(after,f,true,curved);site_vertices(drawing.entities(),f,true);
+    if (curved) site_curve_midpoint(drawing.entities(),f,true);
+    for (const auto& id:{f.component,f.slab})
+        require(after.entities().at(id).properties.at("presentation_frame")==before.entities().at(id).properties.at("presentation_frame"),
+                "Site resize retains each explicitly enrolled owner frame");
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities(),"one Site Undo restores both exact local owners");
+    require(window.redoCommand() && window.document().snapshot().entities()==after.entities(),"one Site Redo restores both exact local candidates");
+    fresh_open(window,directory,stem,[&](MainWindow& reopened,const DocumentSnapshot& loaded) {
+        physical_structure(loaded,f,true,curved);display_site(reopened);select(reopened,f,false);
+        const auto frame=site_canvas(reopened).selectionAxisResizeCohortFrame();require(frame.has_value(),"fresh Site Open restores cohort controls");
+        site_frame(*frame,true);site_vertices(site_canvas(reopened).entities(),f,true);
+        if (curved) site_curve_midpoint(site_canvas(reopened).entities(),f,true);
+    });guard.verify();
+}
+void site_stale_release(const QString& directory,bool history_only) {
+    const auto f=site_fixture(false);const auto stem=history_only ? QStringLiteral("site-stale-history") : QStringLiteral("site-stale-head");
+    MainWindow window(f.document,nullptr,QDir(directory).filePath(stem+"-library.json"));display_site(window);
+    UnexpectedModalGuard guard;select(window,f,false);auto& drawing=site_canvas(window);
+    const auto before=window.document().snapshot();const auto release=begin_axis_preview(window,drawing,true,before);
+    auto replacement=Document::fork_at_revision(before,before.revision()-1);std::vector<EntityChange> changes;
+    for (const auto& [id,original]:before.entities()) {
+        auto next=original;if (id==f.component && !history_only) next.extensions["concurrent_site_source"]=true;
+        changes.push_back(EntityChange::upsert(std::move(next)));
+    }
+    replacement.apply(ApplyEntityChanges{replacement.revision(),std::move(changes),{},"Independent replacement of mixed Site history"});
+    const auto replaced=replacement.snapshot();
+    require(replaced.document_id()==before.document_id() && replaced.revision()==before.revision(),"Site stale fixture retains actual displayed identity and revision");
+    require(document_snapshot_digest(replaced)!=document_snapshot_digest(before),"Site stale fixture replaces the complete retained source");
+    if (history_only) require(replaced.entities()==before.entities(),"history-only Site replacement retains exact displayed head entities");
+    window.document()=std::move(replacement);mouse(drawing,QEvent::MouseButtonRelease,release);
+    wait(window,[&]{return !drawing.entityTransformPreviewPending() && drawing.entityTransformPreview().empty();},"stale Site release discards the completed mixed candidate");
+    QElapsedTimer deadline;deadline.start();do {
+        QApplication::processEvents(QEventLoop::AllEvents,20);unchanged(window,replaced);
+        require(!drawing.entityTransformPreviewPending() && drawing.entityTransformPreview().empty(),"stale Site worker cannot republish either family");
+    } while (deadline.elapsed()<350);
+    guard.verify();physical_structure(window.document().snapshot(),f,false);
+}
+Fixture phase_fixture() {
+    auto f=fixture();f.dimension=fresh("extent-dimension");const auto source=f.document->snapshot();
+    BoundaryDimension dimension;dimension.id=f.dimension;dimension.boundary_id=f.component;
+    dimension.kind=BoundaryDimensionKind::assembly_extent;dimension.text_position={6,.5};
+    AssemblyDimensionTarget target;target.component={f.catalog,f.component,f.component,{}};target.axis=AssemblyDimensionAxis::width;
+    dimension.assembly_target=target;auto carrier=encode_boundary_dimension_entity(dimension);
+    for (const auto* key:{"property_id","building_id","floor_id","layer_id"})
+        carrier.properties[key]=source.entities().at(f.component).properties.at(key);
+    const std::vector<std::string> baseline{f.component,f.slab,f.dimension};
+    const auto phases=ModelPhases::create(baseline,baseline,{RemodelingAlternative{"resize-alternative","Native mixed replacement",{}, {}}});
+    f.document->apply(ApplyEntityChanges{source.revision(),{EntityChange::upsert(carrier),
+        EntityChange::upsert({"resize-phases","model_phases",{{"model",phases.to_json()}},false})},{},"Seed actual baseline mixed owners and extent dimension"});
+    return f;
+}
+void phase_scenario(const QString& directory) {
+    const auto f=phase_fixture();MainWindow window(f.document,nullptr,QDir(directory).filePath("phase-library.json"));display(window);
+    UnexpectedModalGuard guard;
+    require(window.selectModelPhaseRegistry("resize-phases") && window.selectRemodelingAlternative("resize-alternative"),
+            "phase qualification selects the actual registry and remodeling alternative through public APIs");
+    select(window,f,false);require_mixed_frame(window,f);const auto before=window.document().snapshot();
+    const auto original_dimension=decode_boundary_dimension_entity(before.entities().at(f.dimension));
+    require(original_dimension.supported() && original_dimension.dimension->kind==BoundaryDimensionKind::assembly_extent,"baseline carries its real typed own-width dimension");
+    require_near(original_dimension.dimension->resolve(before).segment_length(),2,"baseline own-width dimension resolves before replacement");
+    auto& drawing=canvas(window);const auto release=begin_axis_preview(window,drawing,false,before);
+    preview_bounds(drawing.entityTransformPreview(),f.component,7,1,10,2);preview_bounds(drawing.entityTransformPreview(),f.slab,1,0,5.5,3);
+    mouse(drawing,QEvent::MouseButtonRelease,release);
+    wait(window,[&]{return window.document().revision()==before.revision()+1 && !drawing.entityTransformPreviewPending();},"phase resize publishes both baseline replacements as one command");
+    guard.verify();const auto after=window.document().snapshot();
+    require(after.history().size()==before.history().size()+1 && after.assets()==before.assets(),"phase mixed replacements and carried dimension publish in one command");
+    mixed39_command(after);
+    for (const auto& id:{f.component,f.slab,f.dimension})
+        require(after.entities().at(id)==before.entities().at(id),"phase resize preserves each exact baseline physical owner and typed dimension");
+    const auto original_catalog=AssemblyModel::from_json(before.entities().at(f.catalog).properties.at("model"));
+    const auto final_catalog=AssemblyModel::from_json(after.entities().at(f.catalog).properties.at("model"));
+    for (const auto& type:original_catalog.types()) {
+        const auto retained=std::find_if(final_catalog.types().begin(),final_catalog.types().end(),[&](const auto& value){return value.id==type.id;});
+        require(retained!=final_catalog.types().end() && *retained==type,"phase private-type allocation preserves every original baseline type definition");
+    }
+    const auto model=ModelPhases::from_json(after.entities().at("resize-phases").properties.at("model"));
+    require(model.baseline_ids()==ModelPhases::from_json(before.entities().at("resize-phases").properties.at("model")).baseline_ids(),
+            "phase resize retains the exact original baseline roster");
+    const auto states=model.state(std::string{"resize-alternative"});
+    require(states.at(f.component)==ModelPhase::demolished && states.at(f.slab)==ModelPhase::demolished,"actual alternative retires both baseline physical owners");
+    auto proposed=f;proposed.component.clear();proposed.slab.clear();proposed.dimension.clear();
+    for (const auto& [id,state]:states) if (state==ModelPhase::proposed) {
+        require(!before.entities().contains(id),"phase replacement allocates an actual new proposed identity");
+        const auto& entity=after.entities().at(id);
+        if (entity.type=="assembly_instance") {require(proposed.component.empty(),"exactly one proposed independent owner");proposed.component=id;}
+        else if (entity.type=="slab") {require(proposed.slab.empty(),"exactly one proposed slab owner");proposed.slab=id;}
+        else if (entity.type=="dimension") {require(proposed.dimension.empty(),"exactly one carried proposed extent dimension");proposed.dimension=id;}
+    }
+    require(!proposed.component.empty() && !proposed.slab.empty() && !proposed.dimension.empty(),"actual phase roster contains both proposed physical owners and the cloned dimension");
+    const auto& copied_layers=after.entities().at(proposed.slab).properties.at("layers");
+    require(copied_layers.size()==1,"proposed slab retains its one actual material layer");
+    proposed.slab_layer=copied_layers.front().at("id").get<std::string>();
+    require(proposed.slab_layer!=f.slab_layer && !before.entities().contains(proposed.slab_layer),"proposed slab layer receives an actual fresh child identity");
+    auto normalized_layers=copied_layers;normalized_layers.front()["id"]=f.slab_layer;
+    require(normalized_layers==before.entities().at(f.slab).properties.at("layers"),"phase slab layer clone changes only the allocated identity");
+    const auto root=decode_document_assembly_instance(after.entities().at(proposed.component));
+    require(root.instance.id==proposed.component,"proposed independent owner retains its actual allocated root identity");
+    require(window.selectedEntityIds()==QStringList{QString::fromStdString(proposed.component),QString::fromStdString(proposed.slab)},
+            "actual window selection remaps both baseline owners to their new proposed identities");
+    physical_structure(after,proposed,true);physical_structure(after,f,false);
+    const auto clone=decode_boundary_dimension_entity(after.entities().at(proposed.dimension));
+    require(clone.supported() && clone.dimension->kind==BoundaryDimensionKind::assembly_extent && clone.dimension->assembly_target,
+            "phase replacement retains the actual typed own-width dimension kind");
+    const auto& identity=clone.dimension->assembly_target->component;
+    require(clone.dimension->boundary_id==proposed.component && identity.document_entity_id==proposed.component &&
+            identity.instance_id==root.instance.id && identity.catalog_id==root.assembly_catalog_id && identity.part_path.empty(),
+            "cloned dimension remaps its complete qualified target to the actual proposed root");
+    require_near(clone.dimension->resolve(after).segment_length(),3,"proposed own-width dimension resolves resized geometry");
+    require_near(original_dimension.dimension->resolve(after).segment_length(),2,"retained baseline dimension still resolves original geometry");
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities() && window.document().snapshot().assets()==before.assets(),
+            "one phase Undo restores exact baseline, registry, geometry and dimension graph");
+    require(window.redoCommand() && window.document().snapshot().entities()==after.entities() && window.document().snapshot().assets()==after.assets(),
+            "one phase Redo restores exact allocated replacements, registry and dimension graph");
+    fresh_open(window,directory,"phase",[&](MainWindow& reopened,const DocumentSnapshot& loaded) {
+        physical_structure(loaded,proposed,true);physical_structure(loaded,f,false);
+        require_near(decode_boundary_dimension_entity(loaded.entities().at(proposed.dimension)).dimension->resolve(loaded).segment_length(),3,
+                     "fresh Open retains proposed typed own-width dimension geometry");
+        require(reopened.selectModelPhaseRegistry("resize-phases") && reopened.selectRemodelingAlternative("resize-alternative"),"fresh Open restores real phase API selection");
+        select(reopened,proposed,false);const auto loaded_frame=canvas(reopened).selectionAxisResizeCohortFrame();require(loaded_frame.has_value(),"fresh phase Open restores proposed cohort controls");
+        frame(*loaded_frame,5.5,9);
+    });guard.verify();
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -570,17 +867,24 @@ int main(int argc, char** argv) {
         const bool frame_only=application.arguments().contains("--frame-only");
         const bool review_only=application.arguments().contains("--review-only");
         const bool lifecycle_only=application.arguments().contains("--lifecycle-only");
-        if (frame_only || (!review_only && !lifecycle_only)) {
+        const bool site_only=application.arguments().contains("--site-only");
+        const bool phase_only=application.arguments().contains("--phase-only");
+        if (!site_only && !phase_only && (frame_only || (!review_only && !lifecycle_only))) {
             const auto forward=scenario(directory.path(),false,frame_only);
             const auto reverse=scenario(directory.path(),true,frame_only);
             if (!frame_only) same_structure(forward,reverse);
         }
-        if (!frame_only) {
+        if (!frame_only && !site_only && !phase_only) {
             dimension_review(directory.path(),false);dimension_review(directory.path(),true);
             if (!review_only) {stale_release(directory.path(),true);stale_release(directory.path(),false);}
         }
+        if (site_only || (!frame_only && !review_only && !lifecycle_only && !phase_only)) {
+            site_scenario(directory.path(),false);site_scenario(directory.path(),true);
+            site_stale_release(directory.path(),false);site_stale_release(directory.path(),true);
+        }
+        if (phase_only || (!frame_only && !review_only && !lifecycle_only && !site_only)) phase_scenario(directory.path());
         std::cout<<"mixed_family_resize_desktop_tests"
-                 <<(frame_only ? " frame checks" : review_only ? " dimension review" : " native lifecycle")<<" passed\n";
+                 <<(frame_only ? " frame checks" : review_only ? " dimension review" : site_only ? " Site qualification" : phase_only ? " phase qualification" : " native lifecycle")<<" passed\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr<<"mixed_family_resize_desktop_tests: "<<error.what()<<'\n';return 1;

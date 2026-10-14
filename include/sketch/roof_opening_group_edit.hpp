@@ -2,12 +2,34 @@
 
 #include "sketch/phase_roof_edit.hpp"
 
+#include <span>
+
 namespace sketch {
 
 struct RoofOpeningGroupMember {
     std::string roof_id;
     std::string opening_id;
 };
+
+struct RoofOpeningDirectionalResizeRequest {
+    RoofOpeningGroupMember target;
+    double sx{1.0};
+    double sy{1.0};
+    Vec2 anchor_m{};
+    double frame_rotation_radians{0.0};
+};
+
+struct PreparedRoofOpeningDirectionalResizes {
+    std::vector<RoofEditIntent> intents;
+    std::map<std::string, Entity, std::less<>> candidate_entities;
+};
+
+// Derive every selected existing child from the original map, combine one
+// openings leaf per host, then admit the complete cohort once. Unit requests
+// retain their authenticated upserts and source schema without host authority.
+[[nodiscard]] PreparedRoofOpeningDirectionalResizes prepare_roof_opening_directional_resizes(
+    const std::map<std::string, Entity, std::less<>>& actual,
+    std::span<const RoofOpeningDirectionalResizeRequest> requests);
 
 struct RoofOpeningGroupTransform {
     std::vector<RoofOpeningGroupMember> members;

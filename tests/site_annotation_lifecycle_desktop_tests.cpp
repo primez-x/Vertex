@@ -100,7 +100,8 @@ void lifecycle() {
     }
     require(count==2,"Paste creates two independent explicit carriers");oneEdit(window,source);
     require(window.selectEntity(a),"select original typed Delete");source=window.document().snapshot();
-    require(window.deleteSelection(),"actual typed Delete action");const auto deleted=window.document().snapshot();
+    const auto delete_applied=window.deleteSelection();
+    require(delete_applied,("actual typed Delete action: "+window.lastError().toStdString()).c_str());const auto deleted=window.document().snapshot();
     require(deleted.entities().at("site-annotation-b")==source.entities().at("site-annotation-b"),"Delete preserves duplicate other owner exactly");
     require(deleted.entities().at("site-annotation-a").properties.at("state").at("labels").empty(),"Delete removes only selected child");
     require(child(deleted.entities().at("site-annotation-a"),"symbols")==child(source.entities().at("site-annotation-a"),"symbols"),"Delete retains owner sibling");oneEdit(window,source);

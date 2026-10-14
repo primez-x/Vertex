@@ -155,7 +155,7 @@ const CanvasEntity& canvas_entity(const PlanCanvas& canvas,const QString& id) {
 }
 const CanvasLabel& label(const PlanCanvas& canvas,const QString& id,const QString& role) {
     const auto found=std::find_if(canvas.labels().begin(),canvas.labels().end(),[&](const auto& item){return item.id==id&&item.callout_role==role;});
-    require(found!=canvas.labels().end(),"Actual live callout is projected to canvas");return *found;
+    require(found!=canvas.labels().end(),qPrintable(QStringLiteral("Actual live callout is projected to canvas: %1/%2").arg(id,role)));return *found;
 }
 QImage rendered(PlanCanvas& canvas) {
     QImage image(900,650,QImage::Format_ARGB32_Premultiplied);image.fill(Qt::white);QPainter painter(&image);
@@ -210,8 +210,12 @@ void imported_canvas_pages_persistence_and_live_edit() {
         <<" calculation="<<label(canvas,area0_id,"area_calculation").text.toStdString()<<std::endl;
     require(label(canvas,area0_id,"area_name").text=="Ground room"&&label(canvas,area0_id,"area_calculation").text.contains("64"),"Source name and geometry-derived live area calculation render");
     window.setMetricUnits(true);
-    require(label(canvas,area0_id,"area_calculation").text.contains("5.95"),"Imported geometric area converts to metric without trusting the source cached total");
+    settle([&]{return std::any_of(canvas.labels().begin(),canvas.labels().end(),[&](const auto& item){
+        return item.id==area0_id&&item.callout_role=="area_calculation";});},"Metric imported callout publication settles");
+    require(label(canvas,area0_id,"area_calculation").text.startsWith("5.9 "),"Imported geometric area uses one metric decimal without trusting the source cached total");
     window.setMetricUnits(false);
+    settle([&]{return std::any_of(canvas.labels().begin(),canvas.labels().end(),[](const auto& item){
+        return item.text=="Ground portable note";});},"Imperial imported callout publication settles");
     const auto note=std::find_if(canvas.labels().begin(),canvas.labels().end(),[](const auto& item){return item.text=="Ground portable note";});
     require(note!=canvas.labels().end()&&note->text_alignment=="left"&&note->bold&&note->italic,"Authored portable text alignment/style lost");
     close(note->text_height_metres,.6*.3048,"Source text model height changed");
@@ -225,9 +229,11 @@ void imported_canvas_pages_persistence_and_live_edit() {
         if(replay.edges[0].segment.start.y==0&&replay.edges[0].segment.end.y==0) {editable_stroke=id;editable_segment=replay.edges[0].segment_id;break;}
     }
     require(!editable_stroke.empty(),"Find original analytical calculation stroke");
-    const auto stroke_id=QString::fromStdString(editable_stroke);const auto dimension_before=label(canvas,stroke_id,{}).text;
-    close(label(canvas,stroke_id,{}).text_height_metres,.9*.3048,"Imported dimension must retain model height");
-    require(label(canvas,stroke_id,{}).paper_height_mm==0,"Imported dimension model height must not be replaced by paper sizing");
+    const auto stroke_id=QString::fromStdString(editable_stroke);
+    const auto dimension_role=QStringLiteral("measurement_edge:")+QString::fromStdString(editable_segment);
+    const auto dimension_before=label(canvas,stroke_id,dimension_role).text;
+    close(label(canvas,stroke_id,dimension_role).text_height_metres,.9*.3048,"Imported dimension must retain model height");
+    require(label(canvas,stroke_id,dimension_role).paper_height_mm==0,"Imported dimension model height must not be replaced by paper sizing");
     require(canvas_entity(canvas,stroke_id).line_pattern=="dashdot","Source measured stroke line pattern lost");
     require(canvas.sketchCompositionGuideEnabled()&&canvas.floorGhostEntities().empty(),"First-page screen guide/ghost flags lost");
     progress("full-feature case: capture light and dark native workspace");
@@ -248,11 +254,19 @@ void imported_canvas_pages_persistence_and_live_edit() {
     page_combo.setCurrentIndex(0);QCoreApplication::processEvents();
     progress("full-feature case: reject native Save As to source .pinc");
     require(!window.saveProjectAs(source_path)&&read(source_path)==original,"Native Save As must block overwriting the original .pinc source");
+    progress("full-feature case: one import Undo/Redo before Open");
+    require(window.undoCommand(),"One Undo removes complete imported content");
+    const auto undone_import=window.document().snapshot();
+    require(undone_import.assets().empty()&&std::none_of(undone_import.entities().begin(),undone_import.entities().end(),
+        [](const auto& pair){return pair.second.type=="measurement_linework"||pair.second.type=="measurement_boundary";}),"Import content/assets were split across active history entries");
+    require(window.redoCommand()&&window.document().snapshot().entities()==imported.entities(),"One Redo restores complete original import content");
+    const auto before_open=window.document().snapshot();
     const auto native_path=temporary.filePath("portable.bldproj");progress("full-feature case: native Save As begin");
     require(window.saveProjectAs(native_path),qPrintable(window.lastError()));progress("full-feature case: native Save As returned; reopen begin");
     require(window.openProject(native_path),qPrintable(window.lastError()));assert_original_asset(window.document().snapshot(),original);
+    require(!window.undoCommand()&&!window.redoCommand(),"Ordinary Open preserves import history with a fresh Undo session");
     progress("full-feature case: native reopen returned");
-    require(document_authoring_source_digest_v1(window.document().snapshot())==document_authoring_source_digest_v1(imported),"Native save/reopen changed retained styles, assets or authoring proofs");
+    require(document_authoring_source_digest_v1(window.document().snapshot())==document_authoring_source_digest_v1(before_open),"Native save/reopen changed retained styles, assets or authoring proofs");
     auto& reopened_canvas=widget<PlanCanvas>(window,"measurementPlanCanvas");widget<QComboBox>(window,"pincProjectPage").setCurrentIndex(0);QCoreApplication::processEvents();
     const auto before_edit=window.document().snapshot();const auto calculation_before=label(reopened_canvas,area0_id,"area_calculation").text;
     progress("full-feature case: connected imported stroke length edit begin");
@@ -263,29 +277,27 @@ void imported_canvas_pages_persistence_and_live_edit() {
     require(edited.revision()==before_edit.revision()+1&&measurement_linework_source_checks(edited.entities()).at(area0.id).current,"Connected native edit must refresh imported source area once");
     close(signed_area(boundary_geometry(decode_identified_boundary_entity(edited.entities().at(area0.id)))),72*.09290304,
         "Connected imported corner edit changes the actual enclosed face instead of creating a dangling extension");
-    std::cout<<"[pinc-desktop] edit quantities: dimension "<<dimension_before.toStdString()<<" -> "<<label(reopened_canvas,stroke_id,{}).text.toStdString()
+    std::cout<<"[pinc-desktop] edit quantities: dimension "<<dimension_before.toStdString()<<" -> "<<label(reopened_canvas,stroke_id,dimension_role).text.toStdString()
         <<"; area "<<calculation_before.toStdString()<<" -> "<<label(reopened_canvas,area0_id,"area_calculation").text.toStdString()<<std::endl;
-    require(label(reopened_canvas,stroke_id,{}).text!=dimension_before&&label(reopened_canvas,area0_id,"area_calculation").text!=calculation_before,"Live imported dimensions and area callouts did not recalculate");
+    require(label(reopened_canvas,stroke_id,dimension_role).text!=dimension_before&&label(reopened_canvas,area0_id,"area_calculation").text!=calculation_before,"Live imported dimensions and area callouts did not recalculate");
     const auto edited_pdf_path=temporary.filePath("connected-edit.pdf");
     require(window.exportDrawingSetPdf(edited_pdf_path),qPrintable(window.lastError()));QPdfDocument edited_pdf;
     require(edited_pdf.load(edited_pdf_path)==QPdfDocument::Error::None && edited_pdf.pageCount()==2 &&
-        edited_pdf.getAllText(0).text().contains("72.00") && !edited_pdf.getAllText(1).text().contains("72.00"),
+        edited_pdf.getAllText(0).text().contains("72.0") && !edited_pdf.getAllText(1).text().contains("72.0"),
         "Connected corner edit recalculates only its own page in actual PDF output");
-    const auto edited_path=temporary.filePath("connected-edit.bldproj");
-    require(window.saveProjectAs(edited_path) && window.openProject(edited_path),qPrintable(window.lastError()));
-    require(label(reopened_canvas,area0_id,"area_calculation").text.contains("72.00") &&
-        window.document().snapshot().entities()==edited.entities(),"Connected imported edit reopens with current native geometry and live quantity");
-    progress("full-feature case: native edit Undo/Redo begin");
+    progress("full-feature case: native edit Undo/Redo before Open");
     require(window.undoCommand()&&window.document().snapshot().entities()==before_edit.entities(),"Native imported geometry edit does not undo exactly");
     require(window.redoCommand()&&window.document().snapshot().entities()==edited.entities(),"Native imported geometry edit does not redo exactly");
-    require(window.undoCommand(),"Return to original imported content before import-history check");
-    progress("full-feature case: one import Undo begin");
-    require(window.undoCommand(),"One Undo removes complete imported content");
-    const auto undone_import=window.document().snapshot();
-    require(undone_import.assets().empty()&&std::none_of(undone_import.entities().begin(),undone_import.entities().end(),
-        [](const auto& pair){return pair.second.type=="measurement_linework"||pair.second.type=="measurement_boundary";}),"Import content/assets were split across active history entries");
-    require(window.redoCommand()&&window.document().snapshot().entities()==imported.entities(),"One Redo restores complete original import content");
-    progress("full-feature case: import Undo/Redo returned");
+    const auto before_edited_open=window.document().snapshot();
+    const auto edited_path=temporary.filePath("connected-edit.bldproj");
+    require(window.saveProjectAs(edited_path) && window.openProject(edited_path),qPrintable(window.lastError()));
+    require(label(reopened_canvas,area0_id,"area_calculation").text.contains("72.0") &&
+        window.document().snapshot().entities()==edited.entities(),"Connected imported edit reopens with current native geometry and live quantity");
+    require(!window.undoCommand()&&!window.redoCommand(),"Ordinary Open starts the edited project with a fresh Undo session");
+    require(window.document().snapshot().history().size()==before_edited_open.history().size(),
+        "Ordinary Open retains the complete edited history, including Undo and Redo events");
+    require(window.openProject(native_path)&&window.document().snapshot().entities()==imported.entities(),
+        "Reopen original imported content for further authoring");
     const auto before_add=window.document().snapshot();
     const auto carrier=std::find_if(before_add.entities().begin(),before_add.entities().end(),[&](const auto& pair){
         return pair.second.type==kAnnotationEntityType && pair.second.properties.value("layer_id",std::string{})==layer0;});
@@ -356,7 +368,7 @@ void imported_canvas_pages_persistence_and_live_edit() {
     }
     require(
         filtered.getAllText(0).text().contains("Ground portable note")&&
-        !filtered_text.contains("Upper portable note")&&!filtered_text.contains("64.00")&&blue_ink>50,
+        !filtered_text.contains("Upper portable note")&&!filtered_text.contains("64.0")&&blue_ink>50,
         "Drawing-set output must preserve genuine visibility without losing another page's visible interior layer");
     require(window.setContainerVisible(hidden_annotations,true),"Restore explicit source visibility");
     const auto hidden_floor=QString::fromStdString(pages[1].at("floor_id").get<std::string>());
@@ -491,14 +503,17 @@ void long_text_and_distant_callouts_fit_real_output() {
         first_text.contains(QString::fromStdString(rotated_text)),"Actual text-only PDF clips or omits part of a long aligned/rotated note");
     require(second_text.contains("REMOTE SOURCE AREA NAME")&&second_text.contains("64"),"Actual PDF clips distant live area callouts");
     for(int page=0;page<2;++page)require(ink_pixels(pdf.render(page,QSize(900,1200)))>1000,"Fitted source PDF pages must visibly render complete content");
+    progress("painted-ink case: one import Undo/Redo before Open");
+    require(window.undoCommand()&&window.document().snapshot().assets().empty(),"Painted-ink fitting must preserve one import Undo");
+    require(window.redoCommand()&&window.document().snapshot().entities()==imported.entities(),"One Redo must restore fitted original import content");
+    const auto before_open=window.document().snapshot();
     const auto native_path=temporary.filePath("painted-ink.bldproj");progress("painted-ink case: native Save As begin");
     require(window.saveProjectAs(native_path),qPrintable(window.lastError()));progress("painted-ink case: Save As returned; reopen begin");
     require(window.openProject(native_path),qPrintable(window.lastError()));progress("painted-ink case: reopen returned");
     const auto restored=decode_sheet_view_entity(page_registry(window.document().snapshot()));
     require(restored.views()==sheets.views()&&restored.sheets()==sheets.sheets(),"Dynamic-fit intent and fitted initial scales must survive native save/reopen");
-    progress("painted-ink case: one import Undo/Redo begin");
-    require(window.undoCommand()&&window.document().snapshot().assets().empty(),"Painted-ink fitting must preserve one import Undo");
-    require(window.redoCommand()&&window.document().snapshot().entities()==imported.entities(),"One Redo must restore fitted original import content");
+    require(!window.undoCommand()&&!window.redoCommand()&&window.document().snapshot().history().size()==before_open.history().size(),
+        "Painted-ink Open retains import history with a fresh Undo session");
     widget<QComboBox>(window,"pincProjectPage").setCurrentIndex(0);QCoreApplication::processEvents();
     progress("painted-ink case: add far public annotation");
     const auto far_label=window.createAnnotationLabel("note","POST IMPORT FAR AUTHOR STAYS INSIDE FIT",{80,-45});
