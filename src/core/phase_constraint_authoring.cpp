@@ -4763,6 +4763,332 @@ void require_roof_directional_resize_source_admission(const DocumentSnapshot& so
     std::span<const RoofPlanResizeIntent> requests) {
     preflight_roof_directional_resize_impl(source,nullptr,requests);
 }
+namespace {
+// Properties46 must finish this analytical pass before any draft, archive
+// validator, slab partition or native replacement inspection. Keep all charges
+// on one capture budget, including repeated qualified roots and DAG paths.
+void preflight_roof_slab_directional_resize_impl(const DocumentSnapshot& source,
+    const PhaseAssemblyInstancePropertyEditAuthoring* authoring,
+    std::span<const AssemblyDirectionalResizeTarget> targets,
+    std::span<const RoofPlanResizeIntent> roofs,std::span<const SlabGeometryEditIntent> slabs,
+    const std::optional<ComponentSlabDirectionalResizeAllocation>& allocation) {
+    const auto component_count=authoring ? authoring->intents.size() : targets.size();
+    if (!component_count || roofs.empty() || slabs.empty() || component_count>1000 ||
+        roofs.size()>1000-component_count || slabs.size()>1000-component_count-roofs.size())
+        invalid("Mixed roof/slab resize aggregate selection bound exceeded");
+    const auto& actual=source.entities();
+    if (actual.size()>65536) invalid("Mixed roof/slab resize source entity bound exceeded");
+    DirectionalResizeSourceBudget raw;raw.portable_text=true;raw.diagnostic="Mixed roof/slab resize";
+    const auto raw_entities=[&](const Entities& entities) {
+        if (entities.size()>65536) invalid("Mixed roof/slab resize retained source entity bound exceeded");
+        for (const auto& [id,entity]:entities) {
+            if (id!=entity.id || !entity.properties.is_object() || !entity.extensions.is_object())
+                invalid("Mixed roof/slab resize requires actual identified source envelopes");
+            raw.text(id);raw.text(entity.type);raw.visit(entity.properties);raw.visit(entity.extensions);
+        }
+    };
+    raw_entities(actual);
+    for (const auto& revision:source.history()) {
+        raw_entities(revision.entities);
+        if (revision.boundary_constraint_changes) raw.visit(command_to_json(*revision.boundary_constraint_changes));
+    }
+    RoofDirectionalCaptureBudget capture;capture.diagnostic="Mixed roof/slab resize";
+    std::set<ComponentTarget> roots;
+    std::set<std::string,std::less<>> component_owners,slab_ids,catalog_ids,fresh,component_names,slab_names;
+    const auto reserve_identity=[&](const std::string& token,bool component) {
+        if (token.empty() || token.size()>128 || token.find('\0')!=std::string::npos)
+            invalid("Mixed roof/slab resize fresh identity is not portable");
+        // Independent entity/instance names intentionally share one token.
+        if (component) {fresh.insert(token);component_names.insert(token);}
+        else if (!fresh.insert(token).second)
+            invalid("Mixed roof/slab resize fresh allocation collides with another reservation");
+        else slab_names.insert(token);
+        if (fresh.size()>4096) invalid("Mixed roof/slab resize aggregate fresh identity budget exceeded");
+    };
+    const auto independent=[&](const std::string& id,const ComponentTarget* qualified) {
+        if (!component_owners.insert(id).second && !authoring)
+            invalid("Mixed roof/slab resize repeats an actual component root");
+        const auto found=actual.find(id);
+        if (found==actual.end() || found->second.type!="assembly_instance")
+            invalid("Mixed roof/slab resize actual independent component is missing");
+        const auto instance=decode_document_assembly_instance(found->second);
+        const ComponentTarget root{instance.assembly_catalog_id,instance.instance.id,id,{}};
+        if (qualified && component_root(*qualified)!=root)
+            invalid("Mixed roof/slab resize component target differs from the actual source codec");
+        roots.insert(root);catalog_ids.insert(root.catalog_id);
+    };
+    if (authoring) {
+        const auto wire=encode_phase_assembly_instance_property_edit_authoring(*authoring);
+        raw.visit(wire);capture.charge(wire);
+        if (wire.at("version")!=7 && wire.at("version")!=8 && wire.at("version")!=9)
+            invalid("Mixed roof/slab resize requires component geometry request seven, eight or nine");
+        for (const auto& intent:authoring->intents) {
+            if (!intent.target.document_entity_id || !intent.properties.empty() || !intent.materials.empty() ||
+                !intent.quantities.empty() || intent.pose.operation!=AssemblyInstancePropertyPatchOperation::unchanged ||
+                intent.pose.x_metres || intent.pose.y_metres || intent.pose.z_metres || intent.pose.rotation_radians ||
+                intent.pose.scale || intent.pose.vertical_scale || intent.pose.mirrored_y ||
+                intent.profile_geometry.operation==AssemblyInstancePropertyPatchOperation::unchanged)
+                invalid("Mixed roof/slab resize admits independent document component geometry only");
+            independent(*intent.target.document_entity_id,&intent.target);
+            if (intent.profile_geometry.value) {
+                const auto proposed=encode_assembly_profiles(*intent.profile_geometry.value);
+                // Authoring charged one copy; reserve candidate/private copy
+                // and final source-bound proof without using native geometry.
+                capture.charge(proposed);capture.charge(proposed);
+            }
+        }
+        for (const auto& [root,identity]:authoring->allocation.roots) {
+            (void)root;
+            if (identity.proposed_entity_id) reserve_identity(*identity.proposed_entity_id,true);
+            if (identity.proposed_catalog_id) reserve_identity(*identity.proposed_catalog_id,true);
+            reserve_identity(identity.proposed_instance_id,true);
+        }
+        for (const auto& [id,token]:authoring->allocation.membership_entity_ids) {(void)id;reserve_identity(token,true);}
+        for (const auto& [id,token]:authoring->dimension_identities) {(void)id;reserve_identity(token,true);}
+        for (const auto& [id,token]:authoring->presentation_overlay_identities) {(void)id;reserve_identity(token,true);}
+    } else for (const auto& target:targets) {
+        const auto& operation=target.operation;
+        if (target.independent_entity_id.empty() || target.independent_entity_id.size()>128 ||
+            !std::isfinite(operation.world_anchor_m.x) || !std::isfinite(operation.world_anchor_m.y) ||
+            !std::isfinite(operation.x_factor) || !std::isfinite(operation.y_factor) ||
+            operation.x_factor<=0 || operation.y_factor<=0 || !operation.world_axis_rotation_radians ||
+            !std::isfinite(*operation.world_axis_rotation_radians))
+            invalid("Mixed roof/slab resize requires actual finite component operators");
+        if (operation.x_factor!=targets.front().operation.x_factor || operation.y_factor!=targets.front().operation.y_factor)
+            invalid("Mixed roof/slab resize component operators have inconsistent factors");
+        if (operation.operation_frame) {
+            const auto& frame=*operation.operation_frame;
+            if (!std::isfinite(frame.translation_m.x) || !std::isfinite(frame.translation_m.y) ||
+                !std::isfinite(frame.translation_m.z) || !std::isfinite(frame.rotation_radians) ||
+                frame.scale!=1 || frame.vertical_scale!=1 || frame.mirrored_y)
+                invalid("Mixed roof/slab resize component operation frame must be proper and rigid");
+        }
+        independent(target.independent_entity_id,nullptr);capture.reserve(512);
+    }
+    // Charge actual allocation wire before geometry or phase partitioning.
+    if (allocation) {
+        if (allocation->identities.size()>4096 || allocation->hosted_instance_identities.size()>4096 ||
+            allocation->dimension_identities.size()>1000 || allocation->identities.size()+
+            allocation->hosted_instance_identities.size()+allocation->dimension_identities.size()>4096)
+            invalid("Mixed roof/slab resize aggregate fresh identity budget exceeded");
+        Json bindings=Json::array();
+        for (const auto& [binding,token]:allocation->hosted_instance_identities)
+            bindings.push_back({{"catalog_id",binding.first},{"instance_id",binding.second},{"proposed_instance_id",token}});
+        const Json wire{{"identities",allocation->identities},{"hosted_instance_identities",std::move(bindings)},
+            {"dimension_identities",allocation->dimension_identities}};
+        raw.visit(wire);capture.charge(wire);
+        for (const auto& [id,token]:allocation->identities) {(void)id;reserve_identity(token,false);}
+        for (const auto& [binding,token]:allocation->hosted_instance_identities) {(void)binding;reserve_identity(token,false);}
+        for (const auto& [id,token]:allocation->dimension_identities) {(void)id;reserve_identity(token,false);}
+    }
+    const auto envelope=[&](const Entity& entity,unsigned copies) {
+        for (unsigned i=0;i<copies;++i) {capture.charge(entity.properties);capture.charge(entity.extensions);}
+        capture.reserve(entity.id.size()+entity.type.size()+256);
+    };
+    std::string previous;
+    for (const auto& roof:roofs) {
+        if ((!previous.empty() && previous>=roof.roof_id) || roof.anchor_mode!=PlanAxisResizeAnchorMode::shared_frame)
+            invalid("Mixed roof/slab resize requires sorted unique shared-frame whole roofs, including units");
+        previous=roof.roof_id;
+        const auto operation=encode_roof_plan_resize_intent(roof);capture.charge(operation);
+        const auto found=actual.find(roof.roof_id);
+        if (found==actual.end() || found->second.type!="roof") invalid("Mixed roof/slab resize actual whole roof is missing");
+        envelope(found->second,1);
+        if (roof.scale_x!=1 || roof.scale_y!=1) {
+            for (int i=0;i<3;++i) capture.charge(found->second.properties);
+            capture.charge(operation);capture.reserve(2048);
+        }
+    }
+    previous.clear();
+    for (const auto& slab:slabs) {
+        const auto found=actual.find(slab.slab_id);
+        if (found==actual.end() || found->second.type!="slab" ||
+            (!previous.empty() && previous>=slab.slab_id) || slab.kind!=SlabGeometryEditKind::resize_plan ||
+            !slab.coordinate_world_hosted_geometry ||
+            slab.preserve_planar_source_geometry!=slab_geometry_edit_requires_planar_source(found->second,slab))
+            invalid("Mixed roof/slab resize requires sorted actual-source directional slab leaves four or five");
+        previous=slab.slab_id;slab_ids.insert(slab.slab_id);
+        const auto operation=encode_slab_geometry_edit_intent(slab);
+        (void)decode_slab_geometry_edit_intent(operation);capture.charge(operation);
+        // Raw source, retained archive, pending frame/receipt archive, possible
+        // baseline replacement and its complete source-bound phase proof.
+        envelope(found->second,4);capture.reserve(4096);
+        const auto numeric_ring=[&](const Json& ring) {
+            if (!ring.is_array() || ring.size()>1024)
+                invalid("Mixed roof/slab resize slab source ring budget exceeded");
+            for (const auto& segment:ring) {(void)segment;capture.reserve(512);}
+        };
+        if (!found->second.properties.contains("boundary") || !found->second.properties.contains("holes") ||
+            !found->second.properties.at("holes").is_array() || found->second.properties.at("holes").size()>1024)
+            invalid("Mixed roof/slab resize requires bounded actual slab rings");
+        numeric_ring(found->second.properties.at("boundary"));
+        for (const auto& hole:found->second.properties.at("holes")) numeric_ring(hole);
+        const auto archive=found->second.extensions.find(std::string(slab_geometry_derivations_key));
+        if ((slab.resize->scale_x!=1 || slab.resize->scale_y!=1) && archive!=found->second.extensions.end() &&
+            archive->is_object() && archive->contains("operations") && archive->at("operations").is_array() &&
+            archive->at("operations").size()>=256)
+            invalid("Mixed roof/slab resize pending slab archive operation budget exceeded");
+    }
+    AssemblyCatalogTransferBudget catalogs;
+    std::vector<std::pair<std::string,AssemblyInstance>> hosted;
+    for (const auto& [id,entity]:actual) if (entity.type=="assembly_model") {
+        admit_existing_assembly_catalog_work(entity,catalogs);
+        const auto model=AssemblyModel::from_json(entity.properties.at("model"));
+        for (const auto& row:model.instances()) if (row.placement && slab_ids.contains(row.placement->host_entity_id)) {
+            roots.insert(ComponentTarget{id,row.id,std::nullopt,{}});catalog_ids.insert(id);hosted.emplace_back(id,row);
+        }
+    }
+    std::vector<const Entity*> dimensions;
+    for (const auto& [id,entity]:actual) {
+        (void)id;if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+        const auto target=entity.properties.find("target");
+        bool affected=target!=entity.properties.end() && target->is_object() &&
+            roof_resize_identity_field(*target,"entity_id",component_owners);
+        if (target!=entity.properties.end() && target->is_object() && target->contains("assembly")) {
+            const auto& a=target->at("assembly");
+            if (a.is_object() && a.contains("catalog_id") && a.at("catalog_id").is_string() &&
+                a.contains("instance_id") && a.at("instance_id").is_string()) {
+                std::optional<std::string> document;
+                if (a.contains("document_entity_id") && !a.at("document_entity_id").is_null()) {
+                    if (!a.at("document_entity_id").is_string()) invalid("Mixed roof/slab resize component dimension identity is invalid");
+                    document=a.at("document_entity_id").get<std::string>();
+                }
+                affected=affected || roots.contains(ComponentTarget{a.at("catalog_id").get<std::string>(),a.at("instance_id").get<std::string>(),document,{}});
+            }
+        }
+        if (!is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(entity).format)) {
+            if (affected) invalid("Mixed roof/slab resize has an unsupported affected component dimension");
+            continue;
+        }
+        const auto decoded=decode_boundary_dimension_entity(entity);
+        if (!decoded.supported() || !decoded.dimension->assembly_target)
+            invalid("Mixed roof/slab resize has an unsupported component dimension carrier");
+        if (!roots.contains(component_root(decoded.dimension->assembly_target->component))) continue;
+        dimensions.push_back(&entity);
+        if (dimensions.size()>1000) invalid("Mixed roof/slab resize combined dimension association budget exceeded");
+    }
+    std::size_t possible_fresh=component_owners.size()*2+slabs.size()*2+hosted.size()*3+dimensions.size()*2;
+    if (possible_fresh>4096 || fresh.size()>4096)
+        invalid("Mixed roof/slab resize aggregate fresh identity budget exceeded");
+    for (const auto& id:catalog_ids) {
+        const auto found=actual.find(id);
+        if (found==actual.end() || found->second.type!="assembly_model") invalid("Mixed roof/slab resize actual component catalog is missing");
+        envelope(found->second,4);
+    }
+    std::size_t selected_nodes{},segments{};
+    const auto walk=[&](const std::string& catalog,const AssemblyInstance& instance,const Entity* borrowed) {
+        // Each qualified root can create a private baseline catalog and proof,
+        // even when other roots share this very same original catalog.
+        envelope(actual.at(catalog),3);capture.reserve(4096);
+        const auto model=AssemblyModel::from_json(actual.at(catalog).properties.at("model"));
+        const auto visit=[&](const auto& self,const std::string& type_id,std::vector<std::string> path)->void {
+            if (path.size()>=32 || ++selected_nodes>4096) invalid("Mixed roof/slab resize pending component node budget exceeded");
+            const auto type=std::find_if(model.types().begin(),model.types().end(),[&](const auto& row) {return row.id==type_id;});
+            if (type==model.types().end()) invalid("Mixed roof/slab resize actual source type is missing");
+            const auto* profiles=&type->profiles;
+            if (path.empty() && instance.profile_overrides) profiles=&*instance.profile_overrides;
+            for (const auto& override:instance.nested_overrides)
+                if (override.part_path==path && override.profile_overrides) profiles=&*override.profile_overrides;
+            const auto wire=encode_assembly_profiles(*profiles);
+            for (int i=0;i<3;++i) capture.charge(wire);
+            capture.charge(Json(path));capture.reserve(2048);
+            const auto ring=[&](std::size_t count) {
+                if (count>262144-segments) invalid("Mixed roof/slab resize pending component segment budget exceeded");
+                segments+=count;
+                for (std::size_t i=0;i<count;++i) capture.reserve(512);
+            };
+            for (const auto& profile:*profiles) {
+                capture.reserve(1024);ring(profile.outer.size());for (const auto& hole:profile.holes) ring(hole.size());
+            }
+            // Legacy slab-hosted nodes may borrow the full slab ring/map even
+            // when no authored profile exists. Charge each repeated path.
+            if (borrowed && profiles->empty()) {
+                for (const auto* key:{"boundary","holes","planar_affine"}) if (borrowed->properties.contains(key))
+                    for (int i=0;i<3;++i) capture.charge(borrowed->properties.at(key));
+                const auto& boundary=borrowed->properties.at("boundary");ring(boundary.size());
+                if (borrowed->properties.contains("holes")) for (const auto& hole:borrowed->properties.at("holes")) ring(hole.size());
+                capture.reserve(2048);
+            }
+            for (const auto& part:type->parts) {auto child_path=path;child_path.push_back(part.id);self(self,part.type_id,std::move(child_path));}
+        };
+        visit(visit,instance.type_id,{});
+    };
+    for (const auto& owner:component_owners) {
+        const auto& entity=actual.at(owner);envelope(entity,3);
+        const auto instance=decode_document_assembly_instance(entity);walk(instance.assembly_catalog_id,instance.instance,nullptr);
+    }
+    for (const auto& [catalog,instance]:hosted) walk(catalog,instance,&actual.at(instance.placement->host_entity_id));
+    for (const auto* dimension:dimensions) {envelope(*dimension,3);capture.reserve(2048);}
+    for (const auto& [id,entity]:actual) if (entity.type=="model_phases" || entity.type=="assembly_phase_membership") {
+        (void)id;envelope(entity,3);
+    }
+    capture.reserve(8192);
+    if (allocation && !allocation->hosted_instance_identities.empty()) {
+        // This identity-only projection feeds the existing lightweight alias
+        // index. It neither expands nor validates/manufactures slab geometry.
+        // Occupy every actual reservation so escaped aliases match final replay.
+        validate_selection_edit_fresh_identity_tokens(actual,fresh);
+        Entities identities=actual;
+        for (const auto& token:fresh) identities.emplace(token,Entity{token,"label",Json::object(),false});
+        for (const auto& [binding,instance]:allocation->hosted_instance_identities) {
+            const auto catalog=allocation->identities.find(binding.first);
+            if (catalog==allocation->identities.end()) continue; // Typed inventory refuses incomplete allocations later.
+            auto& entity=identities.at(catalog->second);entity.type="assembly_model";
+            if (!entity.properties.contains("model")) entity.properties["model"]={{"instances",Json::array()}};
+            entity.properties.at("model").at("instances").push_back({{"id",instance}});
+        }
+        const auto aliases=embedded_assembly_presentation_ids(identities);
+        for (const auto& [binding,instance]:allocation->hosted_instance_identities) {
+            const auto catalog=allocation->identities.find(binding.first);
+            if (catalog==allocation->identities.end()) continue;
+            const auto& alias=aliases.at({catalog->second,instance});capture.reserve(alias.size()+128);
+            if (!fresh.insert(alias).second) invalid("Mixed roof/slab resize allocation collides with a computed presentation alias");
+            slab_names.insert(alias);
+        }
+        if (fresh.size()>4096) invalid("Mixed roof/slab resize aggregate fresh identity budget exceeded");
+    }
+    // Identity lifetime admission uses actual authoring reservations; it never
+    // requires component preparation merely to discover fresh names.
+    validate_selection_edit_fresh_identity_tokens(actual,fresh);
+    const std::vector<std::string> component_tokens(component_names.begin(),component_names.end());
+    validate_phase_assembly_instance_property_edit_fresh_identities(actual,component_tokens);
+    // Slab replacement additionally reserves raw keys/values, including opaque
+    // borrowed-source names. Mirror that existing freshness rule analytically;
+    // bounded raw inspection above has already admitted recursion and bytes.
+    const auto raw_collision=[&](const auto& self,const Json& value)->bool {
+        if (value.is_string()) return slab_names.contains(value.get_ref<const std::string&>());
+        if (value.is_object()) for (const auto& [key,child]:value.items())
+            if (slab_names.contains(key) || self(self,child)) return true;
+        if (value.is_array()) for (const auto& child:value) if (self(self,child)) return true;
+        return false;
+    };
+    if (!slab_names.empty()) for (const auto& [id,entity]:actual) {
+        (void)id;
+        if (slab_names.contains(entity.type) || raw_collision(raw_collision,entity.properties) || raw_collision(raw_collision,entity.extensions))
+            invalid("Mixed roof/slab resize slab allocation collides with an actual raw source name");
+    }
+    for (const auto& [id,asset]:source.assets()) {(void)asset;if (fresh.contains(id)) invalid("Mixed roof/slab resize fresh identity collides with a current asset");}
+    for (const auto& revision:source.history()) {
+        validate_selection_edit_fresh_identity_tokens(revision.entities,fresh);
+        validate_phase_assembly_instance_property_edit_fresh_identities(revision.entities,component_tokens);
+        for (const auto& [id,asset]:revision.assets) {(void)asset;if (fresh.contains(id)) invalid("Mixed roof/slab resize fresh identity collides with a retained asset");}
+    }
+    validate_retained_authoring_fresh_identities(source.history(),source.history().size(),fresh);
+    // Reuse every44 relationship restriction, suppressing its native/archive
+    // validator. This second inventory grants no independent capture budget.
+    preflight_roof_directional_resize_impl(source,authoring,roofs,false);
+}
+} // namespace
+void require_roof_slab_directional_resize_source_admission(const DocumentSnapshot& source,
+    std::span<const AssemblyDirectionalResizeTarget> targets,std::span<const RoofPlanResizeIntent> roofs,
+    std::span<const SlabGeometryEditIntent> slabs) {
+    preflight_roof_slab_directional_resize_impl(source,nullptr,targets,roofs,slabs,std::nullopt);
+}
+void preflight_component_roof_slab_directional_resize(const DocumentSnapshot& source,
+    const PhaseAssemblyInstancePropertyEditAuthoring& authoring,std::span<const RoofPlanResizeIntent> roofs,
+    std::span<const SlabGeometryEditIntent> slabs,const std::optional<ComponentSlabDirectionalResizeAllocation>& allocation) {
+    preflight_roof_slab_directional_resize_impl(source,&authoring,{},roofs,slabs,allocation);
+}
 void preflight_component_roof_directional_resize(const DocumentSnapshot& source,
     const PhaseAssemblyInstancePropertyEditAuthoring& authoring,std::span<const RoofPlanResizeIntent> requests) {
     preflight_roof_directional_resize_impl(source,&authoring,requests);
@@ -4861,6 +5187,48 @@ ComponentSlabDirectionalResizeComposition compose_component_slab_directional_res
     auto lane=build_slab_directional_physical_contribution(source,replayed,authoring,slabs,allocation,message);
     lane.result.components=finalize_component_directional_resize(source,replayed,authoring,lane.entities,lane.destinations,lane.dimension_ids);
     return std::move(lane.result);
+}
+ComponentRoofSlabDirectionalResizeComposition compose_component_roof_slab_directional_resize(
+    const DocumentSnapshot& source,const PhaseAssemblyInstancePropertyEditPreparation& components,
+    std::span<const RoofPlanResizeIntent> roofs,std::span<const SlabGeometryEditIntent> slabs,
+    const std::optional<ComponentSlabDirectionalResizeAllocation>& allocation,std::string_view message) {
+    if (message.size()>1024 || message.find('\0')!=std::string_view::npos)
+        invalid("Mixed roof/slab resize message exceeds its bound");
+    const auto wire=validate_phase_assembly_instance_property_edit_request(components.request());
+    const auto authoring=decode_phase_assembly_instance_property_edit_authoring(wire.at("authoring"));
+    preflight_component_roof_slab_directional_resize(source,authoring,roofs,slabs,allocation);
+    // Like42, the sealed component contribution must be authenticated against
+    // the complete original. Physical candidates never become component input.
+    require_phase_assembly_instance_property_edit_source_current(source,components);
+    const auto& replayed=components;
+    (void)directional_component_authoring(replayed,roofs.size()+slabs.size());
+    auto whole=build_roof_directional_physical_contribution(source,replayed,authoring,roofs);
+    auto slab=build_slab_directional_physical_contribution(source,replayed,authoring,slabs,allocation,message);
+    std::vector<Entities> lanes{whole.entities,slab.entities};
+    validate_directional_physical_freshness(source,lanes,replayed,allocation,std::nullopt);
+    const auto physical=union_directional_physical_candidates(source.entities(),lanes);
+    merge_directional_destinations(whole.destinations,slab.destinations);
+    ComponentRoofSlabDirectionalResizeComposition result;
+    merge_physical_owner_correspondence(source.entities(),result.original_to_proposed,slab.result.slab_original_to_proposed);
+    result.selected_original_to_proposed=std::move(slab.result.slab_selected_original_to_proposed);
+    merge_directional_destinations(result.selected_original_to_proposed,whole.result.roof_selected_original_to_proposed);
+    merge_directional_destinations(result.original_to_proposed,whole.result.roof_selected_original_to_proposed);
+    result.hosted_bindings=std::move(slab.result.slab_hosted_bindings);
+    result.phase_authorings=std::move(slab.result.slab_phase_authorings);
+    const auto source_aliases=embedded_assembly_presentation_ids(source.entities());
+    const auto final_aliases=embedded_assembly_presentation_ids(physical);
+    for (const auto& [binding,destination]:result.hosted_bindings) {
+        const auto& original=source_aliases.at(binding);
+        const auto& proposed=final_aliases.at(destination);
+        const auto [entry,inserted]=result.original_to_proposed.emplace(original,proposed);
+        if (!inserted && entry->second!=proposed)
+            invalid("Mixed roof/slab resize has conflicting qualified presentation alias destinations");
+    }
+    result.components=finalize_component_directional_resize(source,replayed,authoring,physical,whole.destinations,slab.dimension_ids);
+    for (const auto& roof:roofs)
+        if (!exact(result.components.entities.at(roof.roof_id),whole.entities.at(roof.roof_id)))
+            invalid("Mixed roof/slab resize final composition changed the exact original-source native roof envelope");
+    return result;
 }
 ComponentStructuralDirectionalResizeComposition compose_component_structural_directional_resize(
     const DocumentSnapshot& source,const PhaseAssemblyInstancePropertyEditPreparation& components,

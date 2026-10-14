@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version267 requires native reader269 for closed Properties46 component,
+whole-roof and slab resizing. Canonical history retains both original-source
+physical rosters, slab replacement allocation and component authority after Undo.
+Historical45 and archive4-only authority retain266/268 and265/267 respectively;
+opaque command-shaped data keeps its previous floor. Runtime qualification is
+recorded separately.
+
 Exchange version266 requires native reader268 for closed Properties45 component,
 whole-roof and different-host typed skylight resizing. Canonical retained history
 includes both actual original-source operator rosters after Undo. Existing

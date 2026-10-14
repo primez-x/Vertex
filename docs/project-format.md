@@ -1,4 +1,11 @@
-# Vertex project formats v1 through v268
+# Vertex project formats v1 through v269
+
+Reader269/native extraction267 retains closed Properties46 directional resizing
+of independent components, ordinary whole schema1 roofs and coordinated slabs.
+Canonical command52 retains component requests, shared-frame roof operators and
+source-qualified slab leaves/allocation, including after Undo. Historical45 and
+archive4-only authorities retain their prior floors. Opaque metadata acquires no
+authority. Runtime qualification is recorded separately in the delivery record.
 
 Reader268/native extraction266 retains closed Properties45 directional resizing
 of independent components, whole schema1 roofs and selected typed skylights on

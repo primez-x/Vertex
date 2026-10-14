@@ -12,6 +12,58 @@ constitute user acceptance.
 
 ## Current delivery state
 
+### October 14 component, whole-roof and slab resizing
+
+The different-host skylight checkpoint is committed and pushed as `67143a41`;
+exact remote main was verified. Source discovery identifies components, ordinary
+whole roofs and slabs as the next missing mixed-family side gesture. The new
+[contract](../design/vertex-component-roof-slab-resize.md) and
+[plan](../superpowers/plans/2026-10-14-component-roof-slab-resize.md) reserve closed
+Properties46/reader269/extraction267. The genuine native fixture compiles and
+passes actual solid/corner/volume, published ink, exact ordinary selection and
+source/history/save/output preservation checks in all six orders, then reports
+MissingFrame in each (`artifacts/codex-component-roof-slab-20261014/native-red.log`,
+2.13 seconds). The slab's actual native Z range is1.25..1.45. Read-only review
+confirms the existing bounded union/finalizer can be reused. Required constraints
+are incorporated: the pure gate precedes native slab partitioning and roof
+validation, complete authoring admission includes actual slab allocation, hosted
+growth is charged per qualified root/path, the65536 slab source bound remains,
+and mapped receipt/correspondence semantics retain their existing authority.
+Core/controller/persistence and the full native fixture are integrated. The
+focused Release build passes after fixture-only corrections to Windows' reserved
+near helper name and the typed roof anchor member (`fixture-compile-build.log`).
+The first core run exposed an incorrectly expected budget refusal: ninety small
+repeated paths fit; the fixture retains that admitted control and now checks180
+paths cross the ceiling. The native hand fixture also needed fresh reviewed
+topology identities while preserving its manufactured affine geometry. No
+production guard was relaxed. Aggregate-only and native-hand checks pass, then
+the complete core test passes in56.93 seconds (`core-third.log`), including mapped
+receipt retirement, shared catalogs/dimensions, allocation freshness and native269/
+extraction267 persistence. All four affected historical core lanes pass in101.71
+seconds (`historical-core-first.log`). The complete new native fixture passes in
+233.33 seconds (`native-first.log`): six frame orders,24 Plan/Site lifecycles,
+four reviews, five stale-result guards and73 editable fresh Opens. Root inspected
+the opposite-anchor Plan preview and rotated Site commit. These flat solids do
+not qualify pitched native interaction. The full Release build passes. All339
+active standard checks pass in999.43 seconds (`full-standard-suite.log`), including
+the new native fixture again in242.07 seconds; production acceptance stays disabled.
+Generated metadata preserves the explicit1200-second new/previous roof-skylight
+native limits,240-second core limit,480-second combined-physical limit,90-second
+measured-dimension limit and60-second ordinary quantity limit.
+Six protected checks pass with exit0, no timeout/capture failure, confirmed
+termination and a host outside the job (`protected-imports.log`, result directory
+`artifacts/import-worker-independent/release-500d2ac66a704934901743aced8352d2`).
+Eight smoke cases pass; current executable and evidence source/destination hashes
+are verified in this wave's `desktop-smoke/`. Root inspected Measure100% and
+Design200%. Performance sampling remains incomplete; the legacy seeded sketch
+withholds GLA and does not qualify new-wall-room GLA. Source-kit inventory is2092;
+both diff checks pass. Consumed inputs stayed frozen during root jobs. Root
+reviewed the integrated request, interfaces, admission/composition, lifetime,
+persistence and evidence. No new installation, Apex compatibility or production
+acceptance is claimed. Read-only discovery recommends one coherent next
+roof-bearing combined contract within the existing2..3 physical-contribution cap;
+its implementation has not begun.
+
 ### October 14 component, whole-roof and different-host skylight resizing
 
 The whole-roof checkpoint is committed and pushed as `dc81438a`; exact remote

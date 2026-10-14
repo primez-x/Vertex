@@ -182,6 +182,12 @@ private:
     const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
     std::span<const RoofPlanResizeIntent>, std::string_view);
 
+// Closed Properties46: all three original-source rosters are nonempty, including
+// units. Allocation belongs only to the actual changed baseline slab inventory.
+[[nodiscard]] MixedSelectionPropertyEditPreparation prepare_component_roof_slab_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
+    std::span<const RoofPlanResizeIntent>, std::span<const SlabGeometryEditIntent>,
+    const std::optional<ComponentSlabDirectionalResizeAllocation>&, std::string_view);
 // Closed Properties45: all three original-source rosters are nonempty;
 // ordinary whole roofs and qualified skylight hosts are disjoint even for units.
 [[nodiscard]] MixedSelectionPropertyEditPreparation prepare_component_roof_skylight_directional_resize(

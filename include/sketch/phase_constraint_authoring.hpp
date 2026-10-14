@@ -405,6 +405,27 @@ struct ComponentRoofSkylightDirectionalResizeComposition {
     std::map<std::pair<std::string,std::string>,RoofOpeningGroupMember> roof_children;
     std::vector<nlohmann::json> phase_authorings;
 };
+struct ComponentRoofSlabDirectionalResizeComposition {
+    CoordinatedComponentPropertyComposition components;
+    std::map<std::string,std::string,std::less<>> original_to_proposed;
+    std::map<std::string,std::string,std::less<>> selected_original_to_proposed;
+    std::map<std::pair<std::string,std::string>,std::pair<std::string,std::string>> hosted_bindings;
+    std::vector<nlohmann::json> phase_authorings;
+};
+// One pure, combined admission precedes every native producer. Source admission
+// reserves possible baseline growth; full admission also charges actual pending
+// allocation and checks its identities without manufacturing components.
+void require_roof_slab_directional_resize_source_admission(
+    const DocumentSnapshot&, std::span<const AssemblyDirectionalResizeTarget>,
+    std::span<const RoofPlanResizeIntent>, std::span<const SlabGeometryEditIntent>);
+void preflight_component_roof_slab_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
+    std::span<const RoofPlanResizeIntent>, std::span<const SlabGeometryEditIntent>,
+    const std::optional<ComponentSlabDirectionalResizeAllocation>&);
+[[nodiscard]] ComponentRoofSlabDirectionalResizeComposition compose_component_roof_slab_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditPreparation&,
+    std::span<const RoofPlanResizeIntent>, std::span<const SlabGeometryEditIntent>,
+    const std::optional<ComponentSlabDirectionalResizeAllocation>&, std::string_view);
 // Analytical aggregate gates reserve pending allocations, proof and dimension
 // growth before any component draft or per-owner native manufacture.
 void require_roof_skylight_directional_resize_source_admission(
