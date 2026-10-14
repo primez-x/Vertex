@@ -9,6 +9,7 @@
 #include "sketch/phase_selection_property_edit.hpp"
 #include "sketch/phase_assembly_instance_property_edit.hpp"
 #include "sketch/phase_slab_replacement.hpp"
+#include "sketch/phase_structural_replacement.hpp"
 
 #include <optional>
 #include <span>
@@ -20,6 +21,18 @@ struct ComponentSlabDirectionalResizeAllocation {
     PhaseSlabReplacementIdentityMap identities;
     PhaseSlabReplacementHostedInstanceIdentityMap hosted_instance_identities;
     PhaseSlabReplacementIdentityMap dimension_identities;
+};
+
+struct StructuralDirectionalResizeRequest {
+    std::string object_id;
+    double sx{1.0}, sy{1.0};
+    Vec2 anchor_m;
+    double frame_rotation_radians{};
+};
+struct ComponentStructuralDirectionalResizeAllocation {
+    PhaseStructuralReplacementIdentityMap identities;
+    std::map<std::pair<std::string,std::string>,std::string> hosted_instance_identities;
+    PhaseStructuralReplacementIdentityMap dimension_identities;
 };
 
 // Dialect five is scalar Properties authority only; dialect six additionally
@@ -119,7 +132,7 @@ private:
     std::map<std::pair<std::string, std::string>, RoofOpeningGroupMember> roof_children_;
     std::vector<PhysicalWallRoomPhaseReviewInventory> phase_room_reviews_;
     std::vector<std::size_t> phase_room_review_indices_;
-    // Dialects 39/40's physical contribution is independently sealed, rather than a
+    // Dialects 39/40/41's physical contribution is independently sealed, rather than a
     // synthetic historical scalar Properties base.
     std::vector<nlohmann::json> physical_phase_authorings_;
     friend MixedSelectionPropertyEditPreparation replay_mixed_selection_property_edit_preparation(
@@ -153,6 +166,15 @@ private:
 [[nodiscard]] MixedSelectionPropertyEditPreparation prepare_component_roof_opening_directional_resize(
     const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
     std::span<const RoofOpeningDirectionalResizeRequest>, std::string_view);
+
+// Closed dialect 41: independent component geometry and sorted source-derived
+// structural axis operators. Only canonical rectangular columns and horizontal
+// straight beams admit this lane, including units. Exact allocation is present
+// iff changed shared-baseline owners require complete hosted/dimension copies.
+[[nodiscard]] MixedSelectionPropertyEditPreparation prepare_component_structural_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
+    std::span<const StructuralDirectionalResizeRequest>,
+    const std::optional<ComponentStructuralDirectionalResizeAllocation>&, std::string_view);
 
 // Closed dialect-five/six/seven/eight envelope: version, expected_revision, source_snapshot_digest,
 // source_authoring_digest, source_entities_digest, source_saved_revision,

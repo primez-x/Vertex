@@ -12,6 +12,73 @@ constitute user acceptance.
 
 ## Current delivery state
 
+### October 14 component and structural resizing
+
+Independent components, canonical v1 rectangular columns and horizontal straight
+beams now share the side-grip gesture in Plan and Site under
+[the structural contract](../design/vertex-mixed-component-structural-resize.md).
+Closed Properties41/command52 independently reconstructs both lanes from the
+original snapshot, uses exact typed structural capture and complete baseline
+host/dimension inventories, and runs the shared dimension finalizer once.
+Reader264/extraction262 retains applied and undone canonical authority; opaque
+metadata does not raise the floor. Historical coordinated structural dialects
+remain transform-only. Circular columns, sloped beams, unsupported dormant-field
+capture and oblique anisotropy retain explicit refusal.
+
+Native checks cover both selection orders and axes, exact detached geometry,
+unchanged committed output before release, one Undo/Redo, explicit profile
+dimension Cancel/Remove/Apply, viewport/selection/history staleness, baseline
+replacement with hosted components and carried dimensions, editable fresh Open,
+and rotated Site presentation. Original owners, catalogs, metadata and assets
+remain exact where retained. Ordinary Open keeps history and starts a fresh Undo
+session. Nine core groups include units, aggregate bounds, fresh-allocation
+collisions, historical refusals, storage floors and opaque lookalikes.
+
+Qualification exposed two real integration gaps: physical preview correspondence
+omitted columns/beams, and the mixed lifetime check incorrectly treated derived
+qualified aliases as global entity IDs. Both are fixed. A 132-byte alias now
+passes actual Document preview/apply, Undo/Redo and storage, while borrowed-alias
+collisions still refuse. Source-only independent reviews found no remaining
+actionable issue in those paths. Fixture corrections retain exact geometry;
+painted grips can move around annotation footprints.
+
+The protected runner now uses Windows System.Management for the existing local
+Win32_Process.Create/current-user/SW_HIDE protocol, avoiding the failing native
+Management Infrastructure initializer. Exact PID, exit, identity and provenance
+checks remain. Review's job-membership finding is fixed: children reject an
+in-job host before fixtures, and parents require an explicit false value. Five
+capture self-tests pass; a real in-job invocation refuses with zero fixtures.
+
+The complete Release build and final affected rebuild pass. The four-worker full
+standard run passes all 328 selected active tests in 746.75 seconds, excluding
+DXF/IFC; the production acceptance gate remains disabled. CTest registers 331
+tests, 330 active. All six protected import fixtures pass, including DXF/IFC.
+All eight app smoke cases pass at 100%, 150% and 200%; root inspected Plan/Site
+resize captures and smoke images. Legacy smoke seeds retain their earlier
+withheld GLA and do not qualify the new-room GLA flow. The source-kit allowlist
+has 2,071 entries and passes its check. No package/install or human acceptance
+is claimed.
+
+Evidence is under `artifacts/codex-mixed-structural-20261014/`:
+`final-alias-release-build.log`, `final-regression-build.log`,
+`full-qualified-ctest.log`, `protected-final-imports.log`,
+`protected-final-capture-selftest.log`, `protected-in-job-refusal/`,
+`qualified-phase-native.log`, `qualified-site-native.log`,
+`phase-site-captures/`, `qualified-desktop-smoke.log` and
+`qualified-desktop-smoke/`. Protected logs identify their immutable result
+directories. Preserve initial RED/diagnostic logs and the canceled serial run;
+they are superseded by the complete green four-worker run.
+
+Root integrated review and verification are complete; Git records this scoped
+checkpoint. Reconcile local and remote refs before resuming. The prior checkpoint
+is `c111cfc6`. Continue by combining the qualified slab, structural and typed
+skylight lanes with components, preserving their existing contracts and one
+dimension finalization. Design advice and the source-backed shared-catalog check
+are in `combined-contract-advice.txt` and `shared-catalog-scope.txt` under the
+evidence directory. Distinct private catalogs can preserve single-valued
+qualified root destinations; retain family-local catalog allocation proofs.
+Broader physical families and real Apex/device compatibility remain unfinished.
+
 ### October 13 component and typed skylight resizing
 
 Independent components and separately selected typed skylights on unselected

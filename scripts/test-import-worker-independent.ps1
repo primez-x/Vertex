@@ -278,6 +278,7 @@ public static class BoundedWorkerCapture {
             throw "IsProcessInJob failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
         }
         $report.host_in_job = $inJob
+        if ($inJob) { throw 'Independent fixture host must be outside a process job.' }
         $report.binaries_before = Get-BinaryEvidence
         if (!$CaptureSelfTest -and !$immutableDesktopMode) {
             & (Join-Path $root '.deps/cad-runtime/3.13.15/python.exe') -I -B (
@@ -463,7 +464,6 @@ $independent = $null
 try {
     # WMI's no-window creation flag is rejected on some hosts; SW_HIDE controls
     # the newly created console from launch, without touching any shared console.
-    $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
     $command = '"' + $pwsh + '" -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -File "' + $PSCommandPath +
         '" -Configuration ' + $Configuration + ' -Child -CaptureDirectory "' + $CaptureDirectory + '"'
     if ($CaptureSelfTest) { $command += ' -CaptureSelfTest' }
@@ -471,8 +471,28 @@ try {
     if ($IfcOnly) { $command += ' -IfcOnly' }
     if ($SiteFixture) { $command += ' -SiteFixture ' + $SiteFixture }
     if ($PackagedRuntimeRoot) { $command += ' -PackagedRuntimeRoot "' + $PackagedRuntimeRoot + '"' }
-    $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-        CommandLine = $command; CurrentDirectory = $root; ProcessStartupInformation = $startup }
+    # The Windows WMI API retains the same current-user creation contract without
+    # depending on PowerShell's native Management Infrastructure module.
+    $wmiStartupClass = $wmiStartup = $wmiProcessClass = $wmiParameters = $wmiCreation = $null
+    try {
+        $wmiStartupClass = [System.Management.ManagementClass]::new('Win32_ProcessStartup')
+        $wmiStartup = $wmiStartupClass.CreateInstance()
+        $wmiStartup['ShowWindow'] = [uint16]0
+        $wmiProcessClass = [System.Management.ManagementClass]::new('Win32_Process')
+        $wmiParameters = $wmiProcessClass.GetMethodParameters('Create')
+        $wmiParameters['CommandLine'] = $command
+        $wmiParameters['CurrentDirectory'] = $root
+        $wmiParameters['ProcessStartupInformation'] = $wmiStartup
+        $wmiCreation = $wmiProcessClass.InvokeMethod('Create', $wmiParameters, $null)
+        $created = [pscustomobject]@{
+            ReturnValue = [uint32]$wmiCreation['ReturnValue']
+            ProcessId = [uint32]$wmiCreation['ProcessId']
+        }
+    } finally {
+        foreach ($wmiObject in @($wmiCreation, $wmiParameters, $wmiProcessClass, $wmiStartup, $wmiStartupClass)) {
+            if ($null -ne $wmiObject) { $wmiObject.Dispose() }
+        }
+    }
     $capture.launch_return = $created.ReturnValue
     if ($created.ReturnValue -ne 0) { throw "WMI creation failed: $($created.ReturnValue)" }
     $capture.host_pid = $created.ProcessId
@@ -507,7 +527,8 @@ Write-Output $CaptureDirectory
 if ($capture.error) { throw $capture.error }
 $expectedCount = if ($immutableDesktopMode) { 2 } elseif ($IfcOnly -or $PackagedRuntimeRoot) { 1 } elseif ($CaptureSelfTest) { 5 } else { 6 }
 if (!$capture.termination_confirmed -or $capture.host_exit_code -ne 0 -or
-    $result.error -or @($result.tests).Count -ne $expectedCount -or (!$CaptureSelfTest -and @($result.tests | Where-Object {
+    $result.error -or $result.host_in_job -isnot [bool] -or $result.host_in_job -ne $false -or
+    @($result.tests).Count -ne $expectedCount -or (!$CaptureSelfTest -and @($result.tests | Where-Object {
         $_.exit_code -ne 0 -or $_.timed_out -or $_.capture_failure }).Count)) {
     throw "Independent fixtures did not pass; inspect $CaptureDirectory"
 }

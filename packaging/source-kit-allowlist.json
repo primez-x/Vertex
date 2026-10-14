@@ -1823,6 +1823,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/design/vertex-mixed-component-structural-resize.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/desktop-workflow.md"
     },
     {
@@ -6888,6 +6892,14 @@
     {
       "category": "source",
       "path": "tests/mixed_component_slab_resize_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/mixed_component_structural_resize_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/mixed_component_structural_resize_tests.cpp"
     },
     {
       "category": "source",

@@ -1,4 +1,13 @@
-# Vertex project formats v1 through v263
+# Vertex project formats v1 through v264
+
+Reader264/native extraction262 retains closed Properties41 component/structural
+directional resize composition under command52. Exact scalar operators derive
+canonical rectangular-column and horizontal straight-beam changes from the
+original snapshot. Source-inspected baseline allocations carry complete hosts
+and dimensions, while ordinary and proposed owners retain identity. Retained and
+undone commands preserve this floor through canonical proof slots. Historical
+coordinated structural meanings and older minimum floors stay unchanged; opaque
+metadata does not acquire authority. Runtime qualification is recorded separately.
 
 Reader263/native extraction261 retains closed Properties40 component/skylight
 directional resize composition under command52. Sorted qualified child operators

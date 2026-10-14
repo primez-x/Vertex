@@ -6685,6 +6685,7 @@ class MainWindow::Impl {
         CanvasSelectionFrame frame;
         std::map<QString,SitePresentationPlacement> site_frames;
         QStringList slab_ids;
+        QStringList structural_ids;
         std::vector<CanvasRoofOpeningTarget> children;
         std::vector<CanvasRoofOpeningControls> controls;
         std::uint64_t controls_generation{};
@@ -27235,7 +27236,8 @@ public:
             if (!mixed_directional_intent)
                 return prepare_component_presentation_property_edit(source,authoring,nullptr,
                     "Resize component dimensions");
-            if (mixed_directional_intent->at("version")!=39 && mixed_directional_intent->at("version")!=40)
+            if (mixed_directional_intent->at("version")!=39 && mixed_directional_intent->at("version")!=40 &&
+                mixed_directional_intent->at("version")!=41)
                 throw std::invalid_argument("The mixed directional resize proposal changed.");
             auto value=*mixed_directional_intent;
             const auto component=prepare_phase_assembly_instance_property_edit(source,authoring);
@@ -27270,6 +27272,57 @@ public:
             "Resize selected plan dimensions");
         ApplyBoundaryConstraintChanges command;
         command.expected_revision=source.revision();command.message=prepared.intent().at("message").get<std::string>();
+        command.mixed_selection_edit_completion=true;
+        command.mixed_selection_edit_intent=complete_mixed_selection_property_edit(source,prepared,{},{});
+        return command;
+    }
+
+    static Command componentStructuralCohortAxisResizeCommand(const DocumentSnapshot& source,
+        const PhaseAssemblyInstancePropertyEditAuthoring& components,
+        const ComponentAxisResizeCohortCapture& cohort,Vec2 canvas_anchor,double sx,double sy,
+        const BuildingViewFrame* projection) {
+        if (sx==1.0 && sy==1.0) return ApplyEntityChanges{source.revision(),{}, {},"Resize selected plan dimensions"};
+        std::vector<StructuralDirectionalResizeRequest> requests;
+        std::vector<StructuralObjectEditIntent> edits;
+        for (const auto& id:cohort.structural_ids) {
+            const auto anchor=!cohort.site_frames.empty()
+                ? site_source_plan_point(canvas_anchor,cohort.site_frames.at(id))
+                : projection ? unproject_plan_point(canvas_anchor,*projection) : canvas_anchor;
+            const auto angle=componentCohortModelAxis(cohort,id,projection);
+            requests.push_back({id.toStdString(),sx,sy,anchor,angle});
+            const auto& actual=source.entities().at(id.toStdString());
+            const auto staged=stage_structural_plan_axis_resize_entity(actual,sx,sy,anchor,angle);
+            const auto captured=capture_structural_object_edit(actual,staged);
+            if (captured) edits.push_back(*captured);
+        }
+        std::sort(requests.begin(),requests.end(),[](const auto& a,const auto& b){return a.object_id<b.object_id;});
+        const auto replacement=phase_structural_edit_replacement_request(source.entities(),edits);
+        std::optional<ComponentStructuralDirectionalResizeAllocation> allocation;
+        if (replacement) {
+            const auto& request=*replacement;
+            const auto plan=inspect_phase_structural_replacement_plan(source.entities(),request.seed_object_ids,
+                request.registry_id,request.alternative_id,true,true);
+            if (!plan.ready()) throw std::invalid_argument("The structural replacement inventory is incomplete.");
+            auto occupied=retainedSlabIdentityNames(source,true);
+            const auto component=prepare_phase_assembly_instance_property_edit(source,components);
+            occupied.insert(component.result().fresh_identity_ids.begin(),component.result().fresh_identity_ids.end());
+            const auto fresh=[&](const char* kind) {
+                auto id=new_id(kind);
+                while (!occupied.insert(id).second) id=new_id(kind);
+                return id;
+            };
+            allocation.emplace();
+            for (const auto* inventory:{&plan.required_entity_ids,&plan.required_child_ids})
+                for (const auto& id:*inventory) allocation->identities.emplace(id,fresh("proposed-structural"));
+            for (const auto& binding:plan.required_hosted_instance_ids)
+                allocation->hosted_instance_identities.emplace(binding,fresh("proposed-structural-component"));
+            for (const auto& id:plan.required_dimension_ids)
+                allocation->dimension_identities.emplace(id,fresh("proposed-structural-dimension"));
+        }
+        const auto prepared=prepare_component_structural_directional_resize(source,components,requests,allocation,
+            "Resize selected plan dimensions");
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision=source.revision();command.message="Resize selected plan dimensions";
         command.mixed_selection_edit_completion=true;
         command.mixed_selection_edit_intent=complete_mixed_selection_property_edit(source,prepared,{},{});
         return command;
@@ -27487,7 +27540,7 @@ public:
         std::vector<AssemblyDirectionalResizeTarget> targets;
         targets.reserve(static_cast<std::size_t>(cohort.ids.size()));
         for (const auto& id:cohort.ids) {
-            if (cohort.slab_ids.contains(id)) continue;
+            if (cohort.slab_ids.contains(id) || cohort.structural_ids.contains(id)) continue;
             const auto anchor=!cohort.site_frames.empty()
                 ? site_source_plan_point(canvas_anchor,cohort.site_frames.at(id))
                 : projection ? unproject_plan_point(canvas_anchor,*projection) : canvas_anchor;
@@ -27499,15 +27552,28 @@ public:
     static void classifyComponentAxisResizeCohort(const DocumentSnapshot& source,
         ComponentAxisResizeCohortCapture& cohort) {
         cohort.slab_ids.clear();
+        cohort.structural_ids.clear();
         bool component=false;
         for (const auto& id:cohort.ids) {
             const auto& entity=source.entities().at(id.toStdString());
             if (entity.type=="slab") cohort.slab_ids.push_back(id);
+            else if ((entity.type=="column" && entity.properties.value("form",std::string{})=="rectangular_column") ||
+                (entity.type=="beam" && entity.properties.value("form",std::string{})=="straight_beam")) {
+                (void)stage_structural_plan_axis_resize_entity(entity,1.0,1.0,{},0.0);
+                if (entity.type=="beam") {
+                    const auto beam=std::get<Beam>(decode_building_entity(entity));
+                    if (std::abs(beam.end.z-beam.start.z)>default_geometry_tolerance_metres)
+                        throw std::invalid_argument("Side grips require horizontal straight beams.");
+                }
+                cohort.structural_ids.push_back(id);
+            }
             else if (entity.type=="assembly_instance" &&
                 !geometric_assembly_for_child(source,id.toStdString())) component=true;
-            else throw std::invalid_argument("Side grips require complete independent components and horizontal assemblies.");
+            else throw std::invalid_argument("Side grips require independent components and supported plan objects.");
         }
         if (!component) throw std::invalid_argument("This resize cohort needs an independent component.");
+        if (!cohort.structural_ids.empty() && (!cohort.slab_ids.empty() || !cohort.children.empty()))
+            throw std::invalid_argument("Select components, rectangular columns and horizontal beams for these side grips.");
         if (!cohort.children.empty()) {
             if (!cohort.slab_ids.empty())
                 throw std::invalid_argument("Select components and skylights for these side grips.");
@@ -27630,6 +27696,31 @@ public:
             compose_assembly_profile_affine(presentation,mapping));
     }
 
+    static Bounds2 componentCohortStructuralBounds(const Entity& entity,
+        const ComponentAxisResizeCohortCapture& cohort,const QString& id,
+        const BuildingViewFrame* projection) {
+        const auto angle=plan_axis_resize_frame(entity);
+        const auto local=plan_axis_resize_bounds(entity);
+        const auto c=std::cos(angle),s=std::sin(angle);
+        std::optional<Bounds2> result;
+        for (const auto& corner:std::array<Vec2,4>{{local.minimum,
+            {local.maximum.x,local.minimum.y},local.maximum,{local.minimum.x,local.maximum.y}}}) {
+            Vec2 point{c*corner.x-s*corner.y,s*corner.x+c*corner.y};
+            if (!cohort.site_frames.empty()) point=site_presented_plan_point(point,cohort.site_frames.at(id));
+            else if (projection) point=project_plan_point(point,*projection);
+            if (!std::isfinite(point.x) || !std::isfinite(point.y))
+                throw std::invalid_argument("The structural resize frame exceeds the supported range.");
+            if (!result) result=Bounds2{point,point};
+            else {
+                result->minimum.x=std::min(result->minimum.x,point.x);
+                result->minimum.y=std::min(result->minimum.y,point.y);
+                result->maximum.x=std::max(result->maximum.x,point.x);
+                result->maximum.y=std::max(result->maximum.y,point.y);
+            }
+        }
+        return *result;
+    }
+
     static CanvasSelectionFrame componentCohortPlanFrame(const DocumentSnapshot& candidate,
         const ComponentAxisResizeCohortCapture& cohort,const BuildingViewFrame* projection=nullptr,
         const Command* command=nullptr,const DocumentSnapshot* source=nullptr) {
@@ -27640,6 +27731,7 @@ public:
         std::map<std::string,const Entity*,std::less<>> catalogs;
         std::vector<std::pair<QString,AssemblyDocumentInstance>> roots;
         std::vector<std::pair<QString,const Entity*>> slabs;
+        std::vector<std::pair<QString,const Entity*>> structural;
         std::set<QString> unique;
         for (const auto& id:cohort.ids) {
             if (id.isEmpty() || id.toStdString().size()>128 || !unique.insert(id).second)
@@ -27648,6 +27740,9 @@ public:
             const auto& entity=candidate.entities().at(target);
             if (entity.id==target && entity.type=="slab" && cohort.slab_ids.contains(id)) {
                 slabs.emplace_back(id,&entity);continue;
+            }
+            if (entity.id==target && (entity.type=="column" || entity.type=="beam") && cohort.structural_ids.contains(id)) {
+                structural.emplace_back(id,&entity);continue;
             }
             if (entity.id!=target || entity.type!="assembly_instance")
                 throw std::invalid_argument("The component resize frame lost an independent source root.");
@@ -27664,6 +27759,16 @@ public:
         for (const auto& [id,catalog]:catalogs)
             models.emplace(id,AssemblyModel::from_json(catalog->properties.at("model")));
         std::optional<Bounds2> canvas_bounds;
+        for (const auto& [id,entity]:structural) {
+            const auto bounds=componentCohortStructuralBounds(*entity,cohort,id,projection);
+            if (!canvas_bounds) canvas_bounds=bounds;
+            else {
+                canvas_bounds->minimum.x=std::min(canvas_bounds->minimum.x,bounds.minimum.x);
+                canvas_bounds->minimum.y=std::min(canvas_bounds->minimum.y,bounds.minimum.y);
+                canvas_bounds->maximum.x=std::max(canvas_bounds->maximum.x,bounds.maximum.x);
+                canvas_bounds->maximum.y=std::max(canvas_bounds->maximum.y,bounds.maximum.y);
+            }
+        }
         for (const auto& [id,entity]:slabs) {
             const auto bounds=componentCohortSlabBounds(*entity,cohort,id,projection);
             if (!canvas_bounds) canvas_bounds=bounds;
@@ -29554,6 +29659,7 @@ public:
             const auto original = source.entities().find(old_id);
             if (original != source.entities().end() &&
                 (original->second.type == "roof" || original->second.type == "roof_join" || original->second.type == "slab" ||
+                 original->second.type == "column" || original->second.type == "beam" ||
                  original->second.type == "assembly_instance" || can_recognize_boundary_dimension_entity_type(original->second.type)))
                 aliases.emplace(id_from(new_id), id_from(old_id));
         }
@@ -30390,6 +30496,10 @@ public:
                                     component_release->mixed_directional_intent);
                             else if (axis_cohort && !axis_cohort->children.empty())
                                 command=componentSkylightCohortAxisResizeCommand(*source,**component_authoring,
+                                    *axis_cohort,axis_canvas_anchor,axis_scales->first,axis_scales->second,
+                                    view_context ? &view_context->frame : nullptr);
+                            else if (axis_cohort && !axis_cohort->structural_ids.empty())
+                                command=componentStructuralCohortAxisResizeCommand(*source,**component_authoring,
                                     *axis_cohort,axis_canvas_anchor,axis_scales->first,axis_scales->second,
                                     view_context ? &view_context->frame : nullptr);
                             else if (axis_cohort && !axis_cohort->slab_ids.empty())
@@ -32439,6 +32549,9 @@ public:
                         const bool unchanged=retained.at("version")==39
                             ? reviewed.at("slab_geometry")==retained.at("slab_geometry") &&
                               reviewed.at("slab_allocation")==retained.at("slab_allocation")
+                            : retained.at("version")==41
+                            ? reviewed.at("structural_axis_requests")==retained.at("structural_axis_requests") &&
+                              reviewed.at("structural_allocation")==retained.at("structural_allocation")
                             : reviewed.at("roof_opening_axis_requests")==retained.at("roof_opening_axis_requests");
                         if (!unchanged)
                             throw std::invalid_argument("The reviewed mixed resize changed its captured proposal.");
@@ -33297,12 +33410,13 @@ public:
         release->viewport.selected_presentations=canvas->selectedEntityPresentations();
         release->viewport.selected_labels=canvas->selectedLabelPresentations();
         release->authoring=*m_component_axis_authoring;
-        if (release->cohort && (!release->cohort->slab_ids.empty() || !release->cohort->children.empty())) {
+        if (release->cohort && (!release->cohort->slab_ids.empty() || !release->cohort->structural_ids.empty() || !release->cohort->children.empty())) {
             if (!m_entity_transform_command)
                 throw std::invalid_argument("The mixed resize proposal is incomplete.");
             const auto* command=std::get_if<ApplyBoundaryConstraintChanges>(&*m_entity_transform_command);
             if (!command || !command->mixed_selection_edit_completion ||
-                command->mixed_selection_edit_intent.at("version")!=(release->cohort->children.empty() ? 39 : 40))
+                command->mixed_selection_edit_intent.at("version")!=(!release->cohort->structural_ids.empty() ? 41 :
+                    release->cohort->children.empty() ? 39 : 40))
                 throw std::invalid_argument("The mixed resize proposal lost its source-bound authority.");
             release->mixed_directional_intent=command->mixed_selection_edit_intent;
         }
@@ -54137,7 +54251,7 @@ private:
                     validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent")) :
                     validate_mixed_selection_edit_intent(encoded.at("mixed_selection_edit_intent"));
                 const auto dialect=intent.at("version").get<int>();
-                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=29) || dialect==32 || dialect==33 || dialect==34 || dialect==35 || dialect==36 || dialect==37 || dialect==38 || dialect==39 || dialect==40)) {
+                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=29) || dialect==32 || dialect==33 || dialect==34 || dialect==35 || dialect==36 || dialect==37 || dialect==38 || dialect==39 || dialect==40 || dialect==41)) {
                     // Properties dialects have no transform roof_authoring.
                     // Active-baseline redirects require independently replayed
                     // source authority rather than extracting supplied maps.
@@ -63838,9 +63952,11 @@ private:
                     mixed_edit=true;
                     const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);
                     const auto properties_dialect=intent.at("version").get<int>();
-                    if (properties_dialect==39 || properties_dialect==40) {
+                    if (properties_dialect==39 || properties_dialect==40 || properties_dialect==41) {
                         if (properties_dialect==39) for (const auto& row:intent.at("slab_geometry"))
                             targets.insert(decode_slab_geometry_edit_intent(row).slab_id);
+                        else if (properties_dialect==41) for (const auto& row:intent.at("structural_axis_requests"))
+                            targets.insert(row.at("object_id").template get<std::string>());
                         else for (const auto& row:intent.at("roof_opening_axis_requests"))
                             targets.insert(row.at("opening_id").template get<std::string>());
                         const auto authoring=decode_phase_assembly_instance_property_edit_authoring(
@@ -63906,7 +64022,7 @@ private:
                     // Qualified children never promote their compatibility host
                     // IDs into ordinary presented-object selection authority.
                     const json no_roof_selection=nullptr;
-                    const auto& roof_selection=(properties_dialect==39 || properties_dialect==40) ? no_roof_selection :
+                    const auto& roof_selection=(properties_dialect==39 || properties_dialect==40 || properties_dialect==41) ? no_roof_selection :
                         (intent.at("version")==16 || intent.at("version")==17 || intent.at("version")==22 || intent.at("version")==23 || intent.at("version")==25 || intent.at("version")==26 || intent.at("version")==28 || intent.at("version")==29 || intent.at("version")==32 || intent.at("version")==33 || intent.at("version")==34 || intent.at("version")==35 || intent.at("version")==36 || intent.at("version")==37 || intent.at("version")==38)
                         ? intent.at("base_intent") : intent;
                     if (!roof_selection.is_null()) for (const auto& child:roof_selection.at("roof_opening_members"))

@@ -1880,11 +1880,13 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 if (version==52 && wire.contains("mixed_selection_edit_intent") &&
                     wire.at("mixed_selection_edit_intent").is_object() &&
                     (wire.at("mixed_selection_edit_intent").value("version",nlohmann::json())==39 ||
-                     wire.at("mixed_selection_edit_intent").value("version",nlohmann::json())==40)) {
+                     wire.at("mixed_selection_edit_intent").value("version",nlohmann::json())==40 ||
+                     wire.at("mixed_selection_edit_intent").value("version",nlohmann::json())==41)) {
                     const auto decoded=command_from_json(wire);
                     const auto* command=std::get_if<ApplyBoundaryConstraintChanges>(&decoded);
                     if (command && command->mixed_selection_edit_completion)
-                        return command->mixed_selection_edit_intent.at("version")==40 ? 263 : 262;
+                        return command->mixed_selection_edit_intent.at("version")==41 ? 264 :
+                            command->mixed_selection_edit_intent.at("version")==40 ? 263 : 262;
                 }
                 // Traverse only canonical command proof slots. Entity payloads
                 // and opaque metadata never contribute this enclosing authority.
@@ -1906,15 +1908,15 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<263 && (revision.boundary_constraint_changes || revision.boundary_geometry_edit)) {
+        if (required<264 && (revision.boundary_constraint_changes || revision.boundary_geometry_edit)) {
             const auto command=revision.boundary_constraint_changes ?
                 encoded_command(*revision.boundary_constraint_changes) : std::nullopt;
             const auto edit=revision.boundary_geometry_edit ?
                 encoded_edit(*revision.boundary_geometry_edit) : std::nullopt;
             if (command) required=std::max(required,component_directional_reader_floor(*command));
             if (command) required=std::max(required,retained_component_reader_floor(*command));
-            if (required<263 && edit) required=std::max(required,typed_edit_reader_floor(*edit));
-            if (required<263 && command) required=std::max(required,typed_edit_reader_floor(*command));
+            if (required<264 && edit) required=std::max(required,typed_edit_reader_floor(*edit));
+            if (required<264 && command) required=std::max(required,typed_edit_reader_floor(*command));
             if (required<122 && edit) required=std::max(required,quantity_reader_floor(*edit));
             if (required<122 && command) required=std::max(required,quantity_reader_floor(*command));
         }
@@ -4513,6 +4515,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 261 &&
          sqlite3_column_int(user_version.get(), 0) != 262 &&
          sqlite3_column_int(user_version.get(), 0) != 263 &&
+         sqlite3_column_int(user_version.get(), 0) != 264 &&
          sqlite3_column_int(user_version.get(), 0) != 253 &&
          sqlite3_column_int(user_version.get(), 0) != 242 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
@@ -5240,6 +5243,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=264)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 264 for coordinated component and structural directional resizing");
         if (required_format>=263)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 263 for coordinated component and skylight directional resizing");
         if (required_format>=262)

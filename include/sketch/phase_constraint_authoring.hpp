@@ -18,6 +18,8 @@ class AssemblyInstancePropertyEditPreparation;
 class PhaseAssemblyInstancePropertyEditPreparation;
 class MixedSelectionPropertyEditPreparation;
 struct ComponentSlabDirectionalResizeAllocation;
+struct ComponentStructuralDirectionalResizeAllocation;
+struct StructuralDirectionalResizeRequest;
 struct SlabGeometryEditIntent;
 
 // Collision fence for newly declared global identities against one retained
@@ -367,6 +369,19 @@ struct ComponentRoofOpeningDirectionalResizeComposition {
     std::map<std::pair<std::string,std::string>,RoofOpeningGroupMember> roof_children;
     std::vector<nlohmann::json> phase_authorings;
 };
+struct ComponentStructuralDirectionalResizeComposition {
+    CoordinatedComponentPropertyComposition components;
+    std::map<std::string,std::string,std::less<>> structural_original_to_proposed;
+    std::map<std::string,std::string,std::less<>> structural_selected_original_to_proposed;
+    std::map<std::pair<std::string,std::string>,std::pair<std::string,std::string>> structural_hosted_bindings;
+    std::vector<nlohmann::json> structural_phase_authorings;
+};
+// Both lanes reconstruct the complete original source before the single shared
+// dimension finalizer. Callers supply operators and exact inspected allocations.
+[[nodiscard]] ComponentStructuralDirectionalResizeComposition compose_component_structural_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditPreparation&,
+    std::span<const StructuralDirectionalResizeRequest>,
+    const std::optional<ComponentStructuralDirectionalResizeAllocation>&, std::string_view);
 // Reconstruct existing ordinary roof-child leaves and their complete phase32
 // proof internally. Both lanes share the private original-to-final carry.
 [[nodiscard]] ComponentRoofOpeningDirectionalResizeComposition compose_component_roof_opening_directional_resize(

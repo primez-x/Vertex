@@ -36,6 +36,7 @@
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/slab_hosted_geometry_edit.hpp"
 #include "sketch/structural_hosted_components.hpp"
+#include "sketch/plan_axis_resize.hpp"
 #include "sketch/stair_attachment_integrity.hpp"
 #include "sketch/stair_property_review.hpp"
 #include "sketch/assembly_instance_property_edit.hpp"
@@ -3739,6 +3740,160 @@ ComponentSlabDirectionalResizeComposition compose_component_slab_directional_res
             destinations.emplace(root,root);
         }
     result.components=finalize_component_directional_resize(source,replayed,authoring,physical,destinations,slab_dimension_ids);
+    return result;
+}
+
+ComponentStructuralDirectionalResizeComposition compose_component_structural_directional_resize(
+    const DocumentSnapshot& source,const PhaseAssemblyInstancePropertyEditPreparation& components,
+    std::span<const StructuralDirectionalResizeRequest> requests,
+    const std::optional<ComponentStructuralDirectionalResizeAllocation>& allocation,std::string_view message) {
+    if (requests.empty() || requests.size()>1000 || message.size()>1024 || message.find('\0')!=std::string_view::npos)
+        invalid("Mixed component/structural resize roster or message exceeds its bound");
+    const auto replayed=replay_phase_assembly_instance_property_edit_preparation(source,components.request());
+    const auto version=replayed.request().at("version").get<int>();
+    if (version<7 || version>9) invalid("Mixed structural resize requires component geometry request seven, eight or nine");
+    const auto authoring=decode_phase_assembly_instance_property_edit_authoring(replayed.request().at("authoring"));
+    if (authoring.intents.empty() || authoring.intents.size()+requests.size()>1000)
+        invalid("Mixed structural resize selection exceeds its complete roster bound");
+    const auto& actual=source.entities();
+    std::map<ComponentTarget,ComponentTarget> destinations;
+    for (const auto& intent:authoring.intents) {
+        if (!intent.target.document_entity_id || !intent.properties.empty() || !intent.materials.empty() ||
+            !intent.quantities.empty() || intent.pose.operation!=AssemblyInstancePropertyPatchOperation::unchanged ||
+            intent.pose.x_metres || intent.pose.y_metres || intent.pose.z_metres || intent.pose.rotation_radians ||
+            intent.pose.scale || intent.pose.vertical_scale || intent.pose.mirrored_y ||
+            intent.profile_geometry.operation==AssemblyInstancePropertyPatchOperation::unchanged)
+            invalid("Mixed structural resize admits independent document component geometry only");
+        const auto root=component_root(intent.target);
+        const auto destination=component_root(replayed.result().original_to_proposed.at(intent.target));
+        const auto [entry,inserted]=destinations.emplace(root,destination);
+        if (!inserted && entry->second!=destination) invalid("Mixed resize has conflicting component destinations");
+    }
+    std::vector<std::string> hosts;
+    std::vector<StructuralObjectEditIntent> edits;
+    Entities staged=actual;
+    std::string previous;
+    for (const auto& request:requests) {
+        const auto found=actual.find(request.object_id);
+        if (found==actual.end() || found->second.id!=request.object_id ||
+            (!previous.empty() && previous>=request.object_id))
+            invalid("Mixed structural resize requires sorted unique actual owners");
+        previous=request.object_id;
+        const auto& entity=found->second;
+        const auto& p=entity.properties;
+        if (!p.is_object() || !p.contains("version") || !p.at("version").is_number_integer() || p.at("version")!=1 ||
+            !p.contains("form") || !((entity.type=="column" && p.at("form")=="rectangular_column") ||
+                (entity.type=="beam" && p.at("form")=="straight_beam")))
+            invalid("Mixed structural resize admits canonical v1 rectangular columns and horizontal straight beams only");
+        validate_structural_object_source_entity(entity);
+        if (entity.type=="beam") {
+            const auto& start=p.at("start_m");const auto& end=p.at("end_m");const auto& up=p.at("up_dir");
+            const auto dx=end.at(0).get<double>()-start.at(0).get<double>();
+            const auto dy=end.at(1).get<double>()-start.at(1).get<double>();
+            const auto length=std::hypot(dx,dy);
+            // Match the native producer's projected-section test even when its
+            // exact-unit fast path would otherwise return before that test.
+            if (std::abs(start.at(2).get<double>()-end.at(2).get<double>())>default_geometry_tolerance_metres ||
+                !(length>default_geometry_tolerance_metres) ||
+                std::abs(up.at(0).get<double>()*dy-up.at(1).get<double>()*dx)>
+                    1e-10*length*std::max(1.0,std::abs(up.at(2).get<double>())))
+                invalid("Mixed structural resize requires a horizontal beam with a vertical section frame, including units");
+        }
+        auto candidate=stage_structural_plan_axis_resize_entity(entity,request.sx,request.sy,request.anchor_m,
+            request.frame_rotation_radians);
+        if (!exact(entity,candidate)) {
+            try {
+                const auto captured=capture_structural_object_edit(entity,candidate);
+                if (!captured) invalid("Mixed structural resize exact typed full capture is unavailable");
+                edits.push_back(*captured);
+            } catch (const std::invalid_argument& error) {
+                invalid(std::string("Mixed structural resize exact typed full capture cannot preserve the source: ")+error.what());
+            }
+        }
+        staged.at(request.object_id)=std::move(candidate);
+        hosts.push_back(request.object_id);
+    }
+    // Units enter complete actual-map context, phase and hosted admission before
+    // changed-owner classification. They never acquire allocation authority.
+    const auto inventory=inspect_structural_hosted_components(actual,hosts);
+    if (!inventory.ready()) invalid("Mixed structural resize complete source hosted inventory is blocked");
+    // The clone inventory is source inspection only here. It rejects unknown
+    // affected dimension codecs even on ordinary/unit roots; no IDs are created.
+    (void)inspect_embedded_assembly_dimension_clone_roster(actual,inventory.instance_ids);
+    const auto typed=replay_structural_object_edit_entities(actual,edits);
+    for (const auto& host:hosts) if (!exact(typed.at(host),staged.at(host)))
+        invalid("Mixed structural resize exact typed replay differs from the native candidate");
+    const auto replacement=phase_structural_edit_replacement_request(actual,edits);
+    if (replacement.has_value()!=allocation.has_value())
+        invalid("Mixed structural resize allocation must exactly match changed baseline seeds");
+    ComponentStructuralDirectionalResizeComposition result;
+    Entities physical;
+    PhaseStructuralReplacementIdentityMap dimension_ids;
+    if (replacement) {
+        const auto plan=inspect_phase_structural_replacement_plan(actual,replacement->seed_object_ids,
+            replacement->registry_id,replacement->alternative_id,true,true);
+        if (!plan.ready()) invalid("Mixed structural resize complete replacement inventory is blocked");
+        PhaseStructuralReplacementAuthoring leaf;
+        leaf.registry_id=replacement->registry_id;leaf.alternative_id=replacement->alternative_id;
+        leaf.seed_object_ids=replacement->seed_object_ids;leaf.edits=edits;
+        leaf.identities=allocation->identities;leaf.hosted_instance_identities=allocation->hosted_instance_identities;
+        leaf.dimension_identities=allocation->dimension_identities;
+        leaf.complete_hosted=true;leaf.complete_component_dimensions=true;
+        const auto canonical=encode_phase_structural_replacement_authoring(leaf);
+        if (canonical.at("version")!=5 || canonical.at("authoring").at("version")!=3)
+            invalid("Mixed structural resize requires internally captured leaf five with full body three");
+        physical=replay_phase_structural_replacement_authoring(actual,decode_phase_structural_replacement_authoring(canonical));
+        result.structural_original_to_proposed=leaf.identities;
+        result.structural_original_to_proposed.insert(leaf.dimension_identities.begin(),leaf.dimension_identities.end());
+        dimension_ids=leaf.dimension_identities;
+        std::set<std::string,std::less<>> fresh;
+        for (const auto& [original,proposed]:leaf.identities) { (void)original;fresh.insert(proposed); }
+        for (const auto& [binding,proposed]:leaf.hosted_instance_identities) {
+            fresh.insert(proposed);
+            const std::pair destination{leaf.identities.at(binding.first),proposed};
+            result.structural_hosted_bindings.emplace(binding,destination);
+            destinations.emplace(ComponentTarget{binding.first,binding.second,std::nullopt,{}},
+                ComponentTarget{destination.first,destination.second,std::nullopt,{}});
+        }
+        for (const auto& [original,proposed]:leaf.dimension_identities) { (void)original;fresh.insert(proposed); }
+        const auto original_aliases=embedded_assembly_presentation_ids(actual);
+        const auto final_aliases=embedded_assembly_presentation_ids(physical);
+        for (const auto& [binding,destination]:result.structural_hosted_bindings)
+            result.structural_original_to_proposed.emplace(original_aliases.at(binding),final_aliases.at(destination));
+        for (const auto& [binding,alias]:final_aliases)
+            if (!original_aliases.contains(binding)) fresh.insert(alias);
+        for (const auto& token:replayed.result().fresh_identity_ids)
+            if (fresh.contains(token)) invalid("Mixed structural resize collides with a component identity reservation");
+        for (const auto& revision:source.history()) validate_selection_edit_fresh_identity_tokens(revision.entities,fresh);
+        validate_retained_authoring_fresh_identities(source.history(),source.history().size(),fresh);
+        ConstraintAuthoringIntent semantic;semantic.message=std::string(message);
+        auto proof=make_phase_constraint_authoring_intent(source,semantic,nullptr,true);
+        proof.structural_replacement=canonical;
+        result.structural_phase_authorings.push_back(encode_phase_constraint_authoring_intent(proof));
+    } else physical=replay_structural_hosted_component_geometry(actual,edits);
+    std::vector<std::string> final_hosts;
+    for (const auto& request:requests) {
+        const auto mapped=result.structural_original_to_proposed.find(request.object_id);
+        const auto destination=mapped==result.structural_original_to_proposed.end() ? request.object_id : mapped->second;
+        result.structural_selected_original_to_proposed.emplace(request.object_id,destination);
+        result.structural_original_to_proposed.emplace(request.object_id,destination);
+        auto expected=staged.at(request.object_id);expected.id=destination;
+        if (!exact(expected,physical.at(destination))) invalid("Mixed structural resize lost the exact native owner");
+        final_hosts.push_back(destination);
+    }
+    for (const auto& binding:inventory.instance_ids) {
+        const ComponentTarget root{binding.first,binding.second,std::nullopt,{}};
+        destinations.emplace(root,root);
+        result.structural_hosted_bindings.emplace(binding,binding);
+    }
+    result.components=finalize_component_directional_resize(source,replayed,authoring,physical,destinations,dimension_ids);
+    const auto final_inventory=inspect_structural_hosted_components(result.components.entities,final_hosts);
+    if (!final_inventory.ready()) invalid("Mixed structural resize final native/hosted geometry is blocked");
+    for (const auto& host:final_hosts) {
+        if (!exact(result.components.entities.at(host),physical.at(host)))
+            invalid("Mixed structural resize final composition changed the native owner");
+        (void)stage_structural_plan_axis_resize_entity(result.components.entities.at(host),1,1,{0,0},0);
+    }
     return result;
 }
 

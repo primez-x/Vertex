@@ -366,7 +366,8 @@ public:
     // v261 retains deterministic area-default intents in active/archived inputs.
     // v262 retains closed component/slab directional resize composition.
     // v263 retains closed component/skylight directional resize composition.
-    static constexpr std::uint32_t format_version = 263;
+    // v264 retains closed component/structural directional resize composition.
+    static constexpr std::uint32_t format_version = 264;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     // Document semantics only: excludes the native-only v161 shared asset

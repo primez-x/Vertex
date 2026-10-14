@@ -1,5 +1,10 @@
 # Portable project extraction
 
+Exchange version262 requires native reader264 for closed Properties41
+component/structural directional resize composition. Extraction retains its exact
+source-bound operators, baseline allocations and retained history, including
+undone commands. Implementation qualification remains recorded separately.
+
 Exchange version261 requires native reader263 for closed Properties40
 component/skylight directional resize composition. Extraction retains the exact
 source-bound component and child operator requests and their history, including
