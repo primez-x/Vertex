@@ -457,6 +457,54 @@ void compensate_physical_footprint_anchor(const Entity& original, Entity& result
     if (original.type != "roof" || base[1] != y) base[1] = y;
 }
 
+Bounds2 shared_roof_footprint_target(const Entity& original, const Resize& resize) {
+    const double angle = plan_axis_resize_frame(original);
+    const double c = std::cos(angle), s = std::sin(angle);
+    const double relative = resize.angle-angle;
+    const double rc = std::cos(relative), rs = std::sin(relative);
+    const double xx = resize.x*rc*rc+resize.y*rs*rs;
+    const double yy = resize.x*rs*rs+resize.y*rc*rc;
+    const double xy = (resize.x-resize.y)*rc*rs;
+    // The legacy axis solver tolerates near-axis angles. Shared-frame proof
+    // cannot silently replace a real affine shear by that snapped operator.
+    // Admit only roundoff-sized off-diagonal terms, then check the true bounds.
+    if (std::abs(xy) > 64*std::numeric_limits<double>::epsilon()*
+            std::max({1.0,std::abs(resize.x),std::abs(resize.y)}))
+        throw std::invalid_argument("Shared roof resize axes introduce unsupported anisotropic shear");
+    const Vec2 local_anchor{c*resize.anchor.x+s*resize.anchor.y,
+        -s*resize.anchor.x+c*resize.anchor.y};
+    const auto before = plan_axis_resize_bounds(original);
+    Bounds2 target{{std::numeric_limits<double>::infinity(),std::numeric_limits<double>::infinity()},
+        {-std::numeric_limits<double>::infinity(),-std::numeric_limits<double>::infinity()}};
+    for (const double x : {before.minimum.x,before.maximum.x})
+        for (const double y : {before.minimum.y,before.maximum.y}) {
+            const double dx = x-local_anchor.x, dy = y-local_anchor.y;
+            const Vec2 point{local_anchor.x+xx*dx+xy*dy,local_anchor.y+xy*dx+yy*dy};
+            if (!std::isfinite(point.x) || !std::isfinite(point.y))
+                throw std::invalid_argument("Shared roof resize coordinates overflow");
+            target.minimum.x = std::min(target.minimum.x,point.x);
+            target.minimum.y = std::min(target.minimum.y,point.y);
+            target.maximum.x = std::max(target.maximum.x,point.x);
+            target.maximum.y = std::max(target.maximum.y,point.y);
+        }
+    return target;
+}
+
+void compensate_shared_roof_footprint_anchor(Entity& result, const Bounds2& target) {
+    const auto after = plan_axis_resize_bounds(result);
+    const double angle = plan_axis_resize_frame(result);
+    const double c = std::cos(angle), s = std::sin(angle);
+    const double dx = target.minimum.x-after.minimum.x;
+    const double dy = target.minimum.y-after.minimum.y;
+    auto& base = result.properties.at("base_position_m");
+    const double x = base[0].get<double>()+c*dx-s*dy;
+    const double y = base[1].get<double>()+s*dx+c*dy;
+    if (!std::isfinite(x) || !std::isfinite(y))
+        throw std::invalid_argument("Shared roof resize base coordinates overflow");
+    if (base[0] != x) base[0] = x;
+    if (base[1] != y) base[1] = y;
+}
+
 TopoDS_Shape entity_shape(const Entity& entity) {
     std::string error;
     if (entity.type == "wall") {
@@ -716,7 +764,10 @@ Entity stage_structural_plan_axis_resize_entity(
 
 Entity stage_roof_plan_axis_resize_entity(
     const Entity& actual_source, double scale_x, double scale_y, Vec2 anchor,
-    double frame_rotation_radians) {
+    double frame_rotation_radians, PlanAxisResizeAnchorMode anchor_mode) {
+    if (anchor_mode != PlanAxisResizeAnchorMode::physical_edge &&
+        anchor_mode != PlanAxisResizeAnchorMode::shared_frame)
+        throw std::invalid_argument("Plan roof resize anchor mode is unsupported");
     if (!std::isfinite(scale_x) || !std::isfinite(scale_y) || scale_x <= 0 || scale_y <= 0 ||
         !std::isfinite(anchor.x) || !std::isfinite(anchor.y) || !std::isfinite(frame_rotation_radians))
         throw std::invalid_argument("Plan resize factors must be positive and all frame coordinates finite");
@@ -726,13 +777,20 @@ Entity stage_roof_plan_axis_resize_entity(
         (properties.at("form") != "sloped_roof_panel" &&
          properties.at("form") != "gable_roof" && properties.at("form") != "hip_roof"))
         throw std::invalid_argument("Plan roof resize requires a supported parametric roof");
+    if (anchor_mode == PlanAxisResizeAnchorMode::shared_frame &&
+        (!properties.contains("version") || !properties.at("version").is_number_integer() ||
+         properties.at("version") != 1))
+        throw std::invalid_argument("Shared-frame plan roof resize requires schema one");
     if (scale_x == 1 && scale_y == 1) {
         (void)decode_building_entity(actual_source);
         return actual_source;
     }
     const Resize resize{scale_x,scale_y,anchor,frame_rotation_radians,true};
+    const bool shared = anchor_mode == PlanAxisResizeAnchorMode::shared_frame;
+    const auto target = shared ? shared_roof_footprint_target(actual_source,resize) : Bounds2{};
     auto result = resize_building(actual_source,resize);
-    compensate_physical_footprint_anchor(actual_source,result,resize);
+    if (shared) compensate_shared_roof_footprint_anchor(result,target);
+    else compensate_physical_footprint_anchor(actual_source,result,resize);
     const auto before=plan_axis_resize_bounds(actual_source);
     const auto after=plan_axis_resize_bounds(result);
     const auto [along,across]=resize.local_factors(plan_axis_resize_frame(actual_source));
@@ -751,6 +809,19 @@ Entity stage_roof_plan_axis_resize_entity(
     // overhang. Admit the final translated solid, not just the scalar inverse.
     check_extent(before.minimum.x,before.maximum.x,after.minimum.x,after.maximum.x,along);
     check_extent(before.minimum.y,before.maximum.y,after.minimum.y,after.maximum.y,across);
+    if (shared) {
+        const auto check_coordinate = [](double actual, double expected) {
+            const double roundoff = 64*std::numeric_limits<double>::epsilon()*
+                std::max({1.0,std::abs(actual),std::abs(expected)});
+            if (!std::isfinite(actual) || !std::isfinite(expected) ||
+                std::abs(actual-expected) > default_geometry_tolerance_metres+roundoff)
+                throw std::invalid_argument("Generated roof footprint does not follow the shared affine frame");
+        };
+        check_coordinate(after.minimum.x,target.minimum.x);
+        check_coordinate(after.maximum.x,target.maximum.x);
+        check_coordinate(after.minimum.y,target.minimum.y);
+        check_coordinate(after.maximum.y,target.maximum.y);
+    }
     return result;
 }
 

@@ -6687,6 +6687,7 @@ class MainWindow::Impl {
         QStringList slab_ids;
         QStringList structural_ids;
         QStringList stair_ids;
+        QStringList roof_ids;
         std::vector<CanvasRoofOpeningTarget> children;
         std::vector<CanvasRoofOpeningControls> controls;
         std::uint64_t controls_generation{};
@@ -27239,7 +27240,7 @@ public:
                     "Resize component dimensions");
             if (mixed_directional_intent->at("version")!=39 && mixed_directional_intent->at("version")!=40 &&
                 mixed_directional_intent->at("version")!=41 && mixed_directional_intent->at("version")!=42 &&
-                mixed_directional_intent->at("version")!=43)
+                mixed_directional_intent->at("version")!=43 && mixed_directional_intent->at("version")!=44)
                 throw std::invalid_argument("The mixed directional resize proposal changed.");
             auto value=*mixed_directional_intent;
             const auto component=prepare_phase_assembly_instance_property_edit(source,authoring);
@@ -27394,6 +27395,28 @@ public:
         }
         std::sort(stairs.begin(),stairs.end(),[](const auto& a,const auto& b){return a.stair_id<b.stair_id;});
         const auto prepared=prepare_component_stair_directional_resize(source,components,stairs,"Resize selected plan dimensions");
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision=source.revision();command.message=prepared.intent().at("message").get<std::string>();
+        command.mixed_selection_edit_completion=true;
+        command.mixed_selection_edit_intent=complete_mixed_selection_property_edit(source,prepared,{},{});
+        return command;
+    }
+
+    static Command componentRoofCohortAxisResizeCommand(const DocumentSnapshot& source,
+        const PhaseAssemblyInstancePropertyEditAuthoring& components,
+        const ComponentAxisResizeCohortCapture& cohort,Vec2 canvas_anchor,double sx,double sy,
+        const BuildingViewFrame* projection) {
+        if (sx==1.0 && sy==1.0) return ApplyEntityChanges{source.revision(),{}, {},"Resize selected plan dimensions"};
+        std::vector<RoofPlanResizeIntent> roofs;
+        for (const auto& id:cohort.roof_ids) {
+            const auto anchor=!cohort.site_frames.empty()
+                ? site_source_plan_point(canvas_anchor,cohort.site_frames.at(id))
+                : projection ? unproject_plan_point(canvas_anchor,*projection) : canvas_anchor;
+            roofs.push_back({id.toStdString(),sx,sy,anchor,componentCohortModelAxis(cohort,id,projection),
+                PlanAxisResizeAnchorMode::shared_frame});
+        }
+        std::sort(roofs.begin(),roofs.end(),[](const auto& left,const auto& right){return left.roof_id<right.roof_id;});
+        const auto prepared=prepare_component_roof_directional_resize(source,components,roofs,"Resize selected plan dimensions");
         ApplyBoundaryConstraintChanges command;
         command.expected_revision=source.revision();command.message=prepared.intent().at("message").get<std::string>();
         command.mixed_selection_edit_completion=true;
@@ -27659,7 +27682,7 @@ public:
         std::vector<AssemblyDirectionalResizeTarget> targets;
         targets.reserve(static_cast<std::size_t>(cohort.ids.size()));
         for (const auto& id:cohort.ids) {
-            if (cohort.slab_ids.contains(id) || cohort.structural_ids.contains(id) || cohort.stair_ids.contains(id)) continue;
+            if (cohort.slab_ids.contains(id) || cohort.structural_ids.contains(id) || cohort.stair_ids.contains(id) || cohort.roof_ids.contains(id)) continue;
             const auto anchor=!cohort.site_frames.empty()
                 ? site_source_plan_point(canvas_anchor,cohort.site_frames.at(id))
                 : projection ? unproject_plan_point(canvas_anchor,*projection) : canvas_anchor;
@@ -27673,6 +27696,7 @@ public:
         cohort.slab_ids.clear();
         cohort.structural_ids.clear();
         cohort.stair_ids.clear();
+        cohort.roof_ids.clear();
         bool component=false;
         for (const auto& id:cohort.ids) {
             const auto& entity=source.entities().at(id.toStdString());
@@ -27688,11 +27712,21 @@ public:
                 cohort.structural_ids.push_back(id);
             }
             else if (entity.type=="stair") cohort.stair_ids.push_back(id);
+            else if (entity.type=="roof") cohort.roof_ids.push_back(id);
             else if (entity.type=="assembly_instance" &&
                 !geometric_assembly_for_child(source,id.toStdString())) component=true;
             else throw std::invalid_argument("Side grips require independent components and supported plan objects.");
         }
         if (!component) throw std::invalid_argument("This resize cohort needs an independent component.");
+        if (!cohort.roof_ids.empty()) {
+            if (componentCohortPhysicalFamilyCount(cohort)!=0 || !cohort.stair_ids.empty())
+                throw std::invalid_argument("Select independent components and ordinary unjoined roofs for these side grips.");
+            std::vector<RoofPlanResizeIntent> roofs;
+            for (const auto& id:cohort.roof_ids)
+                roofs.push_back({id.toStdString(),1.0,1.0,{},0.0,PlanAxisResizeAnchorMode::shared_frame});
+            std::sort(roofs.begin(),roofs.end(),[](const auto& left,const auto& right){return left.roof_id<right.roof_id;});
+            require_roof_directional_resize_source_admission(source,roofs);
+        }
         if (!cohort.stair_ids.empty()) {
             if (componentCohortPhysicalFamilyCount(cohort)!=0)
                 throw std::invalid_argument("Select independent components and ordinary straight stairs for these side grips.");
@@ -27821,7 +27855,7 @@ public:
             compose_assembly_profile_affine(presentation,mapping));
     }
 
-    static Bounds2 componentCohortStructuralBounds(const Entity& entity,
+    static Bounds2 componentCohortNativeBounds(const Entity& entity,
         const ComponentAxisResizeCohortCapture& cohort,const QString& id,
         const BuildingViewFrame* projection) {
         const auto angle=plan_axis_resize_frame(entity);
@@ -27834,7 +27868,7 @@ public:
             if (!cohort.site_frames.empty()) point=site_presented_plan_point(point,cohort.site_frames.at(id));
             else if (projection) point=project_plan_point(point,*projection);
             if (!std::isfinite(point.x) || !std::isfinite(point.y))
-                throw std::invalid_argument("The structural resize frame exceeds the supported range.");
+                throw std::invalid_argument("The physical resize frame exceeds the supported range.");
             if (!result) result=Bounds2{point,point};
             else {
                 result->minimum.x=std::min(result->minimum.x,point.x);
@@ -27883,7 +27917,7 @@ public:
         std::map<std::string,const Entity*,std::less<>> catalogs;
         std::vector<std::pair<QString,AssemblyDocumentInstance>> roots;
         std::vector<std::pair<QString,const Entity*>> slabs;
-        std::vector<std::pair<QString,const Entity*>> structural;
+        std::vector<std::pair<QString,const Entity*>> native_owners;
         std::vector<std::pair<QString,const Entity*>> stairs;
         std::set<QString> unique;
         for (const auto& id:cohort.ids) {
@@ -27895,10 +27929,13 @@ public:
                 slabs.emplace_back(id,&entity);continue;
             }
             if (entity.id==target && (entity.type=="column" || entity.type=="beam") && cohort.structural_ids.contains(id)) {
-                structural.emplace_back(id,&entity);continue;
+                native_owners.emplace_back(id,&entity);continue;
             }
             if (entity.id==target && entity.type=="stair" && cohort.stair_ids.contains(id)) {
                 stairs.emplace_back(id,&entity);continue;
+            }
+            if (entity.id==target && entity.type=="roof" && cohort.roof_ids.contains(id)) {
+                native_owners.emplace_back(id,&entity);continue;
             }
             if (entity.id!=target || entity.type!="assembly_instance")
                 throw std::invalid_argument("The component resize frame lost an independent source root.");
@@ -27915,8 +27952,8 @@ public:
         for (const auto& [id,catalog]:catalogs)
             models.emplace(id,AssemblyModel::from_json(catalog->properties.at("model")));
         std::optional<Bounds2> canvas_bounds;
-        for (const auto& [id,entity]:structural) {
-            const auto bounds=componentCohortStructuralBounds(*entity,cohort,id,projection);
+        for (const auto& [id,entity]:native_owners) {
+            const auto bounds=componentCohortNativeBounds(*entity,cohort,id,projection);
             if (!canvas_bounds) canvas_bounds=bounds;
             else {
                 canvas_bounds->minimum.x=std::min(canvas_bounds->minimum.x,bounds.minimum.x);
@@ -29960,6 +29997,11 @@ public:
                     const auto host=child.at("roof_id").get<std::string>();
                     identities.emplace(host,host);
                 }
+            if (phase->mixed_selection_edit_intent.at("version")==44)
+                for (const auto& roof:phase->mixed_selection_edit_intent.at("roof_plan_resizes")) {
+                    const auto owner=roof.at("roof_id").get<std::string>();
+                    identities.emplace(owner,owner);
+                }
             return computeReplacementPhysicalGeometryProjection(source,candidate,
                 identities,
                 retained,eligible,labels,metric_units,appraisal_area_ids,label_footprints,component_bounds,
@@ -30660,6 +30702,10 @@ public:
                             if (component_release)
                                 command=componentAxisResizeCommand(*source,**component_authoring,
                                     component_release->mixed_directional_intent);
+                            else if (axis_cohort && !axis_cohort->roof_ids.empty())
+                                command=componentRoofCohortAxisResizeCommand(*source,**component_authoring,
+                                    *axis_cohort,axis_canvas_anchor,axis_scales->first,axis_scales->second,
+                                    view_context ? &view_context->frame : nullptr);
                             else if (axis_cohort && !axis_cohort->stair_ids.empty())
                                 command=componentStairCohortAxisResizeCommand(*source,**component_authoring,
                                     *axis_cohort,axis_canvas_anchor,axis_scales->first,axis_scales->second,
@@ -32720,7 +32766,9 @@ public:
                             command->mixed_selection_edit_intent.at("version")!=retained.at("version"))
                             throw std::invalid_argument("The reviewed mixed resize changed its captured proposal.");
                         const auto& reviewed=command->mixed_selection_edit_intent;
-                        const bool unchanged=retained.at("version")==43
+                        const bool unchanged=retained.at("version")==44
+                            ? reviewed.at("roof_plan_resizes")==retained.at("roof_plan_resizes")
+                            : retained.at("version")==43
                             ? reviewed.at("stair_axis_requests")==retained.at("stair_axis_requests")
                             : retained.at("version")==42
                             ? reviewed.at("slab_geometry")==retained.at("slab_geometry") &&
@@ -33592,12 +33640,13 @@ public:
         release->viewport.selected_presentations=canvas->selectedEntityPresentations();
         release->viewport.selected_labels=canvas->selectedLabelPresentations();
         release->authoring=*m_component_axis_authoring;
-        if (release->cohort && (!release->cohort->slab_ids.empty() || !release->cohort->structural_ids.empty() || !release->cohort->stair_ids.empty() || !release->cohort->children.empty())) {
+        if (release->cohort && (!release->cohort->slab_ids.empty() || !release->cohort->structural_ids.empty() || !release->cohort->stair_ids.empty() || !release->cohort->roof_ids.empty() || !release->cohort->children.empty())) {
             if (!m_entity_transform_command)
                 throw std::invalid_argument("The mixed resize proposal is incomplete.");
             const auto* command=std::get_if<ApplyBoundaryConstraintChanges>(&*m_entity_transform_command);
             if (!command || !command->mixed_selection_edit_completion ||
-                command->mixed_selection_edit_intent.at("version")!=(!release->cohort->stair_ids.empty() ? 43 :
+                command->mixed_selection_edit_intent.at("version")!=(!release->cohort->roof_ids.empty() ? 44 :
+                    !release->cohort->stair_ids.empty() ? 43 :
                     componentCohortPhysicalFamilyCount(*release->cohort)>=2 ? 42 :
                     !release->cohort->structural_ids.empty() ? 41 :
                     release->cohort->children.empty() ? 39 : 40))
@@ -54435,7 +54484,7 @@ private:
                     validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent")) :
                     validate_mixed_selection_edit_intent(encoded.at("mixed_selection_edit_intent"));
                 const auto dialect=intent.at("version").get<int>();
-                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=29) || dialect==32 || dialect==33 || dialect==34 || dialect==35 || dialect==36 || dialect==37 || dialect==38 || dialect==39 || dialect==40 || dialect==41 || dialect==42 || dialect==43)) {
+                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=29) || dialect==32 || dialect==33 || dialect==34 || dialect==35 || dialect==36 || dialect==37 || dialect==38 || dialect==39 || dialect==40 || dialect==41 || dialect==42 || dialect==43 || dialect==44)) {
                     // Properties dialects have no transform roof_authoring.
                     // Active-baseline redirects require independently replayed
                     // source authority rather than extracting supplied maps.
@@ -64136,7 +64185,9 @@ private:
                     mixed_edit=true;
                     const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);
                     const auto properties_dialect=intent.at("version").get<int>();
-                    if (properties_dialect==39 || properties_dialect==40 || properties_dialect==41 || properties_dialect==42 || properties_dialect==43) {
+                    if (properties_dialect==39 || properties_dialect==40 || properties_dialect==41 || properties_dialect==42 || properties_dialect==43 || properties_dialect==44) {
+                        if (properties_dialect==44) for (const auto& row:intent.at("roof_plan_resizes"))
+                            targets.insert(row.at("roof_id").template get<std::string>());
                         if (properties_dialect==43) for (const auto& row:intent.at("stair_axis_requests"))
                             targets.insert(row.at("stair_id").template get<std::string>());
                         if (properties_dialect==39 || properties_dialect==42) for (const auto& row:intent.at("slab_geometry"))
@@ -64208,7 +64259,7 @@ private:
                     // Qualified children never promote their compatibility host
                     // IDs into ordinary presented-object selection authority.
                     const json no_roof_selection=nullptr;
-                    const auto& roof_selection=(properties_dialect==39 || properties_dialect==40 || properties_dialect==41 || properties_dialect==42 || properties_dialect==43) ? no_roof_selection :
+                    const auto& roof_selection=(properties_dialect==39 || properties_dialect==40 || properties_dialect==41 || properties_dialect==42 || properties_dialect==43 || properties_dialect==44) ? no_roof_selection :
                         (intent.at("version")==16 || intent.at("version")==17 || intent.at("version")==22 || intent.at("version")==23 || intent.at("version")==25 || intent.at("version")==26 || intent.at("version")==28 || intent.at("version")==29 || intent.at("version")==32 || intent.at("version")==33 || intent.at("version")==34 || intent.at("version")==35 || intent.at("version")==36 || intent.at("version")==37 || intent.at("version")==38)
                         ? intent.at("base_intent") : intent;
                     if (!roof_selection.is_null()) for (const auto& child:roof_selection.at("roof_opening_members"))

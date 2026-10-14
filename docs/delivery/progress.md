@@ -12,6 +12,67 @@ constitute user acceptance.
 
 ## Current delivery state
 
+### October 14 component and whole-roof resizing qualified
+
+The component/stair checkpoint is committed and pushed as `d37ccd11`; exact
+remote main was checked. Bounded source discovery identified the existing exact
+RoofPlanResizeIntent capture/replay bridge for whole-roof composition. A genuine
+schema1 flat panel at `(1,0,4)`, run/span2, thickness0.25 and an independent2x1
+component has hand native volumes1/3 and union plan bounds `[1,7] x [0,2]`.
+The actual native fixture compiles, admits typed corners, bounds, volumes, ink
+and complete source preservation, then reaches MissingFrame in both orders
+(`artifacts/codex-component-roof-20261014/native-red.log`). This flat panel does
+not qualify nonzero-slope native behavior.
+
+The [contract](../design/vertex-component-roof-resize.md) and
+[plan](../superpowers/plans/2026-10-14-component-roof-resize.md) define closed
+Properties44/reader267/extraction265. Initial core/controller integration built,
+but actual anchored core and native-left regressions failed: the legacy v1 roof
+operation pins the individual roof edge instead of the shared cohort anchor
+(`anchor-core-red.log`, expected1.32 observed0.8; `anchor-native-red.log`). The
+hand oracle remains unchanged. A separately reproduced dependency admission gap
+now passes its focused regression (`dependency-red.log`, `dependency-qualified.log`).
+Independent approach review required a closed shared-frame RoofPlanResizeIntent
+v2 with archive4, monotonic archive upgrades, affine endpoint verification,
+key-specific Document validation and canonical archive-only reader267 admission.
+Those changes now pass the dedicated proof test, including nonzero-slope
+panel/gable/hip extents, rotated/georeferenced frames, unchanged axes, exact v1
+behavior, unit preservation, archive capability/tampering, monotonic schema
+upgrades and historical clone identities (`shared-frame-core-first.log`).
+The complete cohort core test passes in24.33 seconds (`core-fifth.log`), including
+archive-only import/clone/Undo, extraction265/reader267, byte-preserving reader266
+refusal, malformed Document rejection and exact future-proof read-only controls.
+Its hand-box oracle accounts for the native library's documented numerical
+tolerance and roundoff; the exact expected coordinates remain unchanged.
+The unsupported-dimension fixture now uses the actual dimension codec. Clone
+coverage explicitly refuses opaque live references before qualifying an eligible
+archive-only source. No production admission was relaxed for these fixture fixes.
+
+All sixteen native lifecycle cases across axes/orders/anchors/Plan/Site, four
+reviews, five stale-preview guards and49 fresh Opens pass in152.68 seconds
+(`native-first.log`). Root inspected the opposite-side Plan preview and rotated
+Site commit. The full Release build passes. The standard run finished in917.60
+seconds with334 of335 active checks passing; the existing combined-physical
+desktop fixture hit its360-second deadline near its final stale-preview cases.
+Its explicit deadline is now480 seconds, with generated metadata checked against
+the preserved90-second measured-dimension and60-second ordinary deadlines.
+The targeted rerun passes in235.87 seconds (`physical-lifecycle-rerun.log`). All
+335 standard checks therefore have passing results; the initial timeout remains
+recorded. Production acceptance stays disabled. Six protected checks pass with
+exit0, confirmed termination, no timeout/capture failure and a host outside the
+job (`protected-imports.log`, result directory
+`artifacts/import-worker-independent/release-663a9c9b1524477aa10f30e2d6dec7bd`).
+Eight smoke cases pass; current images/performance evidence and executable hashes
+are verified in this wave's `desktop-smoke/`. Root inspected Measure100% and
+Design200%. Performance sampling remains incomplete, and the legacy seeded sketch
+still withholds GLA; this smoke does not qualify new-wall-room GLA. Source-kit
+inventory is2084. Consumed inputs stayed frozen during root jobs. Joins, openings,
+hosted roots, phases and levels remain outside this first lane. Installed
+candidate and production acceptance are unchanged; no Apex compatibility is
+claimed. Discovery suggested adding typed skylight children, but its initial
+same-host recommendation conflicts with this lane's schema1 exclusions and
+requires source-bound reconciliation before implementation.
+
 ### October 14 component and straight-stair resizing
 
 The combined physical checkpoint is committed and pushed as `a5e90637`; exact

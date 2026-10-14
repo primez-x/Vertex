@@ -6,6 +6,8 @@
 
 namespace sketch {
 
+enum class PlanAxisResizeAnchorMode { physical_edge, shared_frame };
+
 // Natural plan axes for physical dimensions: baseline/run/ridge direction is
 // X, its left-hand normal is Y. Rooms/slabs follow their first boundary edge.
 // Reads semantic orientation fields without rebuilding a solid. Throws on
@@ -38,14 +40,17 @@ namespace sketch {
 // Stage an actual sloped-panel, gable or hip roof's native plan footprint
 // resize without Document/transaction admission. Retains source receipts and
 // opaque metadata for the caller's mathematical derivation archive; creates
-// no quantity receipts. Uses the supplied factors/frame and opposite-edge
+// no quantity receipts. Uses the supplied factors/frame and selected
 // anchor, retaining Z, rise, overhang, thickness, context and material. Source
 // and result native geometry are admitted; exact unit factors return source.
 // Sloped panels retain the source run's continuous footprint branch; a fold
 // ambiguity or an unreachable width on that branch refuses without a jump.
+// Shared-frame mode requires schema 1 and follows the supplied affine anchor
+// on every axis. Physical-edge mode retains the historical edge/centre rule.
 [[nodiscard]] Entity stage_roof_plan_axis_resize_entity(
     const Entity& actual_source, double scale_x, double scale_y, Vec2 anchor,
-    double frame_rotation_radians);
+    double frame_rotation_radians,
+    PlanAxisResizeAnchorMode anchor_mode = PlanAxisResizeAnchorMode::physical_edge);
 
 struct RoofPlanCornerResizeParameters {
     double scale_x{1.0}, scale_y{1.0};

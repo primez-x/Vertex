@@ -1,6 +1,6 @@
 #pragma once
 
-#include "sketch/document.hpp"
+#include "sketch/plan_axis_resize.hpp"
 
 #include <string_view>
 
@@ -12,6 +12,7 @@ struct RoofPlanResizeIntent {
     double scale_y{1.0};
     Vec2 anchor;
     double frame_rotation_radians{};
+    PlanAxisResizeAnchorMode anchor_mode{PlanAxisResizeAnchorMode::physical_edge};
 };
 
 inline constexpr std::string_view roof_plan_resize_derivations_key =
@@ -21,11 +22,13 @@ inline constexpr std::string_view roof_plan_resize_derivations_key =
 // frame_rotation_radians. The two factors are positive finite scalars;
 // anchor_m contains two finite world XY metre coordinates. No candidate,
 // entered final dimension, Quantity or snapshot supplies resize authority.
+// Closed v2 adds exactly anchor_mode:"shared_frame" for schema-1 roofs.
 [[nodiscard]] nlohmann::json encode_roof_plan_resize_intent(const RoofPlanResizeIntent& intent);
 [[nodiscard]] RoofPlanResizeIntent decode_roof_plan_resize_intent(const nlohmann::json& value);
 
 // The owned archive is closed {version,operations}: v1 admits roof schemas
 // 1/2, v2 adds schema 3 skylight profiles, and v3 adds schema 4 surface angles.
+// V4 retains every historical v1 record and adds schema-1-only shared v2 records.
 // Older archive versions keep their original closed frame fences. Each operation has
 // exactly operation, source, result and receipts. Physical source/result
 // frames are closed canonical roof properties with closed opening rows;

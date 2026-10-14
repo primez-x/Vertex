@@ -3,6 +3,7 @@
 #include "sketch/constraint_authoring.hpp"
 #include "sketch/assembly_instance_property_edit.hpp"
 #include "sketch/roof_opening_group_edit.hpp"
+#include "sketch/phase_roof_resize.hpp"
 
 #include <vector>
 #include <set>
@@ -382,6 +383,21 @@ struct ComponentStairDirectionalResizeComposition {
     CoordinatedComponentPropertyComposition components;
     std::map<std::string,std::string,std::less<>> stair_selected_original_to_proposed;
 };
+struct ComponentRoofDirectionalResizeComposition {
+    CoordinatedComponentPropertyComposition components;
+    std::map<std::string,std::string,std::less<>> roof_selected_original_to_proposed;
+};
+// Complete resource and relationship inventories precede native source/archive
+// validation, including units. Both gates require explicit shared-frame roof
+// operators; the source-only gate needs no component placeholder.
+void require_roof_directional_resize_source_admission(
+    const DocumentSnapshot&, std::span<const RoofPlanResizeIntent>);
+void preflight_component_roof_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
+    std::span<const RoofPlanResizeIntent>);
+[[nodiscard]] ComponentRoofDirectionalResizeComposition compose_component_roof_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditPreparation&,
+    std::span<const RoofPlanResizeIntent>, std::string_view);
 // Pure analytical preflight, including units. Charged before component/native
 // manufacture; no supplied candidate or completed command becomes authority.
 void require_stair_directional_resize_source_admission(

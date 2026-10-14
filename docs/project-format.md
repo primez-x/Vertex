@@ -1,4 +1,14 @@
-# Vertex project formats v1 through v266
+# Vertex project formats v1 through v267
+
+Reader267/native extraction265 retains closed Properties44 component/whole-roof
+directional resizing under command52. Ordinary unjoined schema1 roof operators
+replay against the complete original map and retain exact roof resize proof.
+The new shared-frame operator is RoofPlanResizeIntent v2 and uses owned archive4.
+Canonical archive4 alone also requires267, including retained history after
+Undo. V1 operations and archives1..3 retain their historical nearest-edge meaning.
+Canonical applied and undone history preserves the floor; opaque metadata and
+historical dialects keep their existing meaning. Qualification is recorded
+separately from this format contract.
 
 Reader266/native extraction264 retains closed Properties43 component/straight-
 stair directional resizing under command52. The stair lane derives ordinary v1

@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version265 requires native reader267 for closed Properties44 component
+and ordinary whole-roof directional resizing. It retains exact original-source
+roof operators and component requests in canonical history, including undone
+commands. Canonical roof-plan archive4 also requires265/267 without a mixed
+command; opaque lookalikes retain their previous floor. Runtime qualification is
+recorded separately.
+
 Exchange version264 requires native reader266 for closed Properties43 component
 and ordinary straight-stair directional resizing. It retains exact original-
 source operators and history, including undone commands. Runtime qualification

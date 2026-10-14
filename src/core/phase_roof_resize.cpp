@@ -77,6 +77,9 @@ Vec2 anchor(const Json& value) {
     return {scalar(value.at(0)), scalar(value.at(1))};
 }
 void admit_intent(const RoofPlanResizeIntent& value) {
+    if (value.anchor_mode != PlanAxisResizeAnchorMode::physical_edge &&
+        value.anchor_mode != PlanAxisResizeAnchorMode::shared_frame)
+        invalid("Roof plan resize anchor mode is unsupported");
     (void)identity(value.roof_id);
     if (!(scalar(value.scale_x) > 0.0) || !(scalar(value.scale_y) > 0.0))
         invalid("Roof plan resize factors must be positive");
@@ -196,9 +199,12 @@ void admit_frame(const Json& value, const std::string& id, bool skylights = true
 }
 Json derive(const Json& before, const RoofPlanResizeIntent& intent, bool skylights = true, bool rotations = true) {
     admit_intent(intent);
+    if (intent.anchor_mode == PlanAxisResizeAnchorMode::shared_frame &&
+        (!before.is_object() || !before.contains("version") || !version_one(before.at("version"))))
+        invalid("Shared-frame roof plan resize proof requires schema one");
     admit_frame(before, intent.roof_id, skylights, rotations);
     const auto result = frame(stage_roof_plan_axis_resize_entity(physical_entity(before, intent.roof_id),
-        intent.scale_x, intent.scale_y, intent.anchor, intent.frame_rotation_radians));
+        intent.scale_x, intent.scale_y, intent.anchor, intent.frame_rotation_radians, intent.anchor_mode));
     admit_frame(result, intent.roof_id, skylights, rotations);
     return result;
 }
@@ -310,11 +316,16 @@ Json archive_receipts(const Entity& source, Entity& result, const Json& before, 
         }
     return {{"quantity_entries", std::move(indexed)}, {"roof_opening_input", std::move(children)}};
 }
-void admit_record(const Json& record, bool skylights, bool rotations) {
+void admit_record(const Json& record, int archive_version) {
     keys(record, {"operation", "source", "result", "receipts"});
     const auto intent = decode_roof_plan_resize_intent(record.at("operation"));
+    if (intent.anchor_mode == PlanAxisResizeAnchorMode::shared_frame && archive_version < 4)
+        invalid("Historical roof plan resize archive cannot contain shared-frame operations");
     const auto& before = record.at("source"), after = record.at("result");
-    if (!exact(derive(before, intent, skylights, rotations), after) || exact(before, after))
+    if (intent.anchor_mode == PlanAxisResizeAnchorMode::shared_frame &&
+        (!after.is_object() || !after.contains("version") || !version_one(after.at("version"))))
+        invalid("Shared-frame roof plan resize result proof requires schema one");
+    if (!exact(derive(before, intent, archive_version >= 2, archive_version >= 3), after) || exact(before, after))
         invalid("Roof plan resize derivation does not reproduce its result");
     const auto affected = changes(before, after);
     const auto& receipts = record.at("receipts");
@@ -408,15 +419,25 @@ nlohmann::json encode_roof_plan_resize_intent(const RoofPlanResizeIntent& intent
     Json result{{"version", 1}, {"roof_id", intent.roof_id}, {"scale_x", intent.scale_x},
         {"scale_y", intent.scale_y}, {"anchor_m", {intent.anchor.x, intent.anchor.y}},
         {"frame_rotation_radians", intent.frame_rotation_radians}};
+    if (intent.anchor_mode == PlanAxisResizeAnchorMode::shared_frame) {
+        result["version"] = 2;
+        result["anchor_mode"] = "shared_frame";
+    }
     (void)budget(result);
     return result;
 }
 RoofPlanResizeIntent decode_roof_plan_resize_intent(const nlohmann::json& value) {
     (void)budget(value);
-    keys(value, {"version", "roof_id", "scale_x", "scale_y", "anchor_m", "frame_rotation_radians"});
-    if (!version_one(value.at("version"))) invalid("Roof plan resize version is unsupported");
+    const auto version = field(value, "version");
+    if (!version || (!version_one(*version) && !version_two(*version)))
+        invalid("Roof plan resize version is unsupported");
+    if (version_two(*version)) {
+        keys(value, {"version", "roof_id", "scale_x", "scale_y", "anchor_m", "frame_rotation_radians", "anchor_mode"});
+        if (value.at("anchor_mode") != "shared_frame") invalid("Roof plan resize anchor mode is unsupported");
+    } else keys(value, {"version", "roof_id", "scale_x", "scale_y", "anchor_m", "frame_rotation_radians"});
     RoofPlanResizeIntent result{identity(value.at("roof_id")), scalar(value.at("scale_x")),
         scalar(value.at("scale_y")), anchor(value.at("anchor_m")), scalar(value.at("frame_rotation_radians"))};
+    if (version_two(*version)) result.anchor_mode = PlanAxisResizeAnchorMode::shared_frame;
     admit_intent(result);
     return result;
 }
@@ -426,15 +447,16 @@ void validate_roof_plan_resize_derivations(const Entity& source) {
     if (!extension) return;
     (void)budget(*extension);
     keys(*extension, {"version", "operations"});
-    const bool rotations = extension->at("version").is_number_integer() && extension->at("version") == 3;
-    const bool skylights = version_two(extension->at("version")) || rotations;
-    if (!version_one(extension->at("version")) && !skylights)
+    const auto& version = extension->at("version");
+    if ((!version.is_number_integer() && !version.is_number_unsigned()) ||
+        (version != 1 && version != 2 && version != 3 && version != 4))
         invalid("Roof plan resize derivation namespace collision");
+    const int archive_version = version.get<int>();
     const auto& operations = extension->at("operations");
     if (!operations.is_array() || operations.empty() || operations.size() > operation_limit)
         invalid("Roof plan resize derivation operation budget exceeded");
-    validate_roof_derivation_cached(rotations ? "roof-plan-resize-v3" : skylights ? "roof-plan-resize-v2" : "roof-plan-resize-v1", extension->dump(), [&] {
-        for (const auto& record : operations) admit_record(record, skylights, rotations);
+    validate_roof_derivation_cached("roof-plan-resize-v" + std::to_string(archive_version), extension->dump(), [&] {
+        for (const auto& record : operations) admit_record(record, archive_version);
     });
 }
 nlohmann::json roof_plan_resize_opaque_remainder(const Entity& source) {
@@ -474,7 +496,7 @@ Entity stage_roof_plan_resize_entity(const Entity& source, const RoofPlanResizeI
     validate_roof_plan_resize_source_entity(source);
     const auto before = frame(source);
     auto result = stage_roof_plan_axis_resize_entity(source, intent.scale_x, intent.scale_y,
-        intent.anchor, intent.frame_rotation_radians);
+        intent.anchor, intent.frame_rotation_radians, intent.anchor_mode);
     const auto after = frame(result);
     // Admit and compare historical frame replay independently of opaque source
     // data, then constrain the geometry stage to its declared scalar ownership.
@@ -495,11 +517,12 @@ Entity stage_roof_plan_resize_entity(const Entity& source, const RoofPlanResizeI
     if (exact(before, after)) return source;
     const auto receipts = archive_receipts(source, result, before, changes(before, after));
     const auto key = std::string(roof_plan_resize_derivations_key);
+    const int required_version = intent.anchor_mode == PlanAxisResizeAnchorMode::shared_frame ? 4
+        : before.at("version") == 4 ? 3 : before.at("version") == 3 ? 2 : 1;
     if (!result.extensions.contains(key))
-        result.extensions[key] = {{"version", before.at("version") == 4 ? 3 : before.at("version") == 3 ? 2 : 1}, {"operations", Json::array()}};
-    else if (before.at("version") == 4) result.extensions.at(key).at("version") = 3;
-    else if (before.at("version") == 3 && result.extensions.at(key).at("version") == 1)
-        result.extensions.at(key).at("version") = 2;
+        result.extensions[key] = {{"version", required_version}, {"operations", Json::array()}};
+    else result.extensions.at(key).at("version") =
+        std::max(required_version, result.extensions.at(key).at("version").get<int>());
     auto& operations = result.extensions.at(key).at("operations");
     if (operations.size() == operation_limit) invalid("Roof plan resize derivation operation budget exceeded");
     operations.push_back({{"operation", operation}, {"source", before}, {"result", after}, {"receipts", receipts}});

@@ -338,6 +338,8 @@ void coordinate_hosted_catalogs(const Entities& source, Entities& result,
 } // namespace
 
 nlohmann::json encode_roof_edit_intent(const RoofEditIntent& intent) {
+    if (intent.resize && intent.resize->anchor_mode != PlanAxisResizeAnchorMode::physical_edge)
+        invalid("Historical roof edit proofs cannot author shared-frame plan resize");
     if (!identity(intent.roof_id) || (!intent.profile && !intent.openings && !intent.pose && !intent.form && !intent.transform && !intent.resize && !intent.uniform_transform))
         invalid("Roof edit requires a valid owner and a typed component");
     if (intent.form && intent.profile) invalid("Roof conversion cannot also author a profile component");
@@ -464,6 +466,8 @@ RoofEditIntent decode_roof_edit_intent(const nlohmann::json& value) {
     result.coordinate_world_hosted_geometry = coordinated;
     if (uniform_transform) result.uniform_transform = decode_roof_uniform_transform_intent(value.at("uniform_transform"));
     if (plan_resize) result.resize = decode_roof_plan_resize_intent(value.at("resize"));
+    if (result.resize && result.resize->anchor_mode != PlanAxisResizeAnchorMode::physical_edge)
+        invalid("Historical roof edit proofs cannot author shared-frame plan resize");
     if (rigid_transform) result.transform = decode_roof_rigid_transform_intent(value.at("transform"));
     if (conversion) result.form = decode_roof_form_edit_intent(value.at("form"));
     if (!value.at("profile").is_null()) result.profile = decode_roof_profile_edit_intent(value.at("profile"));

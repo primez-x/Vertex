@@ -10,6 +10,7 @@
 #include "sketch/phase_assembly_instance_property_edit.hpp"
 #include "sketch/phase_slab_replacement.hpp"
 #include "sketch/phase_structural_replacement.hpp"
+#include "sketch/phase_roof_resize.hpp"
 
 #include <optional>
 #include <span>
@@ -172,6 +173,14 @@ private:
 [[nodiscard]] MixedSelectionPropertyEditPreparation prepare_component_stair_directional_resize(
     const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
     std::span<const StairDirectionalResizeRequest>, std::string_view);
+
+// Closed Properties44/command52: independent component geometry request7/8/9
+// and nonempty ordinary unjoined schema1 whole-roof v2 shared-frame operators.
+// Units require the same explicit mode and original-source admission; native
+// roof replay retains exact archives and adds owned archive4 only for changes.
+[[nodiscard]] MixedSelectionPropertyEditPreparation prepare_component_roof_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
+    std::span<const RoofPlanResizeIntent>, std::string_view);
 
 // Closed dialect 39: the five original source fences, version,
 // component_request (7/8/9), component_identity_reservations, slab_geometry,
