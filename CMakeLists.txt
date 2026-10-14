@@ -1009,6 +1009,12 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
       target_compile_options(mixed_component_structural_resize_tests PRIVATE /W4 /permissive- /utf-8)
     endif()
     add_test(NAME mixed_component_structural_resize COMMAND mixed_component_structural_resize_tests)
+    add_executable(mixed_component_physical_resize_tests tests/mixed_component_physical_resize_tests.cpp)
+    target_link_libraries(mixed_component_physical_resize_tests PRIVATE sketch_constraint_authoring sketch_storage sketch_exchange sketch_sqlite)
+    if(MSVC)
+      target_compile_options(mixed_component_physical_resize_tests PRIVATE /W4 /permissive- /utf-8)
+    endif()
+    add_test(NAME mixed_component_physical_resize COMMAND mixed_component_physical_resize_tests)
     add_executable(exterior_segment_resize_inverse_tests tests/exterior_segment_resize_inverse_tests.cpp)
     target_link_libraries(exterior_segment_resize_inverse_tests PRIVATE sketch_document_wall)
     add_test(NAME exterior_segment_resize_inverse COMMAND exterior_segment_resize_inverse_tests)
@@ -1492,6 +1498,18 @@ if(SKETCH_BUILD_DESKTOP)
     endif()
     add_test(NAME mixed_component_structural_resize_desktop COMMAND mixed_component_structural_resize_desktop_tests)
     set_tests_properties(mixed_component_structural_resize_desktop PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+    add_executable(mixed_component_physical_resize_desktop_tests tests/mixed_component_physical_resize_desktop_tests.cpp)
+    target_link_libraries(mixed_component_physical_resize_desktop_tests PRIVATE sketch_desktop)
+    qt_add_resources(mixed_component_physical_resize_desktop_tests mixed_component_physical_test_fonts PREFIX "/fonts" BASE assets/fonts
+      FILES assets/fonts/Inter.ttf)
+    if(MSVC)
+      target_compile_options(mixed_component_physical_resize_desktop_tests PRIVATE /W4 /permissive- /utf-8)
+    endif()
+    add_test(NAME mixed_component_physical_resize_desktop COMMAND mixed_component_physical_resize_desktop_tests)
+    set_tests_properties(mixed_component_physical_resize_desktop PROPERTIES
+      TIMEOUT 120
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     add_executable(mixed_axis_resize_canvas_tests tests/mixed_axis_resize_canvas_tests.cpp)
@@ -2742,6 +2760,10 @@ if(BUILD_TESTING)
     set_tests_properties(mixed_family_resize_desktop PROPERTIES TIMEOUT 120)
     set_tests_properties(mixed_component_skylight_resize_desktop PROPERTIES TIMEOUT 120)
     set_tests_properties(mixed_component_structural_resize_desktop PROPERTIES TIMEOUT 120)
+    # Combined qualification includes 36 independent core replay combinations,
+    # and eight native gestures with applied/undone/redone editable Open.
+    set_tests_properties(mixed_component_physical_resize PROPERTIES TIMEOUT 240)
+    set_tests_properties(mixed_component_physical_resize_desktop PROPERTIES TIMEOUT 360)
     # This full native suite includes 64 appraisal transform combinations,
     # wall/source repair dialogs, copy and output. Observed Release execution
     # takes about 174 seconds; the ordinary focused-test guard truncates it.

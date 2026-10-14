@@ -1,4 +1,12 @@
-# Vertex project formats v1 through v264
+# Vertex project formats v1 through v265
+
+Reader265/native extraction263 retains closed Properties42 combined component
+and physical directional resizing under command52. A nonempty independent
+component lane and at least two slab, structural and skylight lanes derive from
+the same original snapshot. Physical contributions retain family-local catalog
+allocations and qualified root destinations, then share one dimension finalizer
+with the component lane. Canonical retained proof slots preserve the floor after
+Undo. Older dialects and opaque metadata retain their existing meanings.
 
 Reader264/native extraction262 retains closed Properties41 component/structural
 directional resize composition under command52. Exact scalar operators derive

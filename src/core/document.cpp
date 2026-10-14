@@ -3358,16 +3358,16 @@ static bool mixed_properties_dialect(const nlohmann::json& intent) {
     const auto version=intent.at("version").get<int>();
     // Transform30 remains outside Properties: its actual roof phase38 is
     // traversed by the same source, registry and lifetime proof walks as20.
-    return (version>=5 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=29) || version==32 || version==33 || version==34 || version==35 || version==36 || version==37 || version==38 || version==39 || version==40 || version==41;
+    return (version>=5 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=29) || version==32 || version==33 || version==34 || version==35 || version==36 || version==37 || version==38 || version==39 || version==40 || version==41 || version==42;
 }
 static bool mixed_phase_properties_dialect(const nlohmann::json& intent) {
     const auto version=intent.at("version").get<int>();
-    return (version>=11 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=29) || version==32 || version==33 || version==34 || version==35 || version==36 || version==37 || version==38 || version==39 || version==40 || version==41;
+    return (version>=11 && version<=13) || (version>=15 && version<=17) || (version>=21 && version<=29) || version==32 || version==33 || version==34 || version==35 || version==36 || version==37 || version==38 || version==39 || version==40 || version==41 || version==42;
 }
 static bool mixed_component_properties_dialect(const nlohmann::json& intent) {
     const auto version=intent.at("version").get<int>();
     return version==16 || version==17 || version==22 || version==23 || version==25 || version==26 ||
-        version==28 || version==29 || version==32 || version==33 || version==34 || version==35 || version==36 || version==37 || version==38 || version==39 || version==40 || version==41;
+        version==28 || version==29 || version==32 || version==33 || version==34 || version==35 || version==36 || version==37 || version==38 || version==39 || version==40 || version==41 || version==42;
 }
 
 static std::vector<nlohmann::json> phase_constraint_authoring_proofs(const ApplyBoundaryConstraintChanges& command) {
@@ -3901,7 +3901,7 @@ static const nlohmann::json* mixed_properties_phase_request(const nlohmann::json
     // Callers own closed intent validation. Component Properties' replayed
     // noncomponent base retains its exact scalar/phase authority; ordinary
     // bases have no phase request. Never borrow the component lane as a host.
-    if (mixed.at("version")==39 || mixed.at("version")==40 || mixed.at("version")==41) return nullptr;
+    if (mixed.at("version")==39 || mixed.at("version")==40 || mixed.at("version")==41 || mixed.at("version")==42) return nullptr;
     const auto& lane=mixed_component_properties_dialect(mixed) ? mixed.at("base_intent") : mixed;
     if (lane.is_null()) return nullptr;
     const auto found=lane.find("phase_request");
@@ -3912,15 +3912,19 @@ static std::vector<std::string> mixed_component_directional_identity_tokens(cons
     // Callers have validated the closed dialect. These slots reserve identity
     // lifetime only; geometry and replacement roles still require source replay.
     std::vector<std::string> result;
-    if (mixed.at("version")!=39 && mixed.at("version")!=41) return result;
-    const auto& allocation=mixed.at(mixed.at("version")==39 ? "slab_allocation" : "structural_allocation");
-    if (allocation.is_null()) return result;
-    for (const auto* field:{"identities","dimension_identities"})
-        for (const auto& [original,proposed]:allocation.at(field).items()) {
-            (void)original;result.push_back(proposed.get<std::string>());
-        }
-    for (const auto& row:allocation.at("hosted_instance_identities"))
-        result.push_back(row.at("proposed_instance_id").get<std::string>());
+    const auto version=mixed.at("version").get<int>();
+    for (const auto* family:{"slab_allocation","structural_allocation"}) {
+        if (!((version==39 && std::string_view(family)=="slab_allocation") ||
+              (version==41 && std::string_view(family)=="structural_allocation") || version==42)) continue;
+        const auto& allocation=mixed.at(family);
+        if (allocation.is_null()) continue;
+        for (const auto* field:{"identities","dimension_identities"})
+            for (const auto& [original,proposed]:allocation.at(field).items()) {
+                (void)original;result.push_back(proposed.get<std::string>());
+            }
+        for (const auto& row:allocation.at("hosted_instance_identities"))
+            result.push_back(row.at("proposed_instance_id").get<std::string>());
+    }
     return result;
 }
 
@@ -6193,13 +6197,13 @@ static void validate_mixed_properties_replacement_lifetime(const nlohmann::json&
                 "complete_structural_component_dimensions"})
             if (fresh.contains(token))
                 throw std::invalid_argument("A Properties destination borrows its family dimension proof field: "+std::string(token));
-    if (mixed.at("version")==32 || mixed.at("version")==34 || mixed.at("version")==35 || mixed.at("version")==36 || mixed.at("version")==37 || mixed.at("version")==38 || mixed.at("version")==39 || mixed.at("version")==40 || mixed.at("version")==41)
+    if (mixed.at("version")==32 || mixed.at("version")==34 || mixed.at("version")==35 || mixed.at("version")==36 || mixed.at("version")==37 || mixed.at("version")==38 || mixed.at("version")==39 || mixed.at("version")==40 || mixed.at("version")==41 || mixed.at("version")==42)
         for (const auto* token:{"complete_instance_profile_geometry","profile_geometry","profile_overrides","dimension_identities"})
             if (fresh.contains(token))
                 throw std::invalid_argument("A component geometry destination borrows its Properties proof field: "+std::string(token));
     if(mixed.at("version")==35 && fresh.contains("initialize_profile_topology"))
         throw std::invalid_argument("A component identity destination borrows its Properties proof field: initialize_profile_topology");
-    if(mixed.at("version")==36 || mixed.at("version")==37 || mixed.at("version")==38 || mixed.at("version")==39 || mixed.at("version")==40 || mixed.at("version")==41)
+    if(mixed.at("version")==36 || mixed.at("version")==37 || mixed.at("version")==38 || mixed.at("version")==39 || mixed.at("version")==40 || mixed.at("version")==41 || mixed.at("version")==42)
         for (const auto* token:{"review_profile_topology","profile_dimension_decisions"})
             if (fresh.contains(token))
                 throw std::invalid_argument("A reviewed component destination borrows its Properties proof field: "+std::string(token));
@@ -6207,19 +6211,19 @@ static void validate_mixed_properties_replacement_lifetime(const nlohmann::json&
         throw std::invalid_argument("A deformed component destination borrows its Properties proof field: initialize_deformed_profile_topology");
     if(mixed.at("version")==38 && fresh.contains("review_initial_profile_geometry"))
         throw std::invalid_argument("A reviewed component destination borrows its Properties proof field: review_initial_profile_geometry");
-    if (mixed.at("version")==39 || mixed.at("version")==40 || mixed.at("version")==41) {
+    if (mixed.at("version")==39 || mixed.at("version")==40 || mixed.at("version")==41 || mixed.at("version")==42) {
         for (const auto* token:{"component_request","component_identity_reservations"})
             if (fresh.contains(token))
                 throw std::invalid_argument("A directional resize destination borrows its proof field: "+std::string(token));
-        if (mixed.at("version")==39)
+        if (mixed.at("version")==39 || mixed.at("version")==42)
             for (const auto* token:{"slab_geometry","slab_allocation"})
                 if (fresh.contains(token))
                     throw std::invalid_argument("A slab resize destination borrows its proof field: "+std::string(token));
-        if (mixed.at("version")==40)
+        if (mixed.at("version")==40 || mixed.at("version")==42)
             for (const auto* token:{"roof_opening_axis_requests","roof_id","opening_id","sx","sy","anchor_m","frame_rotation_radians"})
                 if (fresh.contains(token))
                     throw std::invalid_argument("A skylight resize destination borrows its proof field: "+std::string(token));
-        if (mixed.at("version")==41)
+        if (mixed.at("version")==41 || mixed.at("version")==42)
             for (const auto* token:{"structural_axis_requests","structural_allocation","object_id","sx","sy","anchor_m","frame_rotation_radians"})
                 if (fresh.contains(token))
                     throw std::invalid_argument("A structural resize destination borrows its proof field: "+std::string(token));
@@ -6234,8 +6238,13 @@ static void validate_mixed_properties_replacement_lifetime(const nlohmann::json&
             if (fresh.contains(token))
                 throw std::invalid_argument("A component dimension destination borrows its Properties proof field: "+std::string(token));
     validate_retained_authoring_fresh_identities(history,preceding_records,fresh);
-    for (std::size_t index=0;index<preceding_records;++index)
+    for (std::size_t index=0;index<preceding_records;++index) {
         validate_selection_edit_fresh_identity_tokens(history.at(index).entities,fresh);
+        if (mixed.at("version")==42) for (const auto& [id,asset]:history.at(index).assets) {
+            (void)asset;
+            if (fresh.contains(id)) throw std::invalid_argument("Combined resize fresh identity collides with a retained asset: "+id);
+        }
+    }
 }
 #endif
 

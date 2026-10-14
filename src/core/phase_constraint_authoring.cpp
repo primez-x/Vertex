@@ -3029,10 +3029,13 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
     const StairPropertyReviewPreparation* stair_review=nullptr,
     const std::set<std::string,std::less<>>* assembly_promoted_catalogs=nullptr,
     const PhasePropertyCompositionRetirements* phase_properties=nullptr,
-    const AssemblyPropertyRowAdmission* assembly_row_edits=nullptr) {
+    const AssemblyPropertyRowAdmission* assembly_row_edits=nullptr,
+    bool physical_only=false) {
     coordinated_map_budget(actual);
+    if (physical_only && (retired_rooms || removed_annotation_targets || stair_review || phase_properties || assembly_row_edits))
+        invalid("Physical-only resize union cannot receive reviewed retirement authority");
     if (independently_admitted_candidates.empty() || independently_admitted_candidates.size()>
-        (phase_properties ? 2u : stair_review ? 6u : 5u))
+        (physical_only ? 3u : phase_properties ? 2u : stair_review ? 6u : 5u))
         invalid("Mixed edit composition requires one to five independently admitted actual-source candidates");
     for (const auto& candidate:independently_admitted_candidates) coordinated_map_budget(candidate);
     const auto original_aliases=embedded_assembly_presentation_ids(actual);
@@ -3087,6 +3090,7 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
                 [&](const auto* previous) { return exact(*previous,found->second); })) changes.push_back(&found->second);
         }
         if (erased) {
+            if (physical_only) invalid("Physical-only resize union cannot retire or erase source owners");
             if (original.required || retained_baselines.contains(key) || inactive.contains(key) || !changes.empty())
                 invalid("Mixed edit erased a required or baseline owner, or overlaps an upsert");
             const bool dimension=can_recognize_boundary_dimension_entity_type(original.type) &&
@@ -3142,7 +3146,7 @@ Entities compose_mixed_selection_edit_candidates_impl(const Entities& actual,
         }
         else if (original.type=="model_phases")
             result.at(key)=merge_source_row_container(original,changes,removed_annotation_targets!=nullptr,false,true);
-        else if (original.type==assembly_phase_membership_entity_type && phase_properties && assembly_row_edits)
+        else if (original.type==assembly_phase_membership_entity_type && (physical_only || (phase_properties && assembly_row_edits)))
             result.at(key)=merge_component_membership_rows(original,changes);
         else if (original.type==kSheetViewEntityType)
             result.at(key)=removed_annotation_targets
@@ -3630,16 +3634,63 @@ CoordinatedComponentPropertyComposition finalize_component_directional_resize(
 }
 } // namespace
 
-ComponentSlabDirectionalResizeComposition compose_component_slab_directional_resize(
-    const DocumentSnapshot& source,const PhaseAssemblyInstancePropertyEditPreparation& components,
+namespace {
+// A builder carries only original-source physical consequences. Component
+// replay and reviewed dimension retirement are owned by the finalizer.
+template<class Composition> struct PhysicalDirectionalResizeContribution {
+    Composition result;
+    Entities entities;
+    std::map<ComponentTarget,ComponentTarget> destinations;
+    PhaseSlabReplacementIdentityMap dimension_ids;
+    std::vector<std::string> structural_hosts;
+};
+PhaseAssemblyInstancePropertyEditAuthoring directional_component_authoring(
+    const PhaseAssemblyInstancePropertyEditPreparation& replayed,std::size_t physical_members) {
+    const auto version=replayed.request().at("version").get<int>();
+    if (version<7 || version>9) invalid("Mixed resize requires component geometry request seven, eight or nine");
+    auto authoring=decode_phase_assembly_instance_property_edit_authoring(replayed.request().at("authoring"));
+    if (authoring.intents.empty() || physical_members>1000 || authoring.intents.size()>1000-physical_members)
+        invalid("Mixed resize selection exceeds its complete aggregate roster bound");
+    return authoring;
+}
+template<class Map> void merge_directional_destinations(Map& combined,const Map& lane) {
+    for (const auto& [original,destination]:lane) {
+        const auto [entry,inserted]=combined.emplace(original,destination);
+        if (!inserted && entry->second!=destination)
+            invalid("Mixed physical resize has conflicting original-source destinations");
+    }
+}
+// Inventory every requested hosted root, including units, before a producer
+// can discard a no-op. Unknown affected reference codecs grant no authority.
+void admit_directional_host_dimensions(const Entities& actual,
+    const std::set<std::string,std::less<>>& hosts) {
+    std::vector<std::pair<std::string,std::string>> roots;
+    for (const auto& [id,entity]:actual) if (entity.type=="assembly_model")
+        for (const auto& row:entity.properties.at("model").at("instances")) {
+            if (!row.contains("placement") || row.at("placement").is_null() ||
+                !hosts.contains(row.at("placement").at("host_entity_id").get<std::string>())) continue;
+            roots.emplace_back(id,row.at("id").get<std::string>());
+        }
+    if (!roots.empty()) (void)inspect_embedded_assembly_dimension_clone_roster(actual,roots);
+}
+void verify_directional_structural_result(const Entities& final_entities,const Entities& physical,
+    const std::vector<std::string>& final_hosts) {
+    const auto final_inventory=inspect_structural_hosted_components(final_entities,final_hosts);
+    if (!final_inventory.ready()) invalid("Mixed structural resize final native/hosted geometry is blocked");
+    for (const auto& host:final_hosts) {
+        if (!exact(final_entities.at(host),physical.at(host)))
+            invalid("Mixed structural resize final composition changed the native owner");
+        (void)stage_structural_plan_axis_resize_entity(final_entities.at(host),1,1,{0,0},0);
+    }
+}
+
+PhysicalDirectionalResizeContribution<ComponentSlabDirectionalResizeComposition> build_slab_directional_physical_contribution(
+    const DocumentSnapshot& source,const PhaseAssemblyInstancePropertyEditPreparation& replayed,
+    const PhaseAssemblyInstancePropertyEditAuthoring& authoring,
     std::span<const SlabGeometryEditIntent> slab_geometry,
     const std::optional<ComponentSlabDirectionalResizeAllocation>& allocation,std::string_view message) {
     if (slab_geometry.empty() || slab_geometry.size()>1000 || message.size()>1024 || message.find('\0')!=std::string_view::npos)
         invalid("Mixed component/slab resize roster or message exceeds its bound");
-    const auto replayed=replay_phase_assembly_instance_property_edit_preparation(source,components.request());
-    const auto version=replayed.request().at("version").get<int>();
-    if (version<7 || version>9) invalid("Mixed component/slab resize requires component geometry request seven, eight or nine");
-    const auto authoring=decode_phase_assembly_instance_property_edit_authoring(replayed.request().at("authoring"));
     const auto& actual=source.entities();
     std::map<ComponentTarget,ComponentTarget> destinations;
     for (const auto& intent:authoring.intents) {
@@ -3674,6 +3725,7 @@ ComponentSlabDirectionalResizeComposition compose_component_slab_directional_res
     // no-ops. In particular, baseline replacement must not skip unit hosts
     // whose catalogs or nested geometry need actual-source admission.
     auto authenticated_slabs=replay_slab_geometry_with_hosted_entities(actual,slabs);
+    admit_directional_host_dimensions(actual,slab_hosts);
     const auto partition=partition_phase_slab_geometry_edits(actual,slabs);
     if (partition.replacement.has_value()!=allocation.has_value())
         invalid("Mixed resize slab allocation must exactly match actual changed baseline targets");
@@ -3739,22 +3791,16 @@ ComponentSlabDirectionalResizeComposition compose_component_slab_directional_res
             const ComponentTarget root{id,row.at("id").get<std::string>(),std::nullopt,{}};
             destinations.emplace(root,root);
         }
-    result.components=finalize_component_directional_resize(source,replayed,authoring,physical,destinations,slab_dimension_ids);
-    return result;
+    return {std::move(result),std::move(physical),std::move(destinations),std::move(slab_dimension_ids),{}};
 }
 
-ComponentStructuralDirectionalResizeComposition compose_component_structural_directional_resize(
-    const DocumentSnapshot& source,const PhaseAssemblyInstancePropertyEditPreparation& components,
+PhysicalDirectionalResizeContribution<ComponentStructuralDirectionalResizeComposition> build_structural_directional_physical_contribution(
+    const DocumentSnapshot& source,const PhaseAssemblyInstancePropertyEditPreparation& replayed,
+    const PhaseAssemblyInstancePropertyEditAuthoring& authoring,
     std::span<const StructuralDirectionalResizeRequest> requests,
     const std::optional<ComponentStructuralDirectionalResizeAllocation>& allocation,std::string_view message) {
     if (requests.empty() || requests.size()>1000 || message.size()>1024 || message.find('\0')!=std::string_view::npos)
         invalid("Mixed component/structural resize roster or message exceeds its bound");
-    const auto replayed=replay_phase_assembly_instance_property_edit_preparation(source,components.request());
-    const auto version=replayed.request().at("version").get<int>();
-    if (version<7 || version>9) invalid("Mixed structural resize requires component geometry request seven, eight or nine");
-    const auto authoring=decode_phase_assembly_instance_property_edit_authoring(replayed.request().at("authoring"));
-    if (authoring.intents.empty() || authoring.intents.size()+requests.size()>1000)
-        invalid("Mixed structural resize selection exceeds its complete roster bound");
     const auto& actual=source.entities();
     std::map<ComponentTarget,ComponentTarget> destinations;
     for (const auto& intent:authoring.intents) {
@@ -3886,28 +3932,15 @@ ComponentStructuralDirectionalResizeComposition compose_component_structural_dir
         destinations.emplace(root,root);
         result.structural_hosted_bindings.emplace(binding,binding);
     }
-    result.components=finalize_component_directional_resize(source,replayed,authoring,physical,destinations,dimension_ids);
-    const auto final_inventory=inspect_structural_hosted_components(result.components.entities,final_hosts);
-    if (!final_inventory.ready()) invalid("Mixed structural resize final native/hosted geometry is blocked");
-    for (const auto& host:final_hosts) {
-        if (!exact(result.components.entities.at(host),physical.at(host)))
-            invalid("Mixed structural resize final composition changed the native owner");
-        (void)stage_structural_plan_axis_resize_entity(result.components.entities.at(host),1,1,{0,0},0);
-    }
-    return result;
+    return {std::move(result),std::move(physical),std::move(destinations),std::move(dimension_ids),std::move(final_hosts)};
 }
 
-ComponentRoofOpeningDirectionalResizeComposition compose_component_roof_opening_directional_resize(
-    const DocumentSnapshot& source,const PhaseAssemblyInstancePropertyEditPreparation& components,
+PhysicalDirectionalResizeContribution<ComponentRoofOpeningDirectionalResizeComposition> build_roof_opening_directional_physical_contribution(
+    const DocumentSnapshot& source,const PhaseAssemblyInstancePropertyEditPreparation& replayed,
+    const PhaseAssemblyInstancePropertyEditAuthoring& authoring,
     std::span<const RoofOpeningDirectionalResizeRequest> requests,std::string_view message) {
     if (requests.empty() || requests.size()>1000 || message.size()>1024 || message.find('\0')!=std::string_view::npos)
         invalid("Mixed component/skylight resize roster or message exceeds its bound");
-    const auto replayed=replay_phase_assembly_instance_property_edit_preparation(source,components.request());
-    const auto version=replayed.request().at("version").get<int>();
-    if (version<7 || version>9) invalid("Mixed component/skylight resize requires component geometry request seven, eight or nine");
-    const auto authoring=decode_phase_assembly_instance_property_edit_authoring(replayed.request().at("authoring"));
-    if (authoring.intents.empty() || authoring.intents.size()+requests.size()>1000)
-        invalid("Mixed component/skylight resize selection exceeds its complete roster bound");
     const auto& actual=source.entities();
     std::map<ComponentTarget,ComponentTarget> destinations;
     for (const auto& intent:authoring.intents) {
@@ -3942,6 +3975,7 @@ ComponentRoofOpeningDirectionalResizeComposition compose_component_roof_opening_
             if (hosts.contains(host)) invalid("Mixed skylight resize requires hosts absent from every phase registry");
     }
     auto physical=prepare_roof_opening_directional_resizes(actual,requests);
+    admit_directional_host_dimensions(actual,hosts);
     ConstraintAuthoringIntent semantic;
     semantic.message=std::string(message);
     auto proof=make_phase_constraint_authoring_intent(source,semantic,nullptr,true);
@@ -3958,8 +3992,182 @@ ComponentRoofOpeningDirectionalResizeComposition compose_component_roof_opening_
             const ComponentTarget root{id,row.at("id").get<std::string>(),std::nullopt,{}};
             destinations.emplace(root,root);
         }
-    result.components=finalize_component_directional_resize(source,replayed,authoring,
-        physical.candidate_entities,destinations,{});
+    return {std::move(result),std::move(physical.candidate_entities),std::move(destinations),{}, {}};
+}
+
+Entities union_directional_physical_candidates(const Entities& actual,const std::vector<Entities>& lanes) {
+    if (lanes.size()<2 || lanes.size()>3)
+        invalid("Combined physical resize requires two or three independently reconstructed physical families");
+    std::set<std::string,std::less<>> promoted;
+    for (const auto& lane:lanes) (void)component_property_row_admission(actual,lane,promoted);
+    // No retirement or erased-owner authority crosses this boundary.
+    return compose_mixed_selection_edit_candidates_impl(actual,lanes,nullptr,nullptr,nullptr,
+        &promoted,nullptr,nullptr,true);
+}
+void merge_physical_owner_correspondence(const Entities& actual,
+    std::map<std::string,std::string,std::less<>>& combined,
+    const std::map<std::string,std::string,std::less<>>& lane) {
+    for (const auto& [original,destination]:lane) {
+        const auto source=actual.find(original);
+        // One source catalog may have several independently allocated private
+        // copies. Its qualified roots and family proofs carry those identities.
+        if (source!=actual.end() && source->second.type=="assembly_model") continue;
+        const auto [entry,inserted]=combined.emplace(original,destination);
+        if (!inserted && entry->second!=destination)
+            invalid("Mixed physical resize has conflicting owner or alias destinations");
+    }
+}
+void validate_directional_physical_freshness(const DocumentSnapshot& source,
+    const std::vector<Entities>& lanes,const PhaseAssemblyInstancePropertyEditPreparation& component,
+    const std::optional<ComponentSlabDirectionalResizeAllocation>& slabs,
+    const std::optional<ComponentStructuralDirectionalResizeAllocation>& structures) {
+    auto all=lanes;all.push_back(component.preview_entities());
+    validate_mixed_edit_fresh_destinations(source.entities(),all);
+    const auto originals=mixed_edit_identity_owners(source.entities());
+    const auto original_aliases=embedded_assembly_presentation_ids(source.entities());
+    std::set<std::string,std::less<>> physical_fresh;
+    for (const auto& lane:lanes) {
+        for (const auto& [token,owners]:mixed_edit_identity_owners(lane)) {
+            (void)owners;if (!originals.contains(token)) physical_fresh.insert(token);
+        }
+        for (const auto& [binding,alias]:embedded_assembly_presentation_ids(lane))
+            if (!original_aliases.contains(binding)) physical_fresh.insert(alias);
+    }
+    std::set<std::string,std::less<>> allocated;
+    const auto allocations=[&](const auto& allocation) {
+        if (!allocation) return;
+        const auto reserve=[&](const std::string& token) {
+            if (!allocated.insert(token).second)
+                invalid("Mixed physical resize fresh allocation destinations overlap between families");
+            physical_fresh.insert(token);
+        };
+        for (const auto& [original,proposed]:allocation->identities) { (void)original;reserve(proposed); }
+        for (const auto& [binding,proposed]:allocation->hosted_instance_identities) { (void)binding;reserve(proposed); }
+        for (const auto& [original,proposed]:allocation->dimension_identities) { (void)original;reserve(proposed); }
+    };
+    allocations(slabs);allocations(structures);
+    for (const auto& lane:lanes) for (const auto& [binding,alias]:embedded_assembly_presentation_ids(lane))
+        if (!original_aliases.contains(binding) && allocated.contains(alias))
+            invalid("Mixed physical resize fresh allocation collides with a computed presentation alias");
+    for (const auto& token:component.result().fresh_identity_ids)
+        if (physical_fresh.contains(token)) invalid("Mixed physical resize collides with a component reservation");
+    auto fresh=physical_fresh;
+    fresh.insert(component.result().fresh_identity_ids.begin(),component.result().fresh_identity_ids.end());
+    if (fresh.size()>4096) invalid("Mixed physical resize aggregate fresh identity budget exceeded");
+    for (const auto& [id,asset]:source.assets()) {
+        (void)asset;
+        if (fresh.contains(id)) invalid("Mixed physical resize fresh identity collides with a current asset");
+    }
+    for (const auto& revision:source.history()) {
+        validate_selection_edit_fresh_identity_tokens(revision.entities,fresh);
+        for (const auto& [id,asset]:revision.assets) {
+            (void)asset;
+            if (fresh.contains(id)) invalid("Mixed physical resize fresh identity collides with a retained asset");
+        }
+    }
+    validate_retained_authoring_fresh_identities(source.history(),source.history().size(),fresh);
+}
+} // namespace
+
+ComponentSlabDirectionalResizeComposition compose_component_slab_directional_resize(
+    const DocumentSnapshot& source,const PhaseAssemblyInstancePropertyEditPreparation& components,
+    std::span<const SlabGeometryEditIntent> slabs,
+    const std::optional<ComponentSlabDirectionalResizeAllocation>& allocation,std::string_view message) {
+    const auto replayed=replay_phase_assembly_instance_property_edit_preparation(source,components.request());
+    const auto authoring=directional_component_authoring(replayed,slabs.size());
+    auto lane=build_slab_directional_physical_contribution(source,replayed,authoring,slabs,allocation,message);
+    lane.result.components=finalize_component_directional_resize(source,replayed,authoring,lane.entities,lane.destinations,lane.dimension_ids);
+    return std::move(lane.result);
+}
+ComponentStructuralDirectionalResizeComposition compose_component_structural_directional_resize(
+    const DocumentSnapshot& source,const PhaseAssemblyInstancePropertyEditPreparation& components,
+    std::span<const StructuralDirectionalResizeRequest> requests,
+    const std::optional<ComponentStructuralDirectionalResizeAllocation>& allocation,std::string_view message) {
+    const auto replayed=replay_phase_assembly_instance_property_edit_preparation(source,components.request());
+    const auto authoring=directional_component_authoring(replayed,requests.size());
+    auto lane=build_structural_directional_physical_contribution(source,replayed,authoring,requests,allocation,message);
+    lane.result.components=finalize_component_directional_resize(source,replayed,authoring,lane.entities,lane.destinations,lane.dimension_ids);
+    verify_directional_structural_result(lane.result.components.entities,lane.entities,lane.structural_hosts);
+    return std::move(lane.result);
+}
+ComponentRoofOpeningDirectionalResizeComposition compose_component_roof_opening_directional_resize(
+    const DocumentSnapshot& source,const PhaseAssemblyInstancePropertyEditPreparation& components,
+    std::span<const RoofOpeningDirectionalResizeRequest> requests,std::string_view message) {
+    const auto replayed=replay_phase_assembly_instance_property_edit_preparation(source,components.request());
+    const auto authoring=directional_component_authoring(replayed,requests.size());
+    auto lane=build_roof_opening_directional_physical_contribution(source,replayed,authoring,requests,message);
+    lane.result.components=finalize_component_directional_resize(source,replayed,authoring,lane.entities,lane.destinations,lane.dimension_ids);
+    return std::move(lane.result);
+}
+ComponentPhysicalDirectionalResizeComposition compose_component_physical_directional_resize(
+    const DocumentSnapshot& source,const PhaseAssemblyInstancePropertyEditPreparation& components,
+    std::span<const SlabGeometryEditIntent> slabs,
+    const std::optional<ComponentSlabDirectionalResizeAllocation>& slab_allocation,
+    std::span<const StructuralDirectionalResizeRequest> structures,
+    const std::optional<ComponentStructuralDirectionalResizeAllocation>& structural_allocation,
+    std::span<const RoofOpeningDirectionalResizeRequest> openings,std::string_view message) {
+    const auto families=static_cast<unsigned>(!slabs.empty())+static_cast<unsigned>(!structures.empty())+
+        static_cast<unsigned>(!openings.empty());
+    if (families<2 || message.size()>1024 || message.find('\0')!=std::string_view::npos ||
+        slabs.size()>1000 || structures.size()>1000 || openings.size()>1000 ||
+        (slabs.empty() && slab_allocation) || (structures.empty() && structural_allocation))
+        invalid("Combined physical resize requires a bounded complete roster and exact family allocation presence");
+    // The sealed component contribution has already replayed from its captured
+    // source. Authenticate it without deriving it again or feeding a physical
+    // candidate back into the component producer.
+    require_phase_assembly_instance_property_edit_source_current(source,components);
+    const auto& replayed=components;
+    const auto authoring=directional_component_authoring(replayed,slabs.size()+structures.size()+openings.size());
+    ComponentPhysicalDirectionalResizeComposition result;
+    std::vector<Entities> lanes;
+    std::map<ComponentTarget,ComponentTarget> destinations;
+    PhaseSlabReplacementIdentityMap dimensions;
+    std::vector<std::string> structural_hosts;
+    const auto append=[&](auto&& lane,const auto& owners,const auto& selected,const auto& bindings,const auto& proofs) {
+        merge_directional_destinations(destinations,lane.destinations);
+        for (const auto& [original,proposed]:lane.dimension_ids)
+            if (!dimensions.emplace(original,proposed).second)
+                invalid("Combined physical resize repeats a provisional source dimension allocation");
+        merge_physical_owner_correspondence(source.entities(),result.original_to_proposed,owners);
+        merge_directional_destinations(result.selected_original_to_proposed,selected);
+        merge_directional_destinations(result.hosted_bindings,bindings);
+        result.phase_authorings.insert(result.phase_authorings.end(),proofs.begin(),proofs.end());
+        lanes.push_back(std::move(lane.entities));
+    };
+    if (!slabs.empty()) {
+        auto lane=build_slab_directional_physical_contribution(source,replayed,authoring,slabs,slab_allocation,message);
+        append(lane,lane.result.slab_original_to_proposed,lane.result.slab_selected_original_to_proposed,
+            lane.result.slab_hosted_bindings,lane.result.slab_phase_authorings);
+    }
+    if (!structures.empty()) {
+        auto lane=build_structural_directional_physical_contribution(source,replayed,authoring,structures,structural_allocation,message);
+        structural_hosts=lane.structural_hosts;
+        append(lane,lane.result.structural_original_to_proposed,lane.result.structural_selected_original_to_proposed,
+            lane.result.structural_hosted_bindings,lane.result.structural_phase_authorings);
+    }
+    if (!openings.empty()) {
+        auto lane=build_roof_opening_directional_physical_contribution(source,replayed,authoring,openings,message);
+        merge_directional_destinations(destinations,lane.destinations);
+        result.roof_children=std::move(lane.result.roof_children);
+        result.phase_authorings.insert(result.phase_authorings.end(),lane.result.phase_authorings.begin(),lane.result.phase_authorings.end());
+        lanes.push_back(std::move(lane.entities));
+    }
+    validate_directional_physical_freshness(source,lanes,replayed,slab_allocation,structural_allocation);
+    const auto physical=union_directional_physical_candidates(source.entities(),lanes);
+    const auto source_aliases=embedded_assembly_presentation_ids(source.entities());
+    const auto final_aliases=embedded_assembly_presentation_ids(physical);
+    for (const auto& [binding,destination]:result.hosted_bindings) {
+        const auto& original=source_aliases.at(binding);
+        const auto& proposed=final_aliases.at(destination);
+        const auto [entry,inserted]=result.original_to_proposed.emplace(original,proposed);
+        if (!inserted && entry->second!=proposed)
+            invalid("Combined physical resize has conflicting qualified presentation alias destinations");
+    }
+    result.components=finalize_component_directional_resize(source,replayed,authoring,physical,destinations,dimensions);
+    if (!structural_hosts.empty()) verify_directional_structural_result(result.components.entities,physical,structural_hosts);
+    for (const auto& [binding,target]:result.roof_children) {
+        (void)binding;(void)roof_opening_group_member_center_world(result.components.entities,target);
+    }
     return result;
 }
 

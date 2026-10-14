@@ -376,6 +376,23 @@ struct ComponentStructuralDirectionalResizeComposition {
     std::map<std::pair<std::string,std::string>,std::pair<std::string,std::string>> structural_hosted_bindings;
     std::vector<nlohmann::json> structural_phase_authorings;
 };
+struct ComponentPhysicalDirectionalResizeComposition {
+    CoordinatedComponentPropertyComposition components;
+    // Catalog copies remain family-local in the phase proofs. Only selected
+    // owners, dimensions and presentation aliases have global destinations.
+    std::map<std::string,std::string,std::less<>> original_to_proposed;
+    std::map<std::string,std::string,std::less<>> selected_original_to_proposed;
+    std::map<std::pair<std::string,std::string>,std::pair<std::string,std::string>> hosted_bindings;
+    std::map<std::pair<std::string,std::string>,RoofOpeningGroupMember> roof_children;
+    std::vector<nlohmann::json> phase_authorings;
+};
+[[nodiscard]] ComponentPhysicalDirectionalResizeComposition compose_component_physical_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditPreparation&,
+    std::span<const SlabGeometryEditIntent>,
+    const std::optional<ComponentSlabDirectionalResizeAllocation>&,
+    std::span<const StructuralDirectionalResizeRequest>,
+    const std::optional<ComponentStructuralDirectionalResizeAllocation>&,
+    std::span<const RoofOpeningDirectionalResizeRequest>, std::string_view);
 // Both lanes reconstruct the complete original source before the single shared
 // dimension finalizer. Callers supply operators and exact inspected allocations.
 [[nodiscard]] ComponentStructuralDirectionalResizeComposition compose_component_structural_directional_resize(

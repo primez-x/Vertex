@@ -12,6 +12,58 @@ constitute user acceptance.
 
 ## Current delivery state
 
+### October 14 combined physical resizing qualified
+
+The verified structural checkpoint is committed and pushed as `101cfae6`; exact
+remote main was checked. Continue under
+[the combined contract](../design/vertex-combined-physical-resize.md) and
+[its implementation plan](../superpowers/plans/2026-10-14-combined-physical-resize.md).
+The actual five-member native fixture compiles and admits the complete component,
+slab, rectangular column, horizontal beam and typed skylight selection in both
+orders. It then fails specifically at the missing combined side frame; evidence
+is `artifacts/codex-combined-physical-20261014/native-red-admitted.log`.
+Its initial roster check incorrectly assumed canvas publication order matched
+selection request order; exact membership is now checked instead. No production
+The complete Release build passes (`full-release-build.log`). The combined core suite passes all ten groups
+in 98.11 seconds (`core-final-attempt.log`), including actual shared baseline
+catalogs/companions, bounds, source guards, explicit retirement and
+applied/undone/redone native save, extraction263 and reader264 refusal. The three
+historical resize core suites pass. Native `--frame-only` passes both orders.
+All eight ordinary Plan/rotated Site width/depth gesture cases pass in both
+selection orders through applied/undone/redone editable Open. Focused real
+Cancel/Remove and accepted stale controls/history reviews pass
+(`native-review-qualified.log`); separate selection, viewport, controls and
+history stale-release cases pass (`native-stale-qualified.log`). Root inspected
+Plan preview and rotated Site committed captures. The full standard suite passes
+330 active tests in 626.26 seconds (`full-standard-ctest.log`); the production
+acceptance gate remains disabled. The complete combined native lifecycle passes
+in that run in 232.30 seconds.
+
+Independent review identified fresh physical destinations borrowing current or
+undone asset IDs. Root reproduced it (`asset-red-admitted.log`), added current
+and retained asset checks to the combined composer and Document lifetime path,
+and passed the focused regression (`asset-qualified.log`) and full core suite.
+The core roof fixture's pitch/rise mismatch and required-companion flag were
+corrected. The full core suite exceeds the ordinary 60-second timeout; its
+240-second bound is applied after the global timeout defaults. Source-kit
+inventory is 2075. Native side capture now uses publication-order ordinary IDs
+while mixed semantic order remains independently captured; previously their
+exact-order comparison silently canceled the drag. Combined preview now carries
+retained roof-host rendering correspondence, which regenerated the selected
+mouth ink only for Properties40 before this fix. The native preservation oracle
+checks the canonical slab derivation separately from byte-exact opaque metadata,
+and expects no derivation after Cancel. Six protected checks, including DXF/IFC,
+pass with exit0, confirmed termination, no timeout/capture failure and a host
+outside the job (`protected-imports.log`, result directory
+`artifacts/import-worker-independent/release-3225ac7ddcf04443baa7778ceca2e4a6`).
+All eight desktop smoke cases pass; their copied evidence hashes are verified
+in this wave's `desktop-smoke/` directory. Root inspected Measure at 100% and
+Design at 200%. The legacy seeded sketch still withholds GLA; these smoke cases
+do not qualify the separate new-wall-room GLA flow. Installed candidate and
+production acceptance remain unchanged. Whole roofs, stairs, walls, circular
+columns, sloped beams and unsupported oblique anisotropy remain outside this
+slice; real Apex/device compatibility remains unqualified.
+
 ### October 14 component and structural resizing
 
 Independent components, canonical v1 rectangular columns and horizontal straight

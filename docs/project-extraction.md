@@ -1,5 +1,10 @@
 # Portable project extraction
 
+Exchange version263 requires native reader265 for closed Properties42 combined
+component and physical directional resizing. Extraction retains the exact
+source-bound requests, family-local allocations and history, including undone
+commands. Runtime qualification is recorded separately.
+
 Exchange version262 requires native reader264 for closed Properties41
 component/structural directional resize composition. Extraction retains its exact
 source-bound operators, baseline allocations and retained history, including

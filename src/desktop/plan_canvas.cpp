@@ -4037,6 +4037,9 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
             m_axis_anchor = {axes->center.x - sign * direction.x * m_axis_extent * .5,
                              axes->center.y - sign * direction.y * m_axis_extent * .5};
             if (axisResizeCohortEnabled()) {
+                // Side-resize currentness binds the published ordinary roster.
+                // Mixed semantic order remains separately captured with children.
+                m_move_ids = selectedIds();
                 m_axis_resize_cohort_capture_frame = axes;
                 m_axis_resize_cohort_navigation_generation = m_navigation_generation;
                 m_axis_resize_cohort_view_center = m_view_center;

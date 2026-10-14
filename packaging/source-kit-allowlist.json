@@ -1755,6 +1755,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/design/vertex-combined-physical-resize.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/design/vertex-component-directional-resize.md"
     },
     {
@@ -2800,6 +2804,10 @@
     {
       "category": "docs",
       "path": "docs/superpowers/plans/2026-10-04-measured-stroke-constraints.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-14-combined-physical-resize.md"
     },
     {
       "category": "docs",
@@ -6880,6 +6888,14 @@
     {
       "category": "source",
       "path": "tests/mixed_axis_resize_canvas_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/mixed_component_physical_resize_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/mixed_component_physical_resize_tests.cpp"
     },
     {
       "category": "source",
