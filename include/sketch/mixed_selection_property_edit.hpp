@@ -182,6 +182,13 @@ private:
     const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
     std::span<const RoofPlanResizeIntent>, std::string_view);
 
+// Closed Properties45: all three original-source rosters are nonempty;
+// ordinary whole roofs and qualified skylight hosts are disjoint even for units.
+[[nodiscard]] MixedSelectionPropertyEditPreparation prepare_component_roof_skylight_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
+    std::span<const RoofPlanResizeIntent>,
+    std::span<const RoofOpeningDirectionalResizeRequest>, std::string_view);
+
 // Closed dialect 39: the five original source fences, version,
 // component_request (7/8/9), component_identity_reservations, slab_geometry,
 // slab_allocation, empty room_reviews/phase_room_reviews, and message. Only

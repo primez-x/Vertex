@@ -1,4 +1,12 @@
-# Vertex project formats v1 through v267
+# Vertex project formats v1 through v268
+
+Reader268/native extraction266 retains closed Properties45 directional resizing
+of independent components, whole schema1 roofs and selected typed skylights on
+different unselected hosts. Its source fences and both operator rosters persist
+under command52, including after Undo. Same-host roof/body-child proof is outside
+this dialect. Existing roof-plan archive4-only authority retains267/265. Opaque
+metadata and historical dialects retain their previous meaning. Qualification
+is recorded separately in the delivery record.
 
 Reader267/native extraction265 retains closed Properties44 component/whole-roof
 directional resizing under command52. Ordinary unjoined schema1 roof operators

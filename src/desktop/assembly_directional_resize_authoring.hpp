@@ -48,10 +48,7 @@ namespace sketch::desktop {
     const DocumentSnapshot& source, std::span<const std::string> independent_entity_ids,
     const AssemblyDirectionalResize& operation, AssemblyExpansionBudget& available_work);
 
-struct AssemblyDirectionalResizeTarget {
-    std::string independent_entity_id;
-    AssemblyDirectionalResize operation;
-};
+using AssemblyDirectionalResizeTarget = sketch::AssemblyDirectionalResizeTarget;
 
 // Complete independent cohort with an individually reexpressed operator for
 // each root (for example, through different building placements in Site Plan).

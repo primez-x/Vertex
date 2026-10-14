@@ -12,6 +12,70 @@ constitute user acceptance.
 
 ## Current delivery state
 
+### October 14 component, whole-roof and different-host skylight resizing
+
+The whole-roof checkpoint is committed and pushed as `dc81438a`; exact remote
+main was verified. Source discovery resolves the next required owner/typed-child
+boundary as independent components, whole schema1 roofs and selected skylights
+on different unselected hosts. Same-host body/child authoring cannot reuse the
+schema1-only shared-frame proof and remains excluded. The new
+[contract](../design/vertex-component-roof-skylight-resize.md) and
+[plan](../superpowers/plans/2026-10-14-component-roof-skylight-resize.md) define
+closed Properties45/reader268/extraction266. They require one aggregate capture
+preflight, original-source private physical contributions, the existing bounded
+physical union and one unchanged final dimension batch. Historical40/44 and roof
+v1/v2 remain unchanged. The initial genuine native fixture compiles and admits
+native bounds/volumes, published ink, authenticated controls, exact semantic
+selection and unchanged source/history/save/output in all six orders, then reports
+MissingFrame in every case (`artifacts/codex-component-roof-skylight-20261014/native-red.log`).
+The independent approach review confirms the private physical union and unchanged
+finalizer, with required early aggregate admission before controller native plan
+inspection and reviewed component preparation, reader scanning through268, and
+literal child-host phase_id absence including null. These source changes compile.
+The shared plain directional target now lives beside the core operation type;
+a desktop alias preserves existing callers without a core/private desktop dependency.
+The complete core test passes in75.34 seconds (`core-fourth.log`), including
+aggregate admission ordering, shared-catalog dimension batches, pitched/rotated
+geometry, archive preservation and native268/extraction266 persistence. Fixture
+corrections use the actual hosted catalog dimension carrier, valid demolition
+baseline membership and explicit dangling-join rejection; no production guard
+was relaxed.
+
+The larger actual child host is40x40 at(-10,-10,3); the selected mouth, unselected
+sibling and whole-roof hand coordinates remain unchanged. The full native run
+hit its600-second deadline during lifecycle23of24 without an earlier assertion
+failure (`native-first.log`). Root inspected Plan preview and rotated Site commit.
+The explicit deadline is now1200 seconds for24 lifecycles,73 fresh Opens and review/
+stale coverage. All four review cases pass separately (`native-review-first.log`),
+as do all five stale-authority cases (`native-stale-first.log`), each after the six
+actual frame permutations and unit checks. The full Release build passes. The
+standard run finished in1155.40 seconds with336 of337 active checks passing;
+the new desktop fixture completed all24 lifecycles before its ten-second preview
+wait expired during review (`full-standard-suite.log`). The first targeted rerun
+expired at a separate ten-second publication wait (`native-complete-rerun.log`).
+Release consumes preview before a second native manufacture job; read-only source
+diagnosis found no lost-completion or stopped-timer defect, while noting silent
+stale rejection as another possible cause. Preview and the two native publication
+waits now allow30 seconds, with elapsed/revision diagnostics. Exact revision,
+geometry/history and stale/refusal predicates remain unchanged. The complete
+targeted rerun passes in808.94 seconds (`native-publication-rerun.log`): six frame
+permutations,24 Plan/Site lifecycles, four reviews, five stale guards and73 fresh
+Opens. All337 standard checks therefore have passing results across these runs;
+the initial failures remain recorded. Root inspected opposite-anchor Plan preview
+and rotated Site commit. This flat native fixture does not qualify pitched BRep
+interaction. Six protected checks pass with exit0, no timeout/capture failure,
+confirmed termination and a host outside the job (`protected-imports.log`, result
+directory `artifacts/import-worker-independent/release-560c889de5c64603a6fb6738680b41f6`).
+Eight current smoke cases pass; executable and source/destination evidence hashes
+are verified in this wave's `desktop-smoke/`. Root inspected Measure100% and
+Design200%. Performance sampling remains incomplete; the legacy seeded sketch
+still withholds GLA and this smoke does not qualify new-wall-room GLA. Source-kit
+inventory is2088; both diff checks pass. Consumed inputs stayed frozen during root
+jobs; no writer retains ownership. Root reviewed the integrated contract,
+interfaces, source admission, composition, lifetime/reader handling and evidence.
+Same-host roof/skylight and other physical-family combinations remain outside this
+dialect. No new installation, Apex compatibility or production acceptance is claimed.
+
 ### October 14 component and whole-roof resizing qualified
 
 The component/stair checkpoint is committed and pushed as `d37ccd11`; exact

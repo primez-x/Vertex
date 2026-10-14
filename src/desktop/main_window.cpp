@@ -27187,7 +27187,11 @@ public:
     }
 
     static PhaseAssemblyInstancePropertyEditAuthoring draftComponentAxisResizeAuthoring(
-        const DocumentSnapshot& source,std::span<const AssemblyDirectionalResizeTarget> targets) {
+        const DocumentSnapshot& source,std::span<const AssemblyDirectionalResizeTarget> targets,
+        std::span<const RoofPlanResizeIntent> roof_requests={},
+        std::span<const RoofOpeningDirectionalResizeRequest> child_requests={}) {
+        if (!roof_requests.empty() && !child_requests.empty())
+            require_roof_skylight_directional_resize_source_admission(source,targets,roof_requests,child_requests);
         AssemblyExpansionBudget budget;
         PhaseAssemblyInstancePropertyEditAuthoring authoring;
         authoring.intents=draft_assembly_directional_resize_intents(source,targets,budget);
@@ -27240,9 +27244,23 @@ public:
                     "Resize component dimensions");
             if (mixed_directional_intent->at("version")!=39 && mixed_directional_intent->at("version")!=40 &&
                 mixed_directional_intent->at("version")!=41 && mixed_directional_intent->at("version")!=42 &&
-                mixed_directional_intent->at("version")!=43 && mixed_directional_intent->at("version")!=44)
+                mixed_directional_intent->at("version")!=43 && mixed_directional_intent->at("version")!=44 &&
+                mixed_directional_intent->at("version")!=45)
                 throw std::invalid_argument("The mixed directional resize proposal changed.");
             auto value=*mixed_directional_intent;
+            if (value.at("version")==45) {
+                (void)validate_mixed_selection_property_edit_intent(value);
+                std::vector<RoofPlanResizeIntent> roofs;
+                for (const auto& row:value.at("roof_plan_resizes"))
+                    roofs.push_back(decode_roof_plan_resize_intent(row));
+                std::vector<RoofOpeningDirectionalResizeRequest> children;
+                for (const auto& row:value.at("roof_opening_axis_requests"))
+                    children.push_back({{row.at("roof_id").get<std::string>(),row.at("opening_id").get<std::string>()},
+                        row.at("sx").get<double>(),row.at("sy").get<double>(),
+                        {row.at("anchor_m").at(0).get<double>(),row.at("anchor_m").at(1).get<double>()},
+                        row.at("frame_rotation_radians").get<double>()});
+                preflight_component_roof_skylight_directional_resize(source,authoring,roofs,children);
+            }
             const auto component=prepare_phase_assembly_instance_property_edit(source,authoring);
             value["component_request"]=component.request();
             value["component_identity_reservations"]=component.result().fresh_identity_ids;
@@ -27417,6 +27435,48 @@ public:
         }
         std::sort(roofs.begin(),roofs.end(),[](const auto& left,const auto& right){return left.roof_id<right.roof_id;});
         const auto prepared=prepare_component_roof_directional_resize(source,components,roofs,"Resize selected plan dimensions");
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision=source.revision();command.message=prepared.intent().at("message").get<std::string>();
+        command.mixed_selection_edit_completion=true;
+        command.mixed_selection_edit_intent=complete_mixed_selection_property_edit(source,prepared,{},{});
+        return command;
+    }
+
+    static std::pair<std::vector<RoofPlanResizeIntent>,std::vector<RoofOpeningDirectionalResizeRequest>>
+    componentRoofSkylightCohortRequests(
+        const ComponentAxisResizeCohortCapture& cohort,Vec2 canvas_anchor,double sx,double sy,
+        const BuildingViewFrame* projection) {
+        std::vector<RoofPlanResizeIntent> roofs;
+        for (const auto& id:cohort.roof_ids) {
+            const auto anchor=!cohort.site_frames.empty()
+                ? site_source_plan_point(canvas_anchor,cohort.site_frames.at(id))
+                : projection ? unproject_plan_point(canvas_anchor,*projection) : canvas_anchor;
+            roofs.push_back({id.toStdString(),sx,sy,anchor,componentCohortModelAxis(cohort,id,projection),
+                PlanAxisResizeAnchorMode::shared_frame});
+        }
+        std::sort(roofs.begin(),roofs.end(),[](const auto& a,const auto& b){return a.roof_id<b.roof_id;});
+        std::vector<RoofOpeningDirectionalResizeRequest> children;
+        for (const auto& child:cohort.children) {
+            const auto anchor=!cohort.site_frames.empty()
+                ? site_source_plan_point(canvas_anchor,cohort.site_frames.at(child.roof_id))
+                : projection ? unproject_plan_point(canvas_anchor,*projection) : canvas_anchor;
+            children.push_back({{child.roof_id.toStdString(),child.opening_id.toStdString()},sx,sy,anchor,
+                componentCohortModelAxis(cohort,child.roof_id,projection)});
+        }
+        std::sort(children.begin(),children.end(),[](const auto& a,const auto& b){
+            return std::tie(a.target.roof_id,a.target.opening_id)<std::tie(b.target.roof_id,b.target.opening_id);
+        });
+        return {std::move(roofs),std::move(children)};
+    }
+
+    static Command componentRoofSkylightCohortAxisResizeCommand(const DocumentSnapshot& source,
+        const PhaseAssemblyInstancePropertyEditAuthoring& components,
+        const ComponentAxisResizeCohortCapture& cohort,Vec2 canvas_anchor,double sx,double sy,
+        const BuildingViewFrame* projection) {
+        if (sx==1.0 && sy==1.0) return ApplyEntityChanges{source.revision(),{}, {},"Resize selected plan dimensions"};
+        const auto operators=componentRoofSkylightCohortRequests(cohort,canvas_anchor,sx,sy,projection);
+        const auto prepared=prepare_component_roof_skylight_directional_resize(source,components,operators.first,operators.second,
+            "Resize selected plan dimensions");
         ApplyBoundaryConstraintChanges command;
         command.expected_revision=source.revision();command.message=prepared.intent().at("message").get<std::string>();
         command.mixed_selection_edit_completion=true;
@@ -27719,13 +27779,25 @@ public:
         }
         if (!component) throw std::invalid_argument("This resize cohort needs an independent component.");
         if (!cohort.roof_ids.empty()) {
-            if (componentCohortPhysicalFamilyCount(cohort)!=0 || !cohort.stair_ids.empty())
+            if (!cohort.slab_ids.empty() || !cohort.structural_ids.empty() || !cohort.stair_ids.empty())
                 throw std::invalid_argument("Select independent components and ordinary unjoined roofs for these side grips.");
             std::vector<RoofPlanResizeIntent> roofs;
             for (const auto& id:cohort.roof_ids)
                 roofs.push_back({id.toStdString(),1.0,1.0,{},0.0,PlanAxisResizeAnchorMode::shared_frame});
             std::sort(roofs.begin(),roofs.end(),[](const auto& left,const auto& right){return left.roof_id<right.roof_id;});
-            require_roof_directional_resize_source_admission(source,roofs);
+            if (cohort.children.empty()) require_roof_directional_resize_source_admission(source,roofs);
+            else {
+                std::vector<RoofOpeningDirectionalResizeRequest> children;
+                for (const auto& child:cohort.children)
+                    children.push_back({{child.roof_id.toStdString(),child.opening_id.toStdString()},1.0,1.0,{},0.0});
+                std::sort(children.begin(),children.end(),[](const auto& a,const auto& b){
+                    return std::tie(a.target.roof_id,a.target.opening_id)<std::tie(b.target.roof_id,b.target.opening_id);
+                });
+                std::vector<AssemblyDirectionalResizeTarget> components;
+                for (const auto& id:cohort.ids) if (!cohort.roof_ids.contains(id))
+                    components.push_back({id.toStdString(),{{},1.0,1.0,0.0}});
+                require_roof_skylight_directional_resize_source_admission(source,components,roofs,children);
+            }
         }
         if (!cohort.stair_ids.empty()) {
             if (componentCohortPhysicalFamilyCount(cohort)!=0)
@@ -29990,14 +30062,14 @@ public:
             PhaseWallReplacementIdentityMap overlays;
             auto identities=alternativeCommandReplacementIdentities(command,
                 nullptr,nullptr,nullptr,nullptr,&source,nullptr,&overlays);
-            if (phase->mixed_selection_edit_intent.at("version")==40 || phase->mixed_selection_edit_intent.at("version")==42)
+            if (phase->mixed_selection_edit_intent.at("version")==40 || phase->mixed_selection_edit_intent.at("version")==42 || phase->mixed_selection_edit_intent.at("version")==45)
                 for (const auto& child:phase->mixed_selection_edit_intent.at("roof_opening_axis_requests")) {
                     // These retained hosts own regenerated child ink. This
                     // rendering-only correspondence grants no owner selection.
                     const auto host=child.at("roof_id").get<std::string>();
                     identities.emplace(host,host);
                 }
-            if (phase->mixed_selection_edit_intent.at("version")==44)
+            if (phase->mixed_selection_edit_intent.at("version")==44 || phase->mixed_selection_edit_intent.at("version")==45)
                 for (const auto& roof:phase->mixed_selection_edit_intent.at("roof_plan_resizes")) {
                     const auto owner=roof.at("roof_id").get<std::string>();
                     identities.emplace(owner,owner);
@@ -30695,13 +30767,22 @@ public:
                             else if (axis_cohort) {
                                 const auto targets=componentCohortResizeTargets(*axis_cohort,axis_canvas_anchor,
                                     axis_scales->first,axis_scales->second,view_context ? &view_context->frame : nullptr);
-                                *component_authoring=draftComponentAxisResizeAuthoring(*source,
+                                if (!axis_cohort->roof_ids.empty() && !axis_cohort->children.empty()) {
+                                    const auto operators=componentRoofSkylightCohortRequests(*axis_cohort,axis_canvas_anchor,
+                                        axis_scales->first,axis_scales->second,view_context ? &view_context->frame : nullptr);
+                                    *component_authoring=draftComponentAxisResizeAuthoring(*source,
+                                        std::span<const AssemblyDirectionalResizeTarget>{targets},operators.first,operators.second);
+                                } else *component_authoring=draftComponentAxisResizeAuthoring(*source,
                                     std::span<const AssemblyDirectionalResizeTarget>{targets});
                             } else *component_authoring=draftComponentAxisResizeAuthoring(*source,id.toStdString(),
                                     axis_scales->first,axis_scales->second,position);
                             if (component_release)
                                 command=componentAxisResizeCommand(*source,**component_authoring,
                                     component_release->mixed_directional_intent);
+                            else if (axis_cohort && !axis_cohort->roof_ids.empty() && !axis_cohort->children.empty())
+                                command=componentRoofSkylightCohortAxisResizeCommand(*source,**component_authoring,
+                                    *axis_cohort,axis_canvas_anchor,axis_scales->first,axis_scales->second,
+                                    view_context ? &view_context->frame : nullptr);
                             else if (axis_cohort && !axis_cohort->roof_ids.empty())
                                 command=componentRoofCohortAxisResizeCommand(*source,**component_authoring,
                                     *axis_cohort,axis_canvas_anchor,axis_scales->first,axis_scales->second,
@@ -32766,7 +32847,10 @@ public:
                             command->mixed_selection_edit_intent.at("version")!=retained.at("version"))
                             throw std::invalid_argument("The reviewed mixed resize changed its captured proposal.");
                         const auto& reviewed=command->mixed_selection_edit_intent;
-                        const bool unchanged=retained.at("version")==44
+                        const bool unchanged=retained.at("version")==45
+                            ? reviewed.at("roof_plan_resizes")==retained.at("roof_plan_resizes") &&
+                              reviewed.at("roof_opening_axis_requests")==retained.at("roof_opening_axis_requests")
+                            : retained.at("version")==44
                             ? reviewed.at("roof_plan_resizes")==retained.at("roof_plan_resizes")
                             : retained.at("version")==43
                             ? reviewed.at("stair_axis_requests")==retained.at("stair_axis_requests")
@@ -33645,7 +33729,8 @@ public:
                 throw std::invalid_argument("The mixed resize proposal is incomplete.");
             const auto* command=std::get_if<ApplyBoundaryConstraintChanges>(&*m_entity_transform_command);
             if (!command || !command->mixed_selection_edit_completion ||
-                command->mixed_selection_edit_intent.at("version")!=(!release->cohort->roof_ids.empty() ? 44 :
+                command->mixed_selection_edit_intent.at("version")!=(!release->cohort->roof_ids.empty() ?
+                    (release->cohort->children.empty() ? 44 : 45) :
                     !release->cohort->stair_ids.empty() ? 43 :
                     componentCohortPhysicalFamilyCount(*release->cohort)>=2 ? 42 :
                     !release->cohort->structural_ids.empty() ? 41 :
@@ -54484,7 +54569,7 @@ private:
                     validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent")) :
                     validate_mixed_selection_edit_intent(encoded.at("mixed_selection_edit_intent"));
                 const auto dialect=intent.at("version").get<int>();
-                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=29) || dialect==32 || dialect==33 || dialect==34 || dialect==35 || dialect==36 || dialect==37 || dialect==38 || dialect==39 || dialect==40 || dialect==41 || dialect==42 || dialect==43 || dialect==44)) {
+                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=29) || dialect==32 || dialect==33 || dialect==34 || dialect==35 || dialect==36 || dialect==37 || dialect==38 || dialect==39 || dialect==40 || dialect==41 || dialect==42 || dialect==43 || dialect==44 || dialect==45)) {
                     // Properties dialects have no transform roof_authoring.
                     // Active-baseline redirects require independently replayed
                     // source authority rather than extracting supplied maps.
@@ -64185,8 +64270,8 @@ private:
                     mixed_edit=true;
                     const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);
                     const auto properties_dialect=intent.at("version").get<int>();
-                    if (properties_dialect==39 || properties_dialect==40 || properties_dialect==41 || properties_dialect==42 || properties_dialect==43 || properties_dialect==44) {
-                        if (properties_dialect==44) for (const auto& row:intent.at("roof_plan_resizes"))
+                    if (properties_dialect==39 || properties_dialect==40 || properties_dialect==41 || properties_dialect==42 || properties_dialect==43 || properties_dialect==44 || properties_dialect==45) {
+                        if (properties_dialect==44 || properties_dialect==45) for (const auto& row:intent.at("roof_plan_resizes"))
                             targets.insert(row.at("roof_id").template get<std::string>());
                         if (properties_dialect==43) for (const auto& row:intent.at("stair_axis_requests"))
                             targets.insert(row.at("stair_id").template get<std::string>());
@@ -64194,7 +64279,7 @@ private:
                             targets.insert(decode_slab_geometry_edit_intent(row).slab_id);
                         if (properties_dialect==41 || properties_dialect==42) for (const auto& row:intent.at("structural_axis_requests"))
                             targets.insert(row.at("object_id").template get<std::string>());
-                        if (properties_dialect==40 || properties_dialect==42) for (const auto& row:intent.at("roof_opening_axis_requests"))
+                        if (properties_dialect==40 || properties_dialect==42 || properties_dialect==45) for (const auto& row:intent.at("roof_opening_axis_requests"))
                             targets.insert(row.at("opening_id").template get<std::string>());
                         const auto authoring=decode_phase_assembly_instance_property_edit_authoring(
                             intent.at("component_request").at("authoring"));
@@ -64259,7 +64344,7 @@ private:
                     // Qualified children never promote their compatibility host
                     // IDs into ordinary presented-object selection authority.
                     const json no_roof_selection=nullptr;
-                    const auto& roof_selection=(properties_dialect==39 || properties_dialect==40 || properties_dialect==41 || properties_dialect==42 || properties_dialect==43 || properties_dialect==44) ? no_roof_selection :
+                    const auto& roof_selection=(properties_dialect==39 || properties_dialect==40 || properties_dialect==41 || properties_dialect==42 || properties_dialect==43 || properties_dialect==44 || properties_dialect==45) ? no_roof_selection :
                         (intent.at("version")==16 || intent.at("version")==17 || intent.at("version")==22 || intent.at("version")==23 || intent.at("version")==25 || intent.at("version")==26 || intent.at("version")==28 || intent.at("version")==29 || intent.at("version")==32 || intent.at("version")==33 || intent.at("version")==34 || intent.at("version")==35 || intent.at("version")==36 || intent.at("version")==37 || intent.at("version")==38)
                         ? intent.at("base_intent") : intent;
                     if (!roof_selection.is_null()) for (const auto& child:roof_selection.at("roof_opening_members"))

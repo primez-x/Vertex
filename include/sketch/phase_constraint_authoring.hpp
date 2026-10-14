@@ -2,6 +2,7 @@
 
 #include "sketch/constraint_authoring.hpp"
 #include "sketch/assembly_instance_property_edit.hpp"
+#include "sketch/assembly_directional_resize.hpp"
 #include "sketch/roof_opening_group_edit.hpp"
 #include "sketch/phase_roof_resize.hpp"
 
@@ -398,6 +399,23 @@ void preflight_component_roof_directional_resize(
 [[nodiscard]] ComponentRoofDirectionalResizeComposition compose_component_roof_directional_resize(
     const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditPreparation&,
     std::span<const RoofPlanResizeIntent>, std::string_view);
+struct ComponentRoofSkylightDirectionalResizeComposition {
+    CoordinatedComponentPropertyComposition components;
+    std::map<std::string,std::string,std::less<>> roof_selected_original_to_proposed;
+    std::map<std::pair<std::string,std::string>,RoofOpeningGroupMember> roof_children;
+    std::vector<nlohmann::json> phase_authorings;
+};
+// Analytical aggregate gates reserve pending allocations, proof and dimension
+// growth before any component draft or per-owner native manufacture.
+void require_roof_skylight_directional_resize_source_admission(
+    const DocumentSnapshot&, std::span<const AssemblyDirectionalResizeTarget>,
+    std::span<const RoofPlanResizeIntent>, std::span<const RoofOpeningDirectionalResizeRequest>);
+void preflight_component_roof_skylight_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
+    std::span<const RoofPlanResizeIntent>, std::span<const RoofOpeningDirectionalResizeRequest>);
+[[nodiscard]] ComponentRoofSkylightDirectionalResizeComposition compose_component_roof_skylight_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditPreparation&,
+    std::span<const RoofPlanResizeIntent>, std::span<const RoofOpeningDirectionalResizeRequest>, std::string_view);
 // Pure analytical preflight, including units. Charged before component/native
 // manufacture; no supplied candidate or completed command becomes authority.
 void require_stair_directional_resize_source_admission(

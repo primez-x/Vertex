@@ -22,6 +22,13 @@ struct AssemblyDirectionalResize {
     std::optional<AssemblyTransform> operation_frame{};
 };
 
+// One actual independent document root and its captured source-space operator.
+// Shared by analytical aggregate admission and the desktop geometry producer.
+struct AssemblyDirectionalResizeTarget {
+    std::string independent_entity_id;
+    AssemblyDirectionalResize operation;
+};
+
 struct AssemblyDirectionalResizeNodeDraft {
     std::vector<std::string> part_path;
     std::string type_id;
