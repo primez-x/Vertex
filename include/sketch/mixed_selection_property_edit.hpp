@@ -29,6 +29,12 @@ struct StructuralDirectionalResizeRequest {
     Vec2 anchor_m;
     double frame_rotation_radians{};
 };
+struct StairDirectionalResizeRequest {
+    std::string stair_id;
+    double sx{1.0}, sy{1.0};
+    Vec2 anchor_m;
+    double frame_rotation_radians{};
+};
 struct ComponentStructuralDirectionalResizeAllocation {
     PhaseStructuralReplacementIdentityMap identities;
     std::map<std::pair<std::string,std::string>,std::string> hosted_instance_identities;
@@ -158,6 +164,14 @@ private:
     std::span<const StructuralDirectionalResizeRequest>,
     const std::optional<ComponentStructuralDirectionalResizeAllocation>&,
     std::span<const RoofOpeningDirectionalResizeRequest>, std::string_view);
+
+// Closed Properties43/command52: independent component geometry request7/8/9
+// and ordinary v1 straight stairs with existing top landings. All requested
+// owners, including units, admit against the complete original source before
+// native staging; one final component dimension batch owns explicit retirement.
+[[nodiscard]] MixedSelectionPropertyEditPreparation prepare_component_stair_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
+    std::span<const StairDirectionalResizeRequest>, std::string_view);
 
 // Closed dialect 39: the five original source fences, version,
 // component_request (7/8/9), component_identity_reservations, slab_geometry,

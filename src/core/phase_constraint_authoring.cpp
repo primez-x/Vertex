@@ -39,6 +39,8 @@
 #include "sketch/plan_axis_resize.hpp"
 #include "sketch/stair_attachment_integrity.hpp"
 #include "sketch/stair_property_review.hpp"
+#include "sketch/stair_object_edit.hpp"
+#include "sketch/building_entity.hpp"
 #include "sketch/assembly_instance_property_edit.hpp"
 #include "sketch/phase_assembly_instance_property_edit.hpp"
 #include "sketch/phase_selection_property_edit.hpp"
@@ -4068,6 +4070,275 @@ void validate_directional_physical_freshness(const DocumentSnapshot& source,
     validate_retained_authoring_fresh_identities(source.history(),source.history().size(),fresh);
 }
 } // namespace
+
+namespace {
+// Bounded raw inspection precedes catalog/phase/typed projection. Metadata is
+// charged as source data, never interpreted as a typed host relationship.
+struct StairResizeSourceBudget {
+    std::size_t nodes{},bytes{};
+    void text(std::string_view value) {
+        if (value.size()>64*1024*1024-bytes) invalid("Mixed stair resize source byte budget exceeded");
+        bytes+=value.size();
+    }
+    void visit(const Json& value,std::size_t depth=0) {
+        if (depth>64 || ++nodes>4*1024*1024) invalid("Mixed stair resize source node/nesting budget exceeded");
+        if (value.is_discarded() || value.is_binary() ||
+            (value.is_number_float() && !std::isfinite(value.get<double>())))
+            invalid("Mixed stair resize source JSON is nonportable");
+        if (value.is_string()) text(value.get_ref<const std::string&>());
+        if (value.is_object()) for (const auto& [key,child]:value.items()) { text(key);visit(child,depth+1); }
+        else if (value.is_array()) for (const auto& child:value) visit(child,depth+1);
+    }
+};
+bool stair_resize_reference(const Json& value,const std::set<std::string,std::less<>>& owners) {
+    if (value.is_string()) return owners.contains(value.get_ref<const std::string&>());
+    if (value.is_array()) for (const auto& child:value) if (stair_resize_reference(child,owners)) return true;
+    if (value.is_object()) for (const auto& [key,child]:value.items()) {
+        (void)key;
+        if (stair_resize_reference(child,owners)) return true;
+    }
+    return false;
+}
+// The existing typed object's closed profile includes all known fields and
+// explicit absence. This source-only projection budgets capture including units;
+// actual edit authority is still obtained solely by capture/replay below.
+Json stair_resize_capture_projection(const Entity& entity) {
+    Json profile=Json::object();
+    for (const auto* key:{"version","form","base_position_m","orientation_rad","riser_count","total_rise_m",
+        "going_m","width_m","top_landing","level_connection","flights","landings","vertical_placement"})
+        profile[key]=entity.properties.contains(key) ? entity.properties.at(key) : Json(nullptr);
+    const auto& landing=entity.properties.at("top_landing");
+    profile["top_landing"]={{"depth_m",landing.at("depth_m")},{"thickness_m",landing.at("thickness_m")}};
+    StairObjectEditIntent intent{entity.id,std::move(profile),entity.properties.value("quantity_entries",Json(nullptr))};
+    return encode_stair_object_edit_intent(intent);
+}
+} // namespace
+
+namespace {
+void preflight_stair_directional_resize_impl(const DocumentSnapshot& source,
+    const PhaseAssemblyInstancePropertyEditAuthoring* authoring,std::span<const StairDirectionalResizeRequest> requests) {
+    if (requests.empty() || requests.size()>1000 || (authoring && (authoring->intents.empty() ||
+        authoring->intents.size()>1000-requests.size()))) invalid("Mixed stair resize aggregate selection bound exceeded");
+    const auto& actual=source.entities();
+    if (actual.size()>100000) invalid("Mixed stair resize source entity bound exceeded");
+    StairResizeSourceBudget raw;
+    for (const auto& [id,entity]:actual) {
+        if (id!=entity.id || !entity.properties.is_object() || !entity.extensions.is_object())
+            invalid("Mixed stair resize requires actual identified source envelopes");
+        raw.text(id);raw.text(entity.type);raw.visit(entity.properties);raw.visit(entity.extensions);
+    }
+    const auto component_wire=authoring ? encode_phase_assembly_instance_property_edit_authoring(*authoring) : Json(nullptr);
+    if (authoring) raw.visit(component_wire);
+    if (authoring && component_wire.at("version")!=7 && component_wire.at("version")!=8 && component_wire.at("version")!=9)
+        invalid("Mixed stair resize requires component geometry request seven, eight or nine");
+    std::set<ComponentTarget> roots;
+    std::set<std::string,std::less<>> component_owners;
+    if (authoring) for (const auto& intent:authoring->intents) {
+        if (!intent.target.document_entity_id || !intent.properties.empty() || !intent.materials.empty() ||
+            !intent.quantities.empty() || intent.pose.operation!=AssemblyInstancePropertyPatchOperation::unchanged ||
+            intent.pose.x_metres || intent.pose.y_metres || intent.pose.z_metres || intent.pose.rotation_radians ||
+            intent.pose.scale || intent.pose.vertical_scale || intent.pose.mirrored_y ||
+            intent.profile_geometry.operation==AssemblyInstancePropertyPatchOperation::unchanged)
+            invalid("Mixed stair resize admits independent document component geometry only");
+        roots.insert(component_root(intent.target));
+        component_owners.insert(*intent.target.document_entity_id);
+    }
+    // Existing catalog transfer bounds are shared across the complete source.
+    // Component replay retains its separate established expansion bounds.
+    AssemblyCatalogTransferBudget catalog_budget;
+    for (const auto& [id,entity]:actual) {
+        (void)id;if (entity.type=="assembly_model") admit_existing_assembly_catalog_work(entity,catalog_budget);
+    }
+    std::set<std::string,std::less<>> stairs;
+    std::size_t work{};
+    for (const auto& request:requests) {
+        if (request.stair_id.empty() || !stairs.insert(request.stair_id).second)
+            invalid("Mixed stair resize requires unique actual owners");
+        if (!std::isfinite(request.sx) || !std::isfinite(request.sy) || request.sx<=0 || request.sy<=0 ||
+            !std::isfinite(request.anchor_m.x) || !std::isfinite(request.anchor_m.y) || !std::isfinite(request.frame_rotation_radians))
+            invalid("Mixed stair resize requires positive factors and a finite frame");
+        const auto found=actual.find(request.stair_id);
+        if (found==actual.end() || found->second.type!="stair") invalid("Mixed stair resize actual owner is missing");
+        const auto& p=found->second.properties;
+        if (!p.contains("version") || !p.at("version").is_number_integer() || p.at("version")!=1 ||
+            !p.contains("form") || p.at("form")!="straight_stair_flight" ||
+            !p.contains("top_landing") || !p.at("top_landing").is_object())
+            invalid("Mixed stair resize requires v1 straight stairs with existing valid top landings");
+        for (const auto* key:{"transform","level_connection","vertical_placement","phase_id"})
+            if (p.contains(key)) invalid("Mixed stair resize refuses transforms, levels and explicit phase authority, including units");
+        for (const auto* key:{"flights","landings"}) if (p.contains(key))
+            invalid("Mixed stair resize cannot preserve dormant topology outside v1 typed authority, including units");
+        if (!p.contains("riser_count") || !p.at("riser_count").is_number_integer() ||
+            (p.at("riser_count").is_number_integer() && !p.at("riser_count").is_number_unsigned() && p.at("riser_count").get<std::int64_t>()<1))
+            invalid("Mixed stair resize riser count must be positive");
+        const auto count=p.at("riser_count").get<std::uint64_t>();
+        if (count>=100000-work) invalid("Mixed stair resize aggregate riser plus landing work budget exceeded");
+        work+=static_cast<std::size_t>(count)+1;
+    }
+    std::size_t associations{};
+    for (const auto& [id,entity]:actual) {
+        const auto& p=entity.properties;
+        if (entity.type=="model_phases") {
+            const auto registry=ModelPhases::from_json(p.at("model"));
+            for (const auto& member:registry.entity_ids()) if (stairs.contains(member))
+                invalid("Mixed stair resize requires absence from every phase registry, including baseline-only");
+        }
+        if (entity.type==kSheetViewEntityType) {
+            const auto model=decode_sheet_view_entity(entity);
+            for (const auto& view:model.views()) for (const auto& overlay:view.overlays)
+                if (overlay.dimension_binding && stairs.contains(overlay.dimension_binding->object_id))
+                    invalid("Mixed stair resize excludes stair-owned saved-view dimensions, including units");
+        }
+        const bool typed_rail=entity.type=="railing" && p.contains("version") && p.at("version").is_number_integer() &&
+            p.contains("form") && ((p.at("version")==2 && p.at("form")=="stair_flight_railing") ||
+                (p.at("version")==3 && p.at("form")=="stair_landing_railing"));
+        if (typed_rail) {
+            const auto rail=decode_railing_properties(id,p);
+            if ((rail.host && stairs.contains(rail.host->stair_id)) ||
+                (rail.landing_host && stairs.contains(rail.landing_host->stair_id)))
+                invalid("Mixed stair resize excludes actual attached rails, including units");
+        }
+        if (entity.type=="railing" && !typed_rail && p.contains("host") && p.at("host").is_object() &&
+            p.at("host").contains("stair_id") && p.at("host").at("stair_id").is_string() &&
+            stairs.contains(p.at("host").at("stair_id").get<std::string>()))
+            invalid("Mixed stair resize cannot preserve an affected opaque railing binding through full typed replay");
+        if (entity.type=="assembly_model") {
+            const auto model=AssemblyModel::from_json(p.at("model"));
+            for (const auto& row:model.instances()) if (row.placement && stairs.contains(row.placement->host_entity_id))
+                invalid("Mixed stair resize excludes actual hosted component roots, including units");
+        }
+        // Only authoritative reference slots establish affected dependencies.
+        // Opaque vendor host lookalikes do not create stair or assembly hosts.
+        for (const auto* key:{"entity_ids","wall_ids","owner_id","boundary_id","dependency_ids","dependencies"})
+            if (p.contains(key) && stair_resize_reference(p.at(key),stairs))
+                invalid("Mixed stair resize has an unsupported affected dependency or constraint, including units");
+        if (entity.type=="constraint" && p.contains("bindings") && stair_resize_reference(p.at("bindings"),stairs))
+            invalid("Mixed stair resize excludes affected persistent constraints, including units");
+        if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+        if (p.contains("target") && stair_resize_reference(p.at("target"),stairs))
+            invalid("Mixed stair resize excludes stair-owned dimensions, including units");
+        // Unknown affected dimension codecs must refuse before component native
+        // replay as well. Read only their established qualified carrier slots.
+        bool component_association=false;
+        if (p.contains("target") && p.at("target").is_object() && p.at("target").contains("entity_id") &&
+            p.at("target").at("entity_id").is_string()) {
+            const auto& carrier=p.at("target").at("entity_id").get_ref<const std::string&>();
+            component_association=component_owners.contains(carrier);
+        }
+        if (p.contains("target") && p.at("target").is_object() && p.at("target").contains("assembly")) {
+            const auto& target=p.at("target").at("assembly");
+            if (target.is_object() && target.contains("catalog_id") && target.at("catalog_id").is_string() &&
+                target.contains("instance_id") && target.at("instance_id").is_string() &&
+                target.contains("document_entity_id") && target.at("document_entity_id").is_string()) {
+                component_association=component_association || roots.contains(ComponentTarget{target.at("catalog_id").get<std::string>(),
+                    target.at("instance_id").get<std::string>(),target.at("document_entity_id").get<std::string>(),{}});
+            }
+        }
+        if (!is_assembly_boundary_dimension_format(inspect_boundary_dimension_version(entity).format)) {
+            if (component_association) invalid("Mixed stair resize has an unsupported affected component dimension");
+            continue;
+        }
+        const auto dimension=decode_boundary_dimension_entity(entity);
+        if (!dimension.supported() || !dimension.dimension->assembly_target)
+            invalid("Mixed stair resize has an unsupported component dimension carrier");
+        if (roots.contains(component_root(dimension.dimension->assembly_target->component)) && ++associations>1000)
+            invalid("Mixed stair resize component dimension association budget exceeded");
+    }
+    // All work and dependencies are inventoried before typed decoding allocates
+    // layout treads and before any per-owner native manufacture.
+    std::size_t bytes=authoring ? component_wire.dump().size() : 0,nodes{};
+    if (bytes>proof_budget) invalid("Mixed stair resize aggregate typed capture byte budget exceeded");
+    const auto charge_nodes=[&](const auto& self,const Json& value,std::size_t depth) -> void {
+        if (depth>32 || ++nodes>65536) invalid("Mixed stair resize aggregate typed capture node/nesting budget exceeded");
+        if (value.is_object()) for (const auto& [key,child]:value.items()) { (void)key;self(self,child,depth+1); }
+        else if (value.is_array()) for (const auto& child:value) self(self,child,depth+1);
+    };
+    if (authoring) charge_nodes(charge_nodes,component_wire,0);
+    for (const auto& request:requests) {
+        const auto wire=stair_resize_capture_projection(actual.at(request.stair_id));
+        charge_nodes(charge_nodes,wire,0);
+        const auto size=wire.dump().size();
+        // Raw source integer scalars can become longer floating encodings. This
+        // bounded reserve covers the five owned values before native staging.
+        constexpr std::size_t scalar_encoding_reserve=5*32;
+        if (size>proof_budget-bytes || scalar_encoding_reserve>proof_budget-bytes-size)
+            invalid("Mixed stair resize aggregate typed capture byte budget exceeded");
+        bytes+=size+scalar_encoding_reserve;
+    }
+}
+
+} // namespace
+
+void require_stair_directional_resize_source_admission(const DocumentSnapshot& source,
+    std::span<const StairDirectionalResizeRequest> requests) {
+    preflight_stair_directional_resize_impl(source,nullptr,requests);
+}
+
+void preflight_component_stair_directional_resize(const DocumentSnapshot& source,
+    const PhaseAssemblyInstancePropertyEditAuthoring& authoring,std::span<const StairDirectionalResizeRequest> requests) {
+    preflight_stair_directional_resize_impl(source,&authoring,requests);
+}
+
+ComponentStairDirectionalResizeComposition compose_component_stair_directional_resize(
+    const DocumentSnapshot& source,const PhaseAssemblyInstancePropertyEditPreparation& component,
+    std::span<const StairDirectionalResizeRequest> requests,std::string_view message) {
+    if (message.size()>1024 || message.find('\0')!=std::string_view::npos)
+        invalid("Mixed stair resize message exceeds its bound");
+    // A borrowed preparation is never authority for a different source.
+    const auto wire=validate_phase_assembly_instance_property_edit_request(component.request());
+    const auto authoring=decode_phase_assembly_instance_property_edit_authoring(wire.at("authoring"));
+    preflight_component_stair_directional_resize(source,authoring,requests);
+    const auto replayed=replay_phase_assembly_instance_property_edit_preparation(source,wire);
+    (void)directional_component_authoring(replayed,requests.size());
+    const auto& actual=source.entities();
+    Entities staged=actual;
+    std::vector<StairObjectEditIntent> edits;
+    std::size_t bytes{};
+    ComponentStairDirectionalResizeComposition result;
+    std::string previous;
+    for (const auto& request:requests) {
+        if (!previous.empty() && previous>=request.stair_id) invalid("Mixed stair resize requires sorted unique operators");
+        previous=request.stair_id;
+        const auto& original=actual.at(request.stair_id);
+        auto edited=stage_stair_plan_axis_resize_entity(original,request.sx,request.sy,request.anchor_m,request.frame_rotation_radians);
+        if (!exact(original,edited)) {
+            try {
+                const auto capture=capture_stair_object_edit(original,edited);
+                if (!capture) invalid("Mixed stair resize full pose/profile capture is unavailable");
+                const auto size=encode_stair_object_edit_intent(*capture).dump().size();
+                if (size>proof_budget-bytes) invalid("Mixed stair resize aggregate typed capture byte budget exceeded");
+                bytes+=size;edits.push_back(*capture);
+            } catch (const std::invalid_argument& error) {
+                invalid(std::string("Mixed stair resize cannot preserve the source through full typed capture: ")+error.what());
+            }
+        }
+        staged.at(request.stair_id)=std::move(edited);
+        result.stair_selected_original_to_proposed.emplace(request.stair_id,request.stair_id);
+    }
+    // Validate every unit through the same full typed native admission as a
+    // changed owner, while refusing any normalized dormant representation.
+    std::vector<StairObjectEditIntent> all_edits=edits;
+    for (const auto& request:requests) if (exact(actual.at(request.stair_id),staged.at(request.stair_id)))
+        all_edits.push_back(decode_stair_object_edit_intent(stair_resize_capture_projection(actual.at(request.stair_id))));
+    const auto physical=replay_stair_object_edit_entities(actual,all_edits);
+    for (const auto& request:requests) if (!exact(physical.at(request.stair_id),staged.at(request.stair_id)))
+        invalid("Mixed stair resize full original-source typed replay differs from raw staging");
+    if (mixed_edit_identity_owners(actual)!=mixed_edit_identity_owners(physical) ||
+        embedded_assembly_presentation_ids(actual)!=embedded_assembly_presentation_ids(physical))
+        invalid("Mixed stair resize introduced or changed physical identity inventory");
+    validate_directional_physical_freshness(source,{physical},replayed,std::nullopt,std::nullopt);
+    std::map<ComponentTarget,ComponentTarget> destinations;
+    for (const auto& intent:authoring.intents) {
+        const auto root=component_root(intent.target);
+        const auto destination=component_root(replayed.result().original_to_proposed.at(intent.target));
+        const auto [entry,inserted]=destinations.emplace(root,destination);
+        if (!inserted && entry->second!=destination) invalid("Mixed stair resize has conflicting component destinations");
+    }
+    result.components=finalize_component_directional_resize(source,replayed,authoring,physical,destinations,{});
+    for (const auto& request:requests) if (!exact(result.components.entities.at(request.stair_id),staged.at(request.stair_id)))
+        invalid("Mixed stair resize final component composition changed the exact native stair envelope");
+    return result;
+}
 
 ComponentSlabDirectionalResizeComposition compose_component_slab_directional_resize(
     const DocumentSnapshot& source,const PhaseAssemblyInstancePropertyEditPreparation& components,

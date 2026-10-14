@@ -6686,6 +6686,7 @@ class MainWindow::Impl {
         std::map<QString,SitePresentationPlacement> site_frames;
         QStringList slab_ids;
         QStringList structural_ids;
+        QStringList stair_ids;
         std::vector<CanvasRoofOpeningTarget> children;
         std::vector<CanvasRoofOpeningControls> controls;
         std::uint64_t controls_generation{};
@@ -27237,7 +27238,8 @@ public:
                 return prepare_component_presentation_property_edit(source,authoring,nullptr,
                     "Resize component dimensions");
             if (mixed_directional_intent->at("version")!=39 && mixed_directional_intent->at("version")!=40 &&
-                mixed_directional_intent->at("version")!=41 && mixed_directional_intent->at("version")!=42)
+                mixed_directional_intent->at("version")!=41 && mixed_directional_intent->at("version")!=42 &&
+                mixed_directional_intent->at("version")!=43)
                 throw std::invalid_argument("The mixed directional resize proposal changed.");
             auto value=*mixed_directional_intent;
             const auto component=prepare_phase_assembly_instance_property_edit(source,authoring);
@@ -27373,6 +27375,27 @@ public:
             "Resize selected plan dimensions");
         ApplyBoundaryConstraintChanges command;
         command.expected_revision=source.revision();command.message="Resize selected plan dimensions";
+        command.mixed_selection_edit_completion=true;
+        command.mixed_selection_edit_intent=complete_mixed_selection_property_edit(source,prepared,{},{});
+        return command;
+    }
+
+    static Command componentStairCohortAxisResizeCommand(const DocumentSnapshot& source,
+        const PhaseAssemblyInstancePropertyEditAuthoring& components,
+        const ComponentAxisResizeCohortCapture& cohort,Vec2 canvas_anchor,double sx,double sy,
+        const BuildingViewFrame* projection) {
+        if (sx==1.0 && sy==1.0) return ApplyEntityChanges{source.revision(),{}, {},"Resize selected plan dimensions"};
+        std::vector<StairDirectionalResizeRequest> stairs;
+        for (const auto& id:cohort.stair_ids) {
+            const auto anchor=!cohort.site_frames.empty()
+                ? site_source_plan_point(canvas_anchor,cohort.site_frames.at(id))
+                : projection ? unproject_plan_point(canvas_anchor,*projection) : canvas_anchor;
+            stairs.push_back({id.toStdString(),sx,sy,anchor,componentCohortModelAxis(cohort,id,projection)});
+        }
+        std::sort(stairs.begin(),stairs.end(),[](const auto& a,const auto& b){return a.stair_id<b.stair_id;});
+        const auto prepared=prepare_component_stair_directional_resize(source,components,stairs,"Resize selected plan dimensions");
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision=source.revision();command.message=prepared.intent().at("message").get<std::string>();
         command.mixed_selection_edit_completion=true;
         command.mixed_selection_edit_intent=complete_mixed_selection_property_edit(source,prepared,{},{});
         return command;
@@ -27636,7 +27659,7 @@ public:
         std::vector<AssemblyDirectionalResizeTarget> targets;
         targets.reserve(static_cast<std::size_t>(cohort.ids.size()));
         for (const auto& id:cohort.ids) {
-            if (cohort.slab_ids.contains(id) || cohort.structural_ids.contains(id)) continue;
+            if (cohort.slab_ids.contains(id) || cohort.structural_ids.contains(id) || cohort.stair_ids.contains(id)) continue;
             const auto anchor=!cohort.site_frames.empty()
                 ? site_source_plan_point(canvas_anchor,cohort.site_frames.at(id))
                 : projection ? unproject_plan_point(canvas_anchor,*projection) : canvas_anchor;
@@ -27649,6 +27672,7 @@ public:
         ComponentAxisResizeCohortCapture& cohort) {
         cohort.slab_ids.clear();
         cohort.structural_ids.clear();
+        cohort.stair_ids.clear();
         bool component=false;
         for (const auto& id:cohort.ids) {
             const auto& entity=source.entities().at(id.toStdString());
@@ -27663,11 +27687,20 @@ public:
                 }
                 cohort.structural_ids.push_back(id);
             }
+            else if (entity.type=="stair") cohort.stair_ids.push_back(id);
             else if (entity.type=="assembly_instance" &&
                 !geometric_assembly_for_child(source,id.toStdString())) component=true;
             else throw std::invalid_argument("Side grips require independent components and supported plan objects.");
         }
         if (!component) throw std::invalid_argument("This resize cohort needs an independent component.");
+        if (!cohort.stair_ids.empty()) {
+            if (componentCohortPhysicalFamilyCount(cohort)!=0)
+                throw std::invalid_argument("Select independent components and ordinary straight stairs for these side grips.");
+            std::vector<StairDirectionalResizeRequest> stairs;
+            for (const auto& id:cohort.stair_ids) stairs.push_back({id.toStdString(),1.0,1.0,{},0.0});
+            std::sort(stairs.begin(),stairs.end(),[](const auto& a,const auto& b){return a.stair_id<b.stair_id;});
+            require_stair_directional_resize_source_admission(source,stairs);
+        }
         if (!cohort.children.empty()) {
             std::set<std::string,std::less<>> phased;
             for (const auto& [id,entity]:source.entities()) if (entity.type=="model_phases") {
@@ -27813,6 +27846,33 @@ public:
         return *result;
     }
 
+    static Bounds2 componentCohortStairBounds(const Entity& entity,
+        const ComponentAxisResizeCohortCapture& cohort,const QString& id,
+        const BuildingViewFrame* projection) {
+        const auto layout=derive_stair_layout(std::get<StairFlight>(decode_building_entity(entity)));
+        std::optional<Bounds2> result;
+        const auto include=[&](const StairPolygon& polygon) {
+            for (const auto& corner:polygon) {
+                Vec2 point{corner.x,corner.y};
+                if (!cohort.site_frames.empty()) point=site_presented_plan_point(point,cohort.site_frames.at(id));
+                else if (projection) point=project_plan_point(point,*projection);
+                if (!std::isfinite(point.x) || !std::isfinite(point.y))
+                    throw std::invalid_argument("The stair resize frame exceeds the supported range.");
+                if (!result) result=Bounds2{point,point};
+                else {
+                    result->minimum.x=std::min(result->minimum.x,point.x);
+                    result->minimum.y=std::min(result->minimum.y,point.y);
+                    result->maximum.x=std::max(result->maximum.x,point.x);
+                    result->maximum.y=std::max(result->maximum.y,point.y);
+                }
+            }
+        };
+        for (const auto& flight:layout.flights) include(flight.footprint);
+        for (const auto& landing:layout.landings) include(landing.footprint);
+        if (!result) throw std::invalid_argument("The stair has no complete flight and landing footprint.");
+        return *result;
+    }
+
     static CanvasSelectionFrame componentCohortPlanFrame(const DocumentSnapshot& candidate,
         const ComponentAxisResizeCohortCapture& cohort,const BuildingViewFrame* projection=nullptr,
         const Command* command=nullptr,const DocumentSnapshot* source=nullptr) {
@@ -27824,6 +27884,7 @@ public:
         std::vector<std::pair<QString,AssemblyDocumentInstance>> roots;
         std::vector<std::pair<QString,const Entity*>> slabs;
         std::vector<std::pair<QString,const Entity*>> structural;
+        std::vector<std::pair<QString,const Entity*>> stairs;
         std::set<QString> unique;
         for (const auto& id:cohort.ids) {
             if (id.isEmpty() || id.toStdString().size()>128 || !unique.insert(id).second)
@@ -27835,6 +27896,9 @@ public:
             }
             if (entity.id==target && (entity.type=="column" || entity.type=="beam") && cohort.structural_ids.contains(id)) {
                 structural.emplace_back(id,&entity);continue;
+            }
+            if (entity.id==target && entity.type=="stair" && cohort.stair_ids.contains(id)) {
+                stairs.emplace_back(id,&entity);continue;
             }
             if (entity.id!=target || entity.type!="assembly_instance")
                 throw std::invalid_argument("The component resize frame lost an independent source root.");
@@ -27863,6 +27927,16 @@ public:
         }
         for (const auto& [id,entity]:slabs) {
             const auto bounds=componentCohortSlabBounds(*entity,cohort,id,projection);
+            if (!canvas_bounds) canvas_bounds=bounds;
+            else {
+                canvas_bounds->minimum.x=std::min(canvas_bounds->minimum.x,bounds.minimum.x);
+                canvas_bounds->minimum.y=std::min(canvas_bounds->minimum.y,bounds.minimum.y);
+                canvas_bounds->maximum.x=std::max(canvas_bounds->maximum.x,bounds.maximum.x);
+                canvas_bounds->maximum.y=std::max(canvas_bounds->maximum.y,bounds.maximum.y);
+            }
+        }
+        for (const auto& [id,entity]:stairs) {
+            const auto bounds=componentCohortStairBounds(*entity,cohort,id,projection);
             if (!canvas_bounds) canvas_bounds=bounds;
             else {
                 canvas_bounds->minimum.x=std::min(canvas_bounds->minimum.x,bounds.minimum.x);
@@ -29751,7 +29825,7 @@ public:
             const auto original = source.entities().find(old_id);
             if (original != source.entities().end() &&
                 (original->second.type == "roof" || original->second.type == "roof_join" || original->second.type == "slab" ||
-                 original->second.type == "column" || original->second.type == "beam" ||
+                 original->second.type == "column" || original->second.type == "beam" || original->second.type == "stair" ||
                  original->second.type == "assembly_instance" || can_recognize_boundary_dimension_entity_type(original->second.type)))
                 aliases.emplace(id_from(new_id), id_from(old_id));
         }
@@ -30586,6 +30660,10 @@ public:
                             if (component_release)
                                 command=componentAxisResizeCommand(*source,**component_authoring,
                                     component_release->mixed_directional_intent);
+                            else if (axis_cohort && !axis_cohort->stair_ids.empty())
+                                command=componentStairCohortAxisResizeCommand(*source,**component_authoring,
+                                    *axis_cohort,axis_canvas_anchor,axis_scales->first,axis_scales->second,
+                                    view_context ? &view_context->frame : nullptr);
                             else if (axis_cohort && componentCohortPhysicalFamilyCount(*axis_cohort)>=2)
                                 command=componentPhysicalCohortAxisResizeCommand(*source,**component_authoring,
                                     *axis_cohort,axis_canvas_anchor,axis_scales->first,axis_scales->second,
@@ -32642,7 +32720,9 @@ public:
                             command->mixed_selection_edit_intent.at("version")!=retained.at("version"))
                             throw std::invalid_argument("The reviewed mixed resize changed its captured proposal.");
                         const auto& reviewed=command->mixed_selection_edit_intent;
-                        const bool unchanged=retained.at("version")==42
+                        const bool unchanged=retained.at("version")==43
+                            ? reviewed.at("stair_axis_requests")==retained.at("stair_axis_requests")
+                            : retained.at("version")==42
                             ? reviewed.at("slab_geometry")==retained.at("slab_geometry") &&
                               reviewed.at("slab_allocation")==retained.at("slab_allocation") &&
                               reviewed.at("structural_axis_requests")==retained.at("structural_axis_requests") &&
@@ -33512,12 +33592,13 @@ public:
         release->viewport.selected_presentations=canvas->selectedEntityPresentations();
         release->viewport.selected_labels=canvas->selectedLabelPresentations();
         release->authoring=*m_component_axis_authoring;
-        if (release->cohort && (!release->cohort->slab_ids.empty() || !release->cohort->structural_ids.empty() || !release->cohort->children.empty())) {
+        if (release->cohort && (!release->cohort->slab_ids.empty() || !release->cohort->structural_ids.empty() || !release->cohort->stair_ids.empty() || !release->cohort->children.empty())) {
             if (!m_entity_transform_command)
                 throw std::invalid_argument("The mixed resize proposal is incomplete.");
             const auto* command=std::get_if<ApplyBoundaryConstraintChanges>(&*m_entity_transform_command);
             if (!command || !command->mixed_selection_edit_completion ||
-                command->mixed_selection_edit_intent.at("version")!=(componentCohortPhysicalFamilyCount(*release->cohort)>=2 ? 42 :
+                command->mixed_selection_edit_intent.at("version")!=(!release->cohort->stair_ids.empty() ? 43 :
+                    componentCohortPhysicalFamilyCount(*release->cohort)>=2 ? 42 :
                     !release->cohort->structural_ids.empty() ? 41 :
                     release->cohort->children.empty() ? 39 : 40))
                 throw std::invalid_argument("The mixed resize proposal lost its source-bound authority.");
@@ -54354,7 +54435,7 @@ private:
                     validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent")) :
                     validate_mixed_selection_edit_intent(encoded.at("mixed_selection_edit_intent"));
                 const auto dialect=intent.at("version").get<int>();
-                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=29) || dialect==32 || dialect==33 || dialect==34 || dialect==35 || dialect==36 || dialect==37 || dialect==38 || dialect==39 || dialect==40 || dialect==41 || dialect==42)) {
+                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=29) || dialect==32 || dialect==33 || dialect==34 || dialect==35 || dialect==36 || dialect==37 || dialect==38 || dialect==39 || dialect==40 || dialect==41 || dialect==42 || dialect==43)) {
                     // Properties dialects have no transform roof_authoring.
                     // Active-baseline redirects require independently replayed
                     // source authority rather than extracting supplied maps.
@@ -64055,7 +64136,9 @@ private:
                     mixed_edit=true;
                     const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);
                     const auto properties_dialect=intent.at("version").get<int>();
-                    if (properties_dialect==39 || properties_dialect==40 || properties_dialect==41 || properties_dialect==42) {
+                    if (properties_dialect==39 || properties_dialect==40 || properties_dialect==41 || properties_dialect==42 || properties_dialect==43) {
+                        if (properties_dialect==43) for (const auto& row:intent.at("stair_axis_requests"))
+                            targets.insert(row.at("stair_id").template get<std::string>());
                         if (properties_dialect==39 || properties_dialect==42) for (const auto& row:intent.at("slab_geometry"))
                             targets.insert(decode_slab_geometry_edit_intent(row).slab_id);
                         if (properties_dialect==41 || properties_dialect==42) for (const auto& row:intent.at("structural_axis_requests"))
@@ -64125,7 +64208,7 @@ private:
                     // Qualified children never promote their compatibility host
                     // IDs into ordinary presented-object selection authority.
                     const json no_roof_selection=nullptr;
-                    const auto& roof_selection=(properties_dialect==39 || properties_dialect==40 || properties_dialect==41 || properties_dialect==42) ? no_roof_selection :
+                    const auto& roof_selection=(properties_dialect==39 || properties_dialect==40 || properties_dialect==41 || properties_dialect==42 || properties_dialect==43) ? no_roof_selection :
                         (intent.at("version")==16 || intent.at("version")==17 || intent.at("version")==22 || intent.at("version")==23 || intent.at("version")==25 || intent.at("version")==26 || intent.at("version")==28 || intent.at("version")==29 || intent.at("version")==32 || intent.at("version")==33 || intent.at("version")==34 || intent.at("version")==35 || intent.at("version")==36 || intent.at("version")==37 || intent.at("version")==38)
                         ? intent.at("base_intent") : intent;
                     if (!roof_selection.is_null()) for (const auto& child:roof_selection.at("roof_opening_members"))

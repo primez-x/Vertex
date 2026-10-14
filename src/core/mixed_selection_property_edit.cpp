@@ -277,6 +277,7 @@ bool phase_selection_dialect(const Json& value) {
         value.at("version") == 24 || value.at("version") == 27;
 }
 bool phase_room_dialect(const Json& value) {
+    if (value.at("version")==43) return true;
     if (value.at("version")==39 || value.at("version")==40 || value.at("version")==41 || value.at("version")==42) return true;
     return phase_selection_dialect(value) || value.at("version") == 14 || value.at("version") == 16 ||
         value.at("version") == 17 || value.at("version") == 22 || value.at("version") == 23 ||
@@ -284,6 +285,7 @@ bool phase_room_dialect(const Json& value) {
         value.at("version") == 29 || value.at("version") == 32 || value.at("version") == 33 || value.at("version") == 34 || value.at("version") == 35 || value.at("version") == 36 || value.at("version") == 37 || value.at("version") == 38;
 }
 bool component_dialect(const Json& value) {
+    if (value.at("version")==43) return true;
     if (value.at("version")==39 || value.at("version")==40 || value.at("version")==41 || value.at("version")==42) return true;
     return value.at("version") == 14 || value.at("version") == 16 || value.at("version") == 17 ||
         value.at("version") == 22 || value.at("version") == 23 || value.at("version") == 25 ||
@@ -379,6 +381,30 @@ std::vector<StructuralDirectionalResizeRequest> directional_structural(const Jso
     }
     return result;
 }
+std::vector<StairDirectionalResizeRequest> directional_stairs(const Json& rows) {
+    if (!rows.is_array() || rows.empty() || rows.size()>1000) reject("stair resize requires a nonempty bounded complete roster");
+    std::vector<StairDirectionalResizeRequest> result;
+    std::string previous;
+    const auto number=[](const Json& value) {
+        if (!value.is_number() || !std::isfinite(value.get<double>())) reject("stair axis coordinates and factors must be finite numbers");
+        return value.get<double>();
+    };
+    for (const auto& row:rows) {
+        fields(row,{"stair_id","sx","sy","anchor_m","frame_rotation_radians"});
+        StairDirectionalResizeRequest request;
+        request.stair_id=identity(row.at("stair_id"));
+        if (!previous.empty() && previous>=request.stair_id) reject("stair axis requests must be sorted unique actual owners");
+        previous=request.stair_id;
+        request.sx=number(row.at("sx"));request.sy=number(row.at("sy"));
+        if (request.sx<=0 || request.sy<=0) reject("stair axis factors must be positive");
+        const auto& anchor=row.at("anchor_m");
+        if (!anchor.is_array() || anchor.size()!=2) reject("stair axis anchor must have exactly two coordinates");
+        request.anchor_m={number(anchor.at(0)),number(anchor.at(1))};
+        request.frame_rotation_radians=number(row.at("frame_rotation_radians"));
+        result.push_back(std::move(request));
+    }
+    return result;
+}
 std::vector<SlabGeometryEditIntent> directional_slabs(const Json& rows,bool allow_empty=false) {
     if (!rows.is_array() || (rows.empty() && !allow_empty) || rows.size()>1000) reject("slab resize requires a nonempty bounded complete roster");
     std::vector<SlabGeometryEditIntent> result;
@@ -445,11 +471,15 @@ void historical_selected_members(const Json& value, std::set<MemberKey>& selecte
 }
 void validate(const Json& value) {
     Budget budget; budget.visit(value);
-    if (value.is_object() && value.contains("version") && (value.at("version")==39 || value.at("version")==40 || value.at("version")==41 || value.at("version")==42)) {
+    if (value.is_object() && value.contains("version") && (value.at("version")==39 || value.at("version")==40 || value.at("version")==41 || value.at("version")==42 || value.at("version")==43)) {
+        const bool stair=value.at("version")==43;
         const bool combined=value.at("version")==42;
         const bool skylight=value.at("version")==40;
         const bool structural=value.at("version")==41;
-        if (combined) fields(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+        if (stair) fields(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+            "source_entities_digest","source_saved_revision","component_request","component_identity_reservations",
+            "stair_axis_requests","room_reviews","phase_room_reviews","message"});
+        else if (combined) fields(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
             "source_entities_digest","source_saved_revision","component_request","component_identity_reservations",
             "slab_geometry","slab_allocation","structural_axis_requests","structural_allocation",
             "roof_opening_axis_requests","room_reviews","phase_room_reviews","message"});
@@ -484,7 +514,8 @@ void validate(const Json& value) {
             if ((slabs.empty() && !value.at("slab_allocation").is_null()) ||
                 (structures.empty() && !value.at("structural_allocation").is_null()))
                 reject("absent physical families cannot allocate identities");
-        } else physical_count=structural ? directional_structural(value.at("structural_axis_requests")).size() :
+        } else physical_count=stair ? directional_stairs(value.at("stair_axis_requests")).size() :
+            structural ? directional_structural(value.at("structural_axis_requests")).size() :
             skylight ? directional_roof_openings(value.at("roof_opening_axis_requests")).size() :
             directional_slabs(value.at("slab_geometry")).size();
         if (authoring.intents.empty() || authoring.intents.size()+physical_count>1000) reject("mixed resize complete selected roster exceeds bound");
@@ -496,7 +527,7 @@ void validate(const Json& value) {
                 intent.profile_geometry.operation==AssemblyInstancePropertyPatchOperation::unchanged)
                 reject("mixed resize admits independent document component geometry only");
         if (structural || combined) (void)structural_allocation(value.at("structural_allocation"));
-        if ((!skylight && !structural) || combined) (void)slab_allocation(value.at("slab_allocation"));
+        if ((!stair && !skylight && !structural) || combined) (void)slab_allocation(value.at("slab_allocation"));
         const auto& reservations=value.at("component_identity_reservations");
         if (!reservations.is_array() || reservations.size()>4096) reject("component reservation inventory exceeds bound");
         std::optional<std::string> previous;
@@ -988,7 +1019,7 @@ void require_selected_members_present(const Json& value, const Entities& candida
     bool final_physical_check = true, const MixedSelectionPropertyEditPreparation::ComponentIdentityMap* component_mapping = nullptr) {
     if (component_dialect(value)) {
         if (!component_mapping) reject("component selected targets require their independently reconstructed mapping");
-        const auto base = (value.at("version")==39 || value.at("version")==40 || value.at("version")==41 || value.at("version")==42) ? Json(nullptr) : value.at("base_intent");
+        const auto base = (value.at("version")==39 || value.at("version")==40 || value.at("version")==41 || value.at("version")==42 || value.at("version")==43) ? Json(nullptr) : value.at("base_intent");
         if (!base.is_null()) require_selected_members_present(base, candidate, retired_reviewed_rails, phase, final_physical_check);
         const auto authoring = decode_phase_assembly_instance_property_edit_authoring(value.at("component_request").at("authoring"));
         const auto& mapping = *component_mapping;
@@ -1001,6 +1032,11 @@ void require_selected_members_present(const Json& value, const Entities& candida
             targets.push_back(found->second);
         }
         require_assembly_targets_present(candidate, targets, final_physical_check, true);
+        if (value.at("version")==43) for (const auto& request:directional_stairs(value.at("stair_axis_requests"))) {
+            const auto found=candidate.find(request.stair_id);
+            if (found==candidate.end() || found->second.id!=request.stair_id || found->second.type!="stair")
+                reject("mixed resize lost an independently reconstructed selected stair");
+        }
         if (value.at("version")==39 || value.at("version")==42) {
             const auto allocation=slab_allocation(value.at("slab_allocation"));
             for (const auto& slab:directional_slabs(value.at("slab_geometry"),value.at("version")==42)) {
@@ -1253,6 +1289,26 @@ Stage derive(const DocumentSnapshot& source, const Json& value) {
     validate(value); authenticate(source, value);
     const auto& original = source.entities();
     if (const auto error = validate_active_phase_constraint_integrity(original)) throw std::invalid_argument(*error);
+    if (value.at("version")==43) {
+        const auto requests=directional_stairs(value.at("stair_axis_requests"));
+        const auto authoring=decode_phase_assembly_instance_property_edit_authoring(value.at("component_request").at("authoring"));
+        preflight_component_stair_directional_resize(source,authoring,requests);
+        auto component=replay_phase_assembly_instance_property_edit_preparation(source,value.at("component_request"));
+        if (value.at("component_identity_reservations")!=Json(component.result().fresh_identity_ids))
+            reject("component reservation receipt differs from actual original-source replay");
+        auto composed=compose_component_stair_directional_resize(source,component,requests,value.at("message").get_ref<const std::string&>());
+        Stage stage;
+        stage.entities=std::move(composed.components.entities);
+        stage.component_mapping=std::move(composed.components.original_to_proposed);
+        stage.reserved_component_identity_ids=std::move(composed.components.reserved_component_identity_ids);
+        stage.elided_component_identity_ids=std::move(composed.components.elided_component_identity_ids);
+        stage.slab_selected_identity_map=std::move(composed.stair_selected_original_to_proposed);
+        stage.slab_identity_map=stage.slab_selected_identity_map;
+        stage.reviewed_erased.insert(component.result().retired_dimension_ids.begin(),component.result().retired_dimension_ids.end());
+        stage.component=std::move(component);
+        require_selected_members_present(value,stage.entities,{},nullptr,true,&stage.component_mapping);
+        return stage;
+    }
     if (value.at("version")==42) {
         auto component=replay_phase_assembly_instance_property_edit_preparation(source,value.at("component_request"));
         if (value.at("component_identity_reservations")!=Json(component.result().fresh_identity_ids))
@@ -1915,6 +1971,25 @@ MixedSelectionPropertyEditPreparation prepare_component_slab_directional_resize(
     value["message"]=std::string(message);
     return replay_mixed_selection_property_edit_preparation(source,value);
 }
+MixedSelectionPropertyEditPreparation prepare_component_stair_directional_resize(const DocumentSnapshot& source,
+    const PhaseAssemblyInstancePropertyEditAuthoring& authoring,std::span<const StairDirectionalResizeRequest> requests,
+    std::string_view message) {
+    if (message.size()>1024 || message.find('\0')!=std::string_view::npos)
+        reject("typed mixed stair resize message exceeds its bound");
+    preflight_component_stair_directional_resize(source,authoring,requests);
+    const auto component=prepare_phase_assembly_instance_property_edit(source,authoring);
+    std::vector<StairDirectionalResizeRequest> sorted(requests.begin(),requests.end());
+    std::sort(sorted.begin(),sorted.end(),[](const auto& a,const auto& b) { return a.stair_id<b.stair_id; });
+    auto value=source_fields(source);value["version"]=43;
+    value["component_request"]=component.request();
+    value["component_identity_reservations"]=component.result().fresh_identity_ids;
+    value["stair_axis_requests"]=Json::array();
+    for (const auto& request:sorted) value["stair_axis_requests"].push_back({{"stair_id",request.stair_id},
+        {"sx",request.sx},{"sy",request.sy},{"anchor_m",{request.anchor_m.x,request.anchor_m.y}},
+        {"frame_rotation_radians",request.frame_rotation_radians}});
+    value["room_reviews"]=Json::array();value["phase_room_reviews"]=Json::array();value["message"]=std::string(message);
+    return replay_mixed_selection_property_edit_preparation(source,value);
+}
 MixedSelectionPropertyEditPreparation prepare_component_structural_directional_resize(const DocumentSnapshot& source,
     const PhaseAssemblyInstancePropertyEditAuthoring& authoring,std::span<const StructuralDirectionalResizeRequest> requests,
     const std::optional<ComponentStructuralDirectionalResizeAllocation>& allocation,std::string_view message) {
@@ -2192,12 +2267,12 @@ std::vector<Json> mixed_selection_property_edit_phase_room_reviews(const Json& v
 bool mixed_selection_property_edit_retires_dependencies(const Json& value) {
     validate(value);
     if (component_dialect(value)) {
-        if (value.at("version") == 36 || value.at("version") == 37 || value.at("version") == 38 || value.at("version")==39 || value.at("version")==40 || value.at("version")==41 || value.at("version")==42)
+        if (value.at("version") == 36 || value.at("version") == 37 || value.at("version") == 38 || value.at("version")==39 || value.at("version")==40 || value.at("version")==41 || value.at("version")==42 || value.at("version")==43)
             for (const auto& [id, decision] : value.at("component_request").at("authoring").at("profile_dimension_decisions").items()) {
                 (void)id;
                 if (decision.at("operation") == "retire") return true;
             }
-        return value.at("version")!=39 && value.at("version")!=40 && value.at("version")!=41 && value.at("version")!=42 && !value.at("base_intent").is_null() &&
+        return value.at("version")!=39 && value.at("version")!=40 && value.at("version")!=41 && value.at("version")!=42 && value.at("version")!=43 && !value.at("base_intent").is_null() &&
             mixed_selection_property_edit_retires_dependencies(value.at("base_intent"));
     }
     if (phase_selection_dialect(value)) return std::any_of(
@@ -2212,6 +2287,7 @@ bool mixed_selection_property_edit_retires_dependencies(const Json& value) {
 }
 bool mixed_selection_property_edit_has_phase_replacements(const Json& value) {
     validate(value);
+    if (value.at("version")==43) return !value.at("component_request").at("authoring").at("allocation").at("roots").empty();
     if (value.at("version")==42) return !value.at("component_request").at("authoring").at("allocation").at("roots").empty() ||
         !value.at("slab_allocation").is_null() || !value.at("structural_allocation").is_null();
     if (value.at("version")==41) return !value.at("component_request").at("authoring").at("allocation").at("roots").empty() ||

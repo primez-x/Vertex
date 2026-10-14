@@ -12,6 +12,55 @@ constitute user acceptance.
 
 ## Current delivery state
 
+### October 14 component and straight-stair resizing
+
+The combined physical checkpoint is committed and pushed as `a5e90637`; exact
+remote main was checked. Bounded source discovery recommends independent
+components with ordinary straight stairs as the next side-resize slice. Existing
+native stair resizing proves flight/landing corners, endpoints and unchanged
+elevations. The new source-bound bridge preserves raw authoring through full
+typed original-source capture/replay and the existing two-candidate finalizer.
+That fixture compiles and reaches the missing frame in both orders after hand
+geometry, solid, published tread/landing ink and roster admission
+(`artifacts/codex-component-stair-20261014/native-red.log`). The
+[source-bound contract](../design/vertex-component-stair-resize.md) and
+[plan](../superpowers/plans/2026-10-14-component-stair-resize.md) now define
+Properties43/reader266/extraction264. Root connected shared source admission,
+flight/landing Plan/Site bounds, controller release and Document/storage guards.
+The focused build passes. Core geometry, requests7/8/9, raw/receipt preservation,
+unit admission, aggregate bounds, history/assets, native persistence,
+extraction264 and byte-preserving reader265 refusal pass (`core-dimension-qualified.log`).
+Both native frame orders pass (`native-frame-qualified.log`). All twelve native
+Plan/rotated Site lifecycle cases, including moving-base left/bottom gestures,
+four real review cases, four stale-authority cases and 37 fresh Opens pass in
+121.24 seconds (`native-lifecycle-first.log`). Root inspected Plan preview ink.
+
+Independent review found saved-view stair dimension bindings omitted from
+admission and schema keys mistaken for owner references. Both actual regressions
+fail before the fixes (`saved-view-red.log`, `schema-key-red.log`). Admission now
+decodes typed saved views and matches identity values. Both focused regressions
+and the complete core test pass (`saved-view-qualified.log`,
+`schema-key-qualified.log`, `core-final.log`). The full Release build passes.
+The standard run completed in 836.54 seconds with 331 of 332 active tests passing;
+the measured-dimension desktop fixture hit the global 60-second default. Its
+declared 90-second deadline had been overwritten. The shared default now applies
+only to tests without an explicit deadline; sibling deadlines and the default
+are checked in `ctest-metadata.json`. The fixture passes its targeted rerun in
+38.54 seconds (`measurement-dimensions-rerun.log`). All 332 standard checks have
+passing results, including the final stair lifecycle in 194.78 seconds. The
+production acceptance gate remains disabled. Six protected checks pass with
+exit0, confirmed termination, no timeout/capture failure and a host outside the
+job (`protected-imports.log`, result directory
+`artifacts/import-worker-independent/release-a7e3a6d5281f447ba1f33aacd26ef2c9`).
+All eight desktop smoke cases pass. Their current images/performance evidence
+are copied with verified hashes to this wave's `desktop-smoke/`; root inspected
+Measure100% and Design200%. The legacy seeded sketch still withholds GLA and
+does not qualify the new-wall-room flow. Source-kit inventory is 2079. Full-suite
+captures share a directory between concurrent targets and are diagnostic only;
+the separately captured stair geometry and output are unchanged by admission
+fixes. Phase stairs, hosted railings/roots, levels and other physical families
+remain excluded. Installed candidate and production acceptance are unchanged.
+
 ### October 14 combined physical resizing qualified
 
 The verified structural checkpoint is committed and pushed as `101cfae6`; exact
@@ -23,7 +72,7 @@ slab, rectangular column, horizontal beam and typed skylight selection in both
 orders. It then fails specifically at the missing combined side frame; evidence
 is `artifacts/codex-combined-physical-20261014/native-red-admitted.log`.
 Its initial roster check incorrectly assumed canvas publication order matched
-selection request order; exact membership is now checked instead. No production
+selection request order; exact membership is now checked instead.
 The complete Release build passes (`full-release-build.log`). The combined core suite passes all ten groups
 in 98.11 seconds (`core-final-attempt.log`), including actual shared baseline
 catalogs/companions, bounds, source guards, explicit retirement and

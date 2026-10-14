@@ -1,4 +1,11 @@
-# Vertex project formats v1 through v265
+# Vertex project formats v1 through v266
+
+Reader266/native extraction264 retains closed Properties43 component/straight-
+stair directional resizing under command52. The stair lane derives ordinary v1
+geometry from original-source scalar operators and verifies exact typed replay;
+component geometry and dimensions retain their established source-bound review.
+Canonical applied and undone history preserves the floor. Older dialects and
+opaque metadata keep their existing meaning; qualification is recorded separately.
 
 Reader265/native extraction263 retains closed Properties42 combined component
 and physical directional resizing under command52. A nonempty independent

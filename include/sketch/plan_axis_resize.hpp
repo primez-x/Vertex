@@ -26,6 +26,15 @@ namespace sketch {
     const Entity& actual_source, double scale_x, double scale_y, Vec2 anchor,
     double frame_rotation_radians = 0.0);
 
+// Detached actual-source v1 straight stair stage. Requires an existing top
+// landing and ordinary placement. Patches only changed base XY, going, width
+// and landing depth; all other raw fields remain exact. Distinct factors are
+// retained. Retires changed known owned receipts and refuses affected opaque
+// bindings. Complete-map dependency admission belongs to the sealed caller.
+[[nodiscard]] Entity stage_stair_plan_axis_resize_entity(
+    const Entity& actual_source, double scale_x, double scale_y, Vec2 anchor,
+    double frame_rotation_radians = 0.0);
+
 // Stage an actual sloped-panel, gable or hip roof's native plan footprint
 // resize without Document/transaction admission. Retains source receipts and
 // opaque metadata for the caller's mathematical derivation archive; creates

@@ -2,6 +2,7 @@
 
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/building_entity.hpp"
+#include "sketch/constraint_entity.hpp"
 #include "sketch/roof_entity_codec.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/project_organization.hpp"
@@ -605,6 +606,70 @@ Bounds2 plan_axis_resize_bounds(const Entity& entity) {
     double xmin,ymin,zmin,xmax,ymax,zmax;
     bounds.Get(xmin,ymin,zmin,xmax,ymax,zmax);
     return {{xmin,ymin},{xmax,ymax}};
+}
+
+Entity stage_stair_plan_axis_resize_entity(
+    const Entity& actual_source, double scale_x, double scale_y, Vec2 anchor,
+    double frame_rotation_radians) {
+    if (!std::isfinite(scale_x) || !std::isfinite(scale_y) || scale_x<=0 || scale_y<=0 ||
+        !std::isfinite(anchor.x) || !std::isfinite(anchor.y) || !std::isfinite(frame_rotation_radians))
+        throw std::invalid_argument("Plan stair resize factors must be positive and its frame finite");
+    const auto& p=actual_source.properties;
+    if (actual_source.type!="stair" || !p.is_object() || !p.contains("version") ||
+        !p.at("version").is_number_integer() || p.at("version")!=1 ||
+        !p.contains("form") || p.at("form")!="straight_stair_flight")
+        throw std::invalid_argument("Plan stair resize requires a canonical v1 straight stair");
+    for (const auto* field:{"transform","level_connection","vertical_placement","phase_id"})
+        if (p.contains(field)) throw std::invalid_argument("Plan stair resize requires ordinary unconnected placement");
+    if (!p.contains("riser_count") || !p.at("riser_count").is_number_integer() ||
+        (!p.at("riser_count").is_number_unsigned() && p.at("riser_count").get<std::int64_t>()<1) ||
+        p.at("riser_count").get<std::uint64_t>()>=100000)
+        throw std::invalid_argument("Plan stair resize riser plus landing work budget exceeded");
+    auto stair=decode_stair_properties(actual_source.id,p);
+    if (!stair.top_landing || !stair.flights.empty() || !stair.landings.empty())
+        throw std::invalid_argument("Plan stair resize requires an existing valid top landing and no multi-flight topology");
+    const Resize resize{scale_x,scale_y,anchor,frame_rotation_radians,true};
+    const auto [along,across]=resize.local_factors(stair.orientation_radians);
+    (void)entity_shape(actual_source);
+    if (scale_x==1 && scale_y==1) return actual_source;
+    resize_stair(stair,resize,along,across);
+    auto result=actual_source;
+    const auto patch=[&](const char* pointer,double value) {
+        const Json::json_pointer path(pointer);
+        if (p.at(path).get<double>()!=value) result.properties.at(path)=value;
+    };
+    patch("/base_position_m/0",stair.base_position.x);
+    patch("/base_position_m/1",stair.base_position.y);
+    patch("/going_m",stair.going);patch("/width_m",stair.width);
+    patch("/top_landing/depth_m",stair.top_landing->depth);
+    const auto entries=p.find("quantity_entries");
+    if (entries!=p.end()) {
+        if (!entries->is_object()) throw std::invalid_argument("Plan stair quantity entries must be an object");
+        Json retained=*entries;
+        for (const auto& [pointer,receipt]:entries->items()) {
+            bool affected=false;
+            try {
+                const Json::json_pointer path(pointer);
+                if (p.contains(path)) affected=!result.properties.contains(path) || p.at(path)!=result.properties.at(path);
+                else for (const auto* domain:{"base_position_m","going_m","width_m","top_landing"})
+                    if (pointer.starts_with(std::string("/")+domain+"/") && p.at(domain)!=result.properties.at(domain))
+                        affected=true;
+            } catch (const Json::exception&) { /* Unbound opaque metadata stays exact. */ }
+            if (!affected) continue;
+            const bool owned=pointer=="/base_position_m/0" || pointer=="/base_position_m/1" ||
+                pointer=="/going_m" || pointer=="/width_m" || pointer=="/top_landing/depth_m";
+            if (!owned || !receipt.is_object() || !receipt.contains("version") ||
+                !receipt.at("version").is_number_integer() || receipt.at("version")!=1)
+                throw std::invalid_argument("Plan stair resize changes an opaque quantity binding");
+            (void)decode_constraint_quantity_receipt(receipt);
+            retained.erase(pointer);
+        }
+        result.properties["quantity_entries"]=std::move(retained);
+    }
+    // Prove the raw-patched semantics and native solid, never a re-encoded merge.
+    (void)decode_stair_properties(result.id,result.properties);
+    (void)entity_shape(result);
+    return result;
 }
 
 Entity stage_structural_plan_axis_resize_entity(

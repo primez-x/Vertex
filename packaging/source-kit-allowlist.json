@@ -1763,6 +1763,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/design/vertex-component-stair-resize.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/design/vertex-design-system/components/AreaTable.md"
     },
     {
@@ -2808,6 +2812,10 @@
     {
       "category": "docs",
       "path": "docs/superpowers/plans/2026-10-14-combined-physical-resize.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-14-component-stair-resize.md"
     },
     {
       "category": "docs",
@@ -6908,6 +6916,14 @@
     {
       "category": "source",
       "path": "tests/mixed_component_slab_resize_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/mixed_component_stair_resize_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/mixed_component_stair_resize_tests.cpp"
     },
     {
       "category": "source",

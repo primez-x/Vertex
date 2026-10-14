@@ -368,7 +368,8 @@ public:
     // v263 retains closed component/skylight directional resize composition.
     // v264 retains closed component/structural directional resize composition.
     // v265 retains closed combined component/physical directional resizing.
-    static constexpr std::uint32_t format_version = 265;
+    // v266 retains closed component/straight-stair directional resizing.
+    static constexpr std::uint32_t format_version = 266;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     // Document semantics only: excludes the native-only v161 shared asset

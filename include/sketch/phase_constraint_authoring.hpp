@@ -16,10 +16,12 @@ struct ReplayedPhysicalWallRoomReview;
 class StairPropertyReviewPreparation;
 class AssemblyInstancePropertyEditPreparation;
 class PhaseAssemblyInstancePropertyEditPreparation;
+struct PhaseAssemblyInstancePropertyEditAuthoring;
 class MixedSelectionPropertyEditPreparation;
 struct ComponentSlabDirectionalResizeAllocation;
 struct ComponentStructuralDirectionalResizeAllocation;
 struct StructuralDirectionalResizeRequest;
+struct StairDirectionalResizeRequest;
 struct SlabGeometryEditIntent;
 
 // Collision fence for newly declared global identities against one retained
@@ -376,6 +378,20 @@ struct ComponentStructuralDirectionalResizeComposition {
     std::map<std::pair<std::string,std::string>,std::pair<std::string,std::string>> structural_hosted_bindings;
     std::vector<nlohmann::json> structural_phase_authorings;
 };
+struct ComponentStairDirectionalResizeComposition {
+    CoordinatedComponentPropertyComposition components;
+    std::map<std::string,std::string,std::less<>> stair_selected_original_to_proposed;
+};
+// Pure analytical preflight, including units. Charged before component/native
+// manufacture; no supplied candidate or completed command becomes authority.
+void require_stair_directional_resize_source_admission(
+    const DocumentSnapshot&, std::span<const StairDirectionalResizeRequest>);
+void preflight_component_stair_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
+    std::span<const StairDirectionalResizeRequest>);
+[[nodiscard]] ComponentStairDirectionalResizeComposition compose_component_stair_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditPreparation&,
+    std::span<const StairDirectionalResizeRequest>, std::string_view);
 struct ComponentPhysicalDirectionalResizeComposition {
     CoordinatedComponentPropertyComposition components;
     // Catalog copies remain family-local in the phase proofs. Only selected
