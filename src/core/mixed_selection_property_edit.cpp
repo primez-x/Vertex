@@ -277,12 +277,14 @@ bool phase_selection_dialect(const Json& value) {
         value.at("version") == 24 || value.at("version") == 27;
 }
 bool phase_room_dialect(const Json& value) {
+    if (value.at("version")==39) return true;
     return phase_selection_dialect(value) || value.at("version") == 14 || value.at("version") == 16 ||
         value.at("version") == 17 || value.at("version") == 22 || value.at("version") == 23 ||
         value.at("version") == 25 || value.at("version") == 26 || value.at("version") == 28 ||
         value.at("version") == 29 || value.at("version") == 32 || value.at("version") == 33 || value.at("version") == 34 || value.at("version") == 35 || value.at("version") == 36 || value.at("version") == 37 || value.at("version") == 38;
 }
 bool component_dialect(const Json& value) {
+    if (value.at("version")==39) return true;
     return value.at("version") == 14 || value.at("version") == 16 || value.at("version") == 17 ||
         value.at("version") == 22 || value.at("version") == 23 || value.at("version") == 25 ||
         value.at("version") == 26 || value.at("version") == 28 || value.at("version") == 29 || value.at("version") == 32 || value.at("version") == 33 || value.at("version") == 34 || value.at("version") == 35 || value.at("version") == 36 || value.at("version") == 37 || value.at("version") == 38;
@@ -299,6 +301,52 @@ MemberKey component_key(const AssemblyInstancePropertyEditTarget& target) {
     MemberKey key{"assembly", target.catalog_id, target.instance_id, target.document_entity_id.value_or("")};
     key.insert(key.end(), target.part_path.begin(), target.part_path.end());
     return key;
+}
+Json slab_allocation_json(const std::optional<ComponentSlabDirectionalResizeAllocation>& allocation) {
+    if (!allocation) return nullptr;
+    Json rows=Json::array();
+    for (const auto& [binding,proposed]:allocation->hosted_instance_identities)
+        rows.push_back({{"catalog_id",binding.first},{"instance_id",binding.second},{"proposed_instance_id",proposed}});
+    return {{"identities",allocation->identities},{"hosted_instance_identities",std::move(rows)},
+        {"dimension_identities",allocation->dimension_identities}};
+}
+std::optional<ComponentSlabDirectionalResizeAllocation> slab_allocation(const Json& value) {
+    if (value.is_null()) return std::nullopt;
+    fields(value,{"identities","hosted_instance_identities","dimension_identities"});
+    ComponentSlabDirectionalResizeAllocation result;
+    for (const auto* key:{"identities","dimension_identities"}) {
+        const auto& rows=value.at(key);
+        if (!rows.is_object() || rows.size()>4096) reject("slab allocation map exceeds its source roster bound");
+        auto& map=std::string_view(key)=="identities" ? result.identities : result.dimension_identities;
+        for (const auto& [original,proposed]:rows.items()) map.emplace(identity(Json(original)),identity(proposed));
+    }
+    const auto& rows=value.at("hosted_instance_identities");
+    if (!rows.is_array() || rows.size()>4096) reject("slab hosted allocation exceeds its source roster bound");
+    std::optional<PhaseSlabReplacementHostedInstanceKey> previous;
+    for (const auto& row:rows) {
+        fields(row,{"catalog_id","instance_id","proposed_instance_id"});
+        const PhaseSlabReplacementHostedInstanceKey key{identity(row.at("catalog_id")),identity(row.at("instance_id"))};
+        if (previous && *previous>=key) reject("slab hosted allocations must be sorted unique");
+        result.hosted_instance_identities.emplace(key,identity(row.at("proposed_instance_id")));
+        previous=key;
+    }
+    if (slab_allocation_json(result).dump()!=value.dump()) reject("slab allocation must retain its canonical exact fields");
+    return result;
+}
+std::vector<SlabGeometryEditIntent> directional_slabs(const Json& rows) {
+    if (!rows.is_array() || rows.empty() || rows.size()>1000) reject("slab resize requires a nonempty bounded complete roster");
+    std::vector<SlabGeometryEditIntent> result;
+    std::string previous;
+    for (const auto& row:rows) {
+        const auto intent=decode_slab_geometry_edit_intent(row);
+        if ((row.at("version")!=4 && row.at("version")!=5) || intent.kind!=SlabGeometryEditKind::resize_plan ||
+            !intent.coordinate_world_hosted_geometry || (!previous.empty() && previous>=intent.slab_id) ||
+            encode_slab_geometry_edit_intent(intent).dump()!=row.dump())
+            reject("slab resize requires canonical sorted directional leaves four or five");
+        previous=intent.slab_id;
+        result.push_back(intent);
+    }
+    return result;
 }
 // Read the already validated historical roster without changing its dialect or
 // translating its authority into a synthetic ordinary request.
@@ -323,6 +371,47 @@ void historical_selected_members(const Json& value, std::set<MemberKey>& selecte
 }
 void validate(const Json& value) {
     Budget budget; budget.visit(value);
+    if (value.is_object() && value.contains("version") && value.at("version")==39) {
+        fields(value,{"version","expected_revision","source_snapshot_digest","source_authoring_digest",
+            "source_entities_digest","source_saved_revision","component_request","component_identity_reservations",
+            "slab_geometry","slab_allocation","room_reviews","phase_room_reviews","message"});
+        if (!value.at("version").is_number_integer()) reject("Properties dialect must be an integer");
+        (void)revision(value.at("expected_revision"));
+        for (const auto* key:{"source_snapshot_digest","source_authoring_digest","source_entities_digest"}) digest(value.at(key));
+        if (!value.at("source_saved_revision").is_null()) (void)revision(value.at("source_saved_revision"));
+        const auto component=validate_phase_assembly_instance_property_edit_request(value.at("component_request"));
+        if (component.at("version")!=7 && component.at("version")!=8 && component.at("version")!=9)
+            reject("mixed resize requires component geometry request seven, eight or nine");
+        for (const auto* key:{"expected_revision","source_snapshot_digest","source_authoring_digest","source_entities_digest","source_saved_revision"})
+            if (component.at(key).dump()!=value.at(key).dump()) reject("component resize fences differ from complete original source");
+        const auto authoring=decode_phase_assembly_instance_property_edit_authoring(component.at("authoring"));
+        const auto slabs=directional_slabs(value.at("slab_geometry"));
+        if (authoring.intents.empty() || authoring.intents.size()+slabs.size()>1000) reject("mixed resize complete selected roster exceeds bound");
+        for (const auto& intent:authoring.intents)
+            if (!intent.target.document_entity_id || !intent.properties.empty() || !intent.materials.empty() ||
+                !intent.quantities.empty() || intent.pose.operation!=AssemblyInstancePropertyPatchOperation::unchanged ||
+                intent.pose.x_metres || intent.pose.y_metres || intent.pose.z_metres || intent.pose.rotation_radians ||
+                intent.pose.scale || intent.pose.vertical_scale || intent.pose.mirrored_y ||
+                intent.profile_geometry.operation==AssemblyInstancePropertyPatchOperation::unchanged)
+                reject("mixed resize admits independent document component geometry only");
+        (void)slab_allocation(value.at("slab_allocation"));
+        const auto& reservations=value.at("component_identity_reservations");
+        if (!reservations.is_array() || reservations.size()>4096) reject("component reservation inventory exceeds bound");
+        std::optional<std::string> previous;
+        for (const auto& row:reservations) {
+            if (!row.is_string()) reject("component reservation must be a string");
+            const auto& token=row.get_ref<const std::string&>();
+            if (token.empty() || token.size()>4096 || token.find('\0')!=std::string::npos || (previous && *previous>=token))
+                reject("component reservations must be portable sorted unique identities");
+            previous=token;
+        }
+        for (const auto* key:{"room_reviews","phase_room_reviews"})
+            if (!value.at(key).is_array() || !value.at(key).empty()) reject("mixed component/slab resize has no room review authority");
+        if (!value.at("message").is_string() || value.at("message").get_ref<const std::string&>().size()>1024 ||
+            value.at("message").get_ref<const std::string&>().find('\0')!=std::string::npos) reject("invalid message");
+        if (value.dump().size()>byte_limit) reject("wire byte budget exceeded");
+        return;
+    }
     if (value.is_object() && value.contains("version") && component_dialect(value)) {
         const bool reviewed_initial_geometry = value.at("version") == 38;
         const bool initialize_deformed_topology = value.at("version") == 37;
@@ -797,7 +886,7 @@ void require_selected_members_present(const Json& value, const Entities& candida
     bool final_physical_check = true, const MixedSelectionPropertyEditPreparation::ComponentIdentityMap* component_mapping = nullptr) {
     if (component_dialect(value)) {
         if (!component_mapping) reject("component selected targets require their independently reconstructed mapping");
-        const auto& base = value.at("base_intent");
+        const auto base = value.at("version")==39 ? Json(nullptr) : value.at("base_intent");
         if (!base.is_null()) require_selected_members_present(base, candidate, retired_reviewed_rails, phase, final_physical_check);
         const auto authoring = decode_phase_assembly_instance_property_edit_authoring(value.at("component_request").at("authoring"));
         const auto& mapping = *component_mapping;
@@ -810,6 +899,16 @@ void require_selected_members_present(const Json& value, const Entities& candida
             targets.push_back(found->second);
         }
         require_assembly_targets_present(candidate, targets, final_physical_check, true);
+        if (value.at("version")==39) {
+            const auto allocation=slab_allocation(value.at("slab_allocation"));
+            for (const auto& slab:directional_slabs(value.at("slab_geometry"))) {
+                const auto mapped=allocation ? allocation->identities.find(slab.slab_id) : PhaseSlabReplacementIdentityMap::const_iterator{};
+                const auto id=allocation && mapped!=allocation->identities.end() ? mapped->second : slab.slab_id;
+                const auto found=candidate.find(id);
+                if (found==candidate.end() || found->second.id!=id || found->second.type!="slab")
+                    reject("mixed resize lost an independently reconstructed selected slab");
+            }
+        }
         return;
     }
     const auto owner = [&](const std::string& id) -> const Entity& {
@@ -955,6 +1054,10 @@ struct Stage {
     MixedSelectionPropertyEditPreparation::ComponentIdentityMap component_mapping;
     std::vector<std::string> reserved_component_identity_ids;
     std::vector<std::string> elided_component_identity_ids;
+    std::map<std::string,std::string,std::less<>> slab_identity_map;
+    std::map<std::string,std::string,std::less<>> slab_selected_identity_map;
+    MixedSelectionPropertyEditPreparation::HostedBindingMap slab_hosted_bindings;
+    std::vector<Json> slab_phase_authorings;
 };
 Stage derive_phase(const DocumentSnapshot& source, const Json& value) {
     auto phase = replay_phase_selection_property_edit_preparation(source, value.at("phase_request"));
@@ -1032,6 +1135,26 @@ Stage derive(const DocumentSnapshot& source, const Json& value) {
     validate(value); authenticate(source, value);
     const auto& original = source.entities();
     if (const auto error = validate_active_phase_constraint_integrity(original)) throw std::invalid_argument(*error);
+    if (value.at("version")==39) {
+        auto component=replay_phase_assembly_instance_property_edit_preparation(source,value.at("component_request"));
+        if (value.at("component_identity_reservations")!=Json(component.result().fresh_identity_ids))
+            reject("component reservation receipt differs from actual original-source replay");
+        auto composed=compose_component_slab_directional_resize(source,component,directional_slabs(value.at("slab_geometry")),
+            slab_allocation(value.at("slab_allocation")),value.at("message").get_ref<const std::string&>());
+        Stage stage;
+        stage.entities=std::move(composed.components.entities);
+        stage.component_mapping=std::move(composed.components.original_to_proposed);
+        stage.reserved_component_identity_ids=std::move(composed.components.reserved_component_identity_ids);
+        stage.elided_component_identity_ids=std::move(composed.components.elided_component_identity_ids);
+        stage.reviewed_erased.insert(component.result().retired_dimension_ids.begin(),component.result().retired_dimension_ids.end());
+        stage.component=std::move(component);
+        stage.slab_identity_map=std::move(composed.slab_original_to_proposed);
+        stage.slab_selected_identity_map=std::move(composed.slab_selected_original_to_proposed);
+        stage.slab_hosted_bindings=std::move(composed.slab_hosted_bindings);
+        stage.slab_phase_authorings=std::move(composed.slab_phase_authorings);
+        require_selected_members_present(value,stage.entities,{},nullptr,true,&stage.component_mapping);
+        return stage;
+    }
     if (component_dialect(value)) {
         auto component = replay_phase_assembly_instance_property_edit_preparation(source, value.at("component_request"));
         if (coordinated_component_dialect(value) &&
@@ -1283,7 +1406,7 @@ const std::vector<PhaseWallReplacementAuthoringPreview>& MixedSelectionPropertyE
 }
 const std::vector<Json>& MixedSelectionPropertyEditPreparation::phase_authorings() const noexcept {
     static const std::vector<Json> empty;
-    return phase_ ? phase_->phase_authorings() : empty;
+    return phase_ ? phase_->phase_authorings() : !slab_phase_authorings_.empty() ? slab_phase_authorings_ : empty;
 }
 
 namespace {
@@ -1527,14 +1650,49 @@ MixedSelectionPropertyEditPreparation prepare_component_presentation_property_ed
     value["message"] = std::string(message);
     return replay_mixed_selection_property_edit_preparation(source, value);
 }
+MixedSelectionPropertyEditPreparation prepare_component_slab_directional_resize(const DocumentSnapshot& source,
+    const PhaseAssemblyInstancePropertyEditAuthoring& authoring,std::span<const SlabGeometryEditIntent> slab_geometry,
+    const std::optional<ComponentSlabDirectionalResizeAllocation>& allocation,std::string_view message) {
+    if (slab_geometry.empty() || slab_geometry.size()>1000 || message.size()>1024 || message.find('\0')!=std::string_view::npos)
+        reject("typed mixed resize request exceeds its complete roster or message bound");
+    if (allocation && (allocation->identities.size()>4096 || allocation->hosted_instance_identities.size()>4096 ||
+        allocation->dimension_identities.size()>1000 || allocation->identities.size()+
+        allocation->hosted_instance_identities.size()+allocation->dimension_identities.size()>4096))
+        reject("typed slab allocation exceeds its complete source roster bound");
+    const auto component=prepare_phase_assembly_instance_property_edit(source,authoring);
+    std::vector<SlabGeometryEditIntent> slabs(slab_geometry.begin(),slab_geometry.end());
+    for (auto& intent:slabs) {
+        const auto found=source.entities().find(intent.slab_id);
+        if (found==source.entities().end() || found->second.id!=intent.slab_id || found->second.type!="slab")
+            reject("slab resize requires actual original source owners");
+        intent.preserve_planar_source_geometry=slab_geometry_edit_requires_planar_source(found->second,intent);
+    }
+    std::sort(slabs.begin(),slabs.end(),[](const auto& left,const auto& right) { return left.slab_id<right.slab_id; });
+    auto value=source_fields(source);
+    value["version"]=39;
+    value["component_request"]=component.request();
+    value["component_identity_reservations"]=component.result().fresh_identity_ids;
+    value["slab_geometry"]=Json::array();
+    for (const auto& intent:slabs) value["slab_geometry"].push_back(encode_slab_geometry_edit_intent(intent));
+    value["slab_allocation"]=slab_allocation_json(allocation);
+    value["room_reviews"]=Json::array();
+    value["phase_room_reviews"]=Json::array();
+    value["message"]=std::string(message);
+    return replay_mixed_selection_property_edit_preparation(source,value);
+}
 MixedSelectionPropertyEditPreparation replay_mixed_selection_property_edit_preparation(const DocumentSnapshot& source, const Json& value) {
     (void)validate_mixed_selection_property_edit_intent(value);
     if (!value.at("room_reviews").empty() || (phase_room_dialect(value) && !value.at("phase_room_reviews").empty()))
         reject("preparation cannot accept completed room decisions");
     auto stage = derive(source, value);
-    return {source, value, std::move(stage.entities), std::move(stage.reviews), std::move(stage.phase), std::move(stage.phase_reviews),
+    MixedSelectionPropertyEditPreparation prepared{source, value, std::move(stage.entities), std::move(stage.reviews), std::move(stage.phase), std::move(stage.phase_reviews),
         std::move(stage.component), std::move(stage.component_mapping),
         std::move(stage.reserved_component_identity_ids), std::move(stage.elided_component_identity_ids)};
+    prepared.identity_map_.insert(stage.slab_identity_map.begin(),stage.slab_identity_map.end());
+    prepared.selected_identity_map_.insert(stage.slab_selected_identity_map.begin(),stage.slab_selected_identity_map.end());
+    prepared.hosted_bindings_.insert(stage.slab_hosted_bindings.begin(),stage.slab_hosted_bindings.end());
+    prepared.slab_phase_authorings_=std::move(stage.slab_phase_authorings);
+    return prepared;
 }
 void require_mixed_selection_property_edit_source_current(const DocumentSnapshot& source,
     const MixedSelectionPropertyEditPreparation& prepared) {
@@ -1748,12 +1906,12 @@ std::vector<Json> mixed_selection_property_edit_phase_room_reviews(const Json& v
 bool mixed_selection_property_edit_retires_dependencies(const Json& value) {
     validate(value);
     if (component_dialect(value)) {
-        if (value.at("version") == 36 || value.at("version") == 37 || value.at("version") == 38)
+        if (value.at("version") == 36 || value.at("version") == 37 || value.at("version") == 38 || value.at("version")==39)
             for (const auto& [id, decision] : value.at("component_request").at("authoring").at("profile_dimension_decisions").items()) {
                 (void)id;
                 if (decision.at("operation") == "retire") return true;
             }
-        return !value.at("base_intent").is_null() &&
+        return value.at("version")!=39 && !value.at("base_intent").is_null() &&
             mixed_selection_property_edit_retires_dependencies(value.at("base_intent"));
     }
     if (phase_selection_dialect(value)) return std::any_of(
@@ -1768,6 +1926,8 @@ bool mixed_selection_property_edit_retires_dependencies(const Json& value) {
 }
 bool mixed_selection_property_edit_has_phase_replacements(const Json& value) {
     validate(value);
+    if (value.at("version")==39) return !value.at("component_request").at("authoring").at("allocation").at("roots").empty() ||
+        !value.at("slab_allocation").is_null();
     if (component_dialect(value)) return !value.at("component_request").at("authoring").at("allocation").at("roots").empty() ||
         (!value.at("base_intent").is_null() && mixed_selection_property_edit_has_phase_replacements(value.at("base_intent")));
     return phase_selection_dialect(value) && !value.at("phase_request").at("allocations").empty();

@@ -1815,6 +1815,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/design/vertex-mixed-component-slab-resize.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/desktop-workflow.md"
     },
     {
@@ -3400,6 +3404,10 @@
     {
       "category": "source",
       "path": "include/sketch/boundary_active_recovery.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/boundary_area_defaults.hpp"
     },
     {
       "category": "source",
@@ -5020,6 +5028,10 @@
     {
       "category": "source",
       "path": "src/core/boundary_active_recovery.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/boundary_area_defaults.cpp"
     },
     {
       "category": "source",
@@ -6859,6 +6871,14 @@
     },
     {
       "category": "source",
+      "path": "tests/mixed_component_slab_resize_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/mixed_family_resize_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/mixed_translation_completion_tests.cpp"
     },
     {
@@ -6936,6 +6956,10 @@
     {
       "category": "source",
       "path": "tests/persistent_sequence_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/phase_coordinated_slab_resize_tests.cpp"
     },
     {
       "category": "source",
@@ -7228,6 +7252,10 @@
     {
       "category": "source",
       "path": "tests/support/detached_document_snapshot.hpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/support/fresh_open_history.hpp"
     },
     {
       "category": "source",

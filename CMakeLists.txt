@@ -991,6 +991,12 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
       target_compile_options(phase_coordinated_slab_resize_tests PRIVATE /W4 /permissive- /utf-8)
     endif()
     add_test(NAME phase_coordinated_slab_resize COMMAND phase_coordinated_slab_resize_tests)
+    add_executable(mixed_component_slab_resize_tests tests/mixed_component_slab_resize_tests.cpp)
+    target_link_libraries(mixed_component_slab_resize_tests PRIVATE sketch_constraint_authoring sketch_storage sketch_exchange sketch_sqlite)
+    if(MSVC)
+      target_compile_options(mixed_component_slab_resize_tests PRIVATE /W4 /permissive- /utf-8)
+    endif()
+    add_test(NAME mixed_component_slab_resize COMMAND mixed_component_slab_resize_tests)
     add_executable(exterior_segment_resize_inverse_tests tests/exterior_segment_resize_inverse_tests.cpp)
     target_link_libraries(exterior_segment_resize_inverse_tests PRIVATE sketch_document_wall)
     add_test(NAME exterior_segment_resize_inverse COMMAND exterior_segment_resize_inverse_tests)
@@ -1443,6 +1449,17 @@ if(SKETCH_BUILD_DESKTOP)
     target_link_libraries(desktop_smoke PRIVATE sketch_desktop sketch_product_scope)
     qt_add_resources(desktop_smoke desktop_smoke_test_fonts PREFIX "/fonts" BASE assets/fonts
       FILES assets/fonts/Inter.ttf)
+    add_executable(mixed_family_resize_desktop_tests tests/mixed_family_resize_desktop_tests.cpp)
+    target_link_libraries(mixed_family_resize_desktop_tests PRIVATE sketch_desktop)
+    qt_add_resources(mixed_family_resize_desktop_tests mixed_family_resize_test_fonts PREFIX "/fonts" BASE assets/fonts
+      FILES assets/fonts/Inter.ttf)
+    if(MSVC)
+      target_compile_options(mixed_family_resize_desktop_tests PRIVATE /W4 /permissive- /utf-8)
+    endif()
+    add_test(NAME mixed_family_resize_desktop COMMAND mixed_family_resize_desktop_tests)
+    set_tests_properties(mixed_family_resize_desktop PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     add_executable(project_resource_desktop_tests tests/project_resource_desktop_tests.cpp)
     target_link_libraries(project_resource_desktop_tests PRIVATE sketch_desktop)
     add_executable(appraisal_desktop_workflow_tests tests/appraisal_desktop_workflow_tests.cpp)
@@ -2677,6 +2694,7 @@ if(BUILD_TESTING)
     # Its measured Debug runtime on the Windows reference host is about 63
     # seconds while the Release runtime is about 12 seconds.
     set_tests_properties(boundary_workflow PROPERTIES TIMEOUT 120)
+    set_tests_properties(mixed_family_resize_desktop PROPERTIES TIMEOUT 120)
     # This full native suite includes 64 appraisal transform combinations,
     # wall/source repair dialogs, copy and output. Observed Release execution
     # takes about 174 seconds; the ordinary focused-test guard truncates it.

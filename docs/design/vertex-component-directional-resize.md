@@ -2,8 +2,15 @@
 
 This implements the existing requirement for horizontal/vertical canvas handles
 and editable component dimensions. It does not change the production scope or
-make qualification optional. The current source-only instruction remains in
-effect; no runtime evidence is claimed.
+make qualification optional.
+
+October 13 qualification update: the Claude handoff supersedes source-only
+steering. The Release build and automated checks recorded in
+[delivery progress](../delivery/progress.md) now cover the integrated sources.
+Commit `9e61f314` adds closed coordinated directional/mapped slab authority and
+its persistence guards. Complete mixed-family canvas resizing and its native
+interaction qualification remain required. The dated source notes below describe
+their original implementation state; they do not override the current plan.
 
 ## Authoritative geometry
 

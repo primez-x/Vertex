@@ -6683,6 +6683,7 @@ class MainWindow::Impl {
         QStringList ids;
         CanvasSelectionFrame frame;
         std::map<QString,SitePresentationPlacement> site_frames;
+        QStringList slab_ids;
     };
     struct ComponentAxisResizeRelease {
         std::shared_ptr<Document> document;
@@ -6693,6 +6694,7 @@ class MainWindow::Impl {
         QString id;
         std::shared_ptr<const ComponentAxisResizeCohortCapture> cohort;
         PhaseAssemblyInstancePropertyEditAuthoring authoring;
+        std::optional<json> mixed_directional_intent;
         std::shared_ptr<const SiteTransformPreviewCapture> site;
         std::shared_ptr<const DocumentSnapshot> plan_publication,site_publication;
         std::uint64_t site_generation{},site_publication_generation{};
@@ -27219,13 +27221,74 @@ public:
     }
 
     static Command componentAxisResizeCommand(const DocumentSnapshot& source,
-        const PhaseAssemblyInstancePropertyEditAuthoring& authoring) {
+        const PhaseAssemblyInstancePropertyEditAuthoring& authoring,
+        const std::optional<json>& mixed_directional_intent=std::nullopt) {
         if (authoring.intents.empty())
             return ApplyEntityChanges{source.revision(),{}, {},"Resize component dimensions"};
-        const auto prepared=prepare_component_presentation_property_edit(source,authoring,nullptr,
-            "Resize component dimensions");
+        const auto prepared=[&] {
+            if (!mixed_directional_intent)
+                return prepare_component_presentation_property_edit(source,authoring,nullptr,
+                    "Resize component dimensions");
+            if (mixed_directional_intent->at("version")!=39)
+                throw std::invalid_argument("The mixed directional resize proposal changed.");
+            auto value=*mixed_directional_intent;
+            const auto component=prepare_phase_assembly_instance_property_edit(source,authoring);
+            value["component_request"]=component.request();
+            value["component_identity_reservations"]=component.result().fresh_identity_ids;
+            return replay_mixed_selection_property_edit_preparation(source,value);
+        }();
         ApplyBoundaryConstraintChanges command;
-        command.expected_revision=source.revision();command.message="Resize component dimensions";
+        command.expected_revision=source.revision();command.message=prepared.intent().at("message").get<std::string>();
+        command.mixed_selection_edit_completion=true;
+        command.mixed_selection_edit_intent=complete_mixed_selection_property_edit(source,prepared,{},{});
+        return command;
+    }
+
+    static Command componentSlabCohortAxisResizeCommand(const DocumentSnapshot& source,
+        const PhaseAssemblyInstancePropertyEditAuthoring& components,
+        const ComponentAxisResizeCohortCapture& cohort,Vec2 canvas_anchor,double sx,double sy,
+        const BuildingViewFrame* projection) {
+        if (sx==1.0 && sy==1.0) return ApplyEntityChanges{source.revision(),{}, {},"Resize selected plan dimensions"};
+        std::vector<SlabGeometryEditIntent> geometry;
+        for (const auto& id:cohort.slab_ids) {
+            const auto anchor=!cohort.site_frames.empty()
+                ? site_source_plan_point(canvas_anchor,cohort.site_frames.at(id))
+                : projection ? unproject_plan_point(canvas_anchor,*projection) : canvas_anchor;
+            SlabGeometryEditIntent edit;
+            edit.slab_id=id.toStdString();edit.kind=SlabGeometryEditKind::resize_plan;
+            edit.resize=SlabPlanAxisResize{sx,sy,anchor,componentCohortModelAxis(cohort,id,projection)};
+            edit.coordinate_world_hosted_geometry=true;
+            edit.preserve_planar_source_geometry=slab_geometry_edit_requires_planar_source(source.entities().at(edit.slab_id),edit);
+            geometry.push_back(std::move(edit));
+        }
+        std::sort(geometry.begin(),geometry.end(),[](const auto& a,const auto& b){return a.slab_id<b.slab_id;});
+        const auto partition=partition_phase_slab_geometry_edits(source.entities(),geometry);
+        std::optional<ComponentSlabDirectionalResizeAllocation> allocation;
+        if (partition.replacement) {
+            const auto& request=*partition.replacement;
+            const auto plan=inspect_phase_slab_replacement_plan(source.entities(),request.seed_slab_ids,
+                request.registry_id,request.alternative_id,true);
+            if (!plan.ready()) throw std::invalid_argument("The horizontal assembly replacement inventory is incomplete.");
+            auto occupied=retainedSlabIdentityNames(source,true);
+            const auto component=prepare_phase_assembly_instance_property_edit(source,components);
+            occupied.insert(component.result().fresh_identity_ids.begin(),component.result().fresh_identity_ids.end());
+            const auto fresh=[&](const char* kind) {
+                auto id=new_id(kind);
+                while (!occupied.insert(id).second) id=new_id(kind);
+                return id;
+            };
+            allocation.emplace();
+            for (const auto* inventory:{&plan.required_entity_ids,&plan.required_child_ids})
+                for (const auto& id:*inventory) allocation->identities.emplace(id,fresh("proposed-slab"));
+            for (const auto& binding:plan.required_hosted_instance_ids)
+                allocation->hosted_instance_identities.emplace(binding,fresh("proposed-slab-component"));
+            for (const auto& id:plan.required_dimension_ids)
+                allocation->dimension_identities.emplace(id,fresh("proposed-slab-dimension"));
+        }
+        const auto prepared=prepare_component_slab_directional_resize(source,components,geometry,allocation,
+            "Resize selected plan dimensions");
+        ApplyBoundaryConstraintChanges command;
+        command.expected_revision=source.revision();command.message="Resize selected plan dimensions";
         command.mixed_selection_edit_completion=true;
         command.mixed_selection_edit_intent=complete_mixed_selection_property_edit(source,prepared,{},{});
         return command;
@@ -27391,12 +27454,61 @@ public:
         std::vector<AssemblyDirectionalResizeTarget> targets;
         targets.reserve(static_cast<std::size_t>(cohort.ids.size()));
         for (const auto& id:cohort.ids) {
+            if (cohort.slab_ids.contains(id)) continue;
             const auto anchor=!cohort.site_frames.empty()
                 ? site_source_plan_point(canvas_anchor,cohort.site_frames.at(id))
                 : projection ? unproject_plan_point(canvas_anchor,*projection) : canvas_anchor;
             targets.push_back({id.toStdString(),{anchor,sx,sy,componentCohortModelAxis(cohort,id,projection)}});
         }
         return targets;
+    }
+
+    static void classifyComponentAxisResizeCohort(const DocumentSnapshot& source,
+        ComponentAxisResizeCohortCapture& cohort) {
+        cohort.slab_ids.clear();
+        bool component=false;
+        for (const auto& id:cohort.ids) {
+            const auto& entity=source.entities().at(id.toStdString());
+            if (entity.type=="slab") cohort.slab_ids.push_back(id);
+            else if (entity.type=="assembly_instance" &&
+                !geometric_assembly_for_child(source,id.toStdString())) component=true;
+            else throw std::invalid_argument("Side grips require complete independent components and horizontal assemblies.");
+        }
+        if (!component) throw std::invalid_argument("This resize cohort needs an independent component.");
+    }
+
+    static Bounds2 componentCohortSlabBounds(const Entity& entity,
+        const ComponentAxisResizeCohortCapture& cohort,const QString& id,
+        const BuildingViewFrame* projection) {
+        Slab slab;
+        std::string diagnostic;
+        if (!read_document_slab(entity,slab,diagnostic)) throw std::invalid_argument(diagnostic);
+        (void)slab_plan_bounds(slab);
+        auto mapping=slab.planar_affine.value_or(AssemblyProfilePlanarAffine{});
+        AssemblyProfilePlanarAffine presentation;
+        if (!cohort.site_frames.empty()) {
+            const auto& pose=cohort.site_frames.at(id).forward;
+            const auto c=std::cos(pose.rotation_radians),s=std::sin(pose.rotation_radians);
+            presentation={{},{pose.translation_m.x,pose.translation_m.y},c,-s,s,c};
+        } else if (projection) {
+            const auto right=plan_view_right(*projection),up=plan_view_up(*projection);
+            presentation={{projection->origin.x,projection->origin.y},{},right.x,right.y,up.x,up.y};
+            if (right.x*up.y-right.y*up.x<0.0) {
+                // Keep every analytic affine orientation-preserving. Reflection
+                // lives in the temporary source curves, never in the saved slab.
+                for (auto& edge:slab.boundary) {
+                    edge.start.y=-edge.start.y;edge.end.y=-edge.end.y;
+                    edge.sweep_radians=-edge.sweep_radians;
+                }
+                mapping.source_origin.y=-mapping.source_origin.y;
+                mapping.target_origin.y=-mapping.target_origin.y;
+                mapping.xy=-mapping.xy;mapping.yx=-mapping.yx;
+                presentation.source_origin.y=-presentation.source_origin.y;
+                presentation.xy=-presentation.xy;presentation.yy=-presentation.yy;
+            }
+        }
+        return assembly_profile_boundary_bounds(slab.boundary,
+            compose_assembly_profile_affine(presentation,mapping));
     }
 
     static CanvasSelectionFrame componentCohortPlanFrame(const DocumentSnapshot& candidate,
@@ -27408,12 +27520,16 @@ public:
         AssemblyCatalogTransferBudget raw_work;
         std::map<std::string,const Entity*,std::less<>> catalogs;
         std::vector<std::pair<QString,AssemblyDocumentInstance>> roots;
+        std::vector<std::pair<QString,const Entity*>> slabs;
         std::set<QString> unique;
         for (const auto& id:cohort.ids) {
             if (id.isEmpty() || id.toStdString().size()>128 || !unique.insert(id).second)
                 throw std::invalid_argument("The component resize frame has duplicate or invalid roots.");
             const auto target=command ? alternativeReplacementTargetID(*command,id.toStdString(),source) : id.toStdString();
             const auto& entity=candidate.entities().at(target);
+            if (entity.id==target && entity.type=="slab" && cohort.slab_ids.contains(id)) {
+                slabs.emplace_back(id,&entity);continue;
+            }
             if (entity.id!=target || entity.type!="assembly_instance")
                 throw std::invalid_argument("The component resize frame lost an independent source root.");
             auto root=decode_document_assembly_instance(entity,work);
@@ -27429,6 +27545,16 @@ public:
         for (const auto& [id,catalog]:catalogs)
             models.emplace(id,AssemblyModel::from_json(catalog->properties.at("model")));
         std::optional<Bounds2> canvas_bounds;
+        for (const auto& [id,entity]:slabs) {
+            const auto bounds=componentCohortSlabBounds(*entity,cohort,id,projection);
+            if (!canvas_bounds) canvas_bounds=bounds;
+            else {
+                canvas_bounds->minimum.x=std::min(canvas_bounds->minimum.x,bounds.minimum.x);
+                canvas_bounds->minimum.y=std::min(canvas_bounds->minimum.y,bounds.minimum.y);
+                canvas_bounds->maximum.x=std::max(canvas_bounds->maximum.x,bounds.maximum.x);
+                canvas_bounds->maximum.y=std::max(canvas_bounds->maximum.y,bounds.maximum.y);
+            }
+        }
         for (const auto& [id,root]:roots) {
             const auto actual=models.at(root.assembly_catalog_id).expand(root.instance,work);
             const auto& pose=root.instance.root_transform.value();
@@ -30110,7 +30236,7 @@ public:
                             } else result->reset();
                         }
                     } else if (axis_scales && axis_command) {
-                        const bool component=source->entities().at(id.toStdString()).type=="assembly_instance";
+                        const bool component=axis_cohort || source->entities().at(id.toStdString()).type=="assembly_instance";
                         Command command;
                         if (component) {
                             if (!component_authoring)
@@ -30123,7 +30249,14 @@ public:
                                     std::span<const AssemblyDirectionalResizeTarget>{targets});
                             } else *component_authoring=draftComponentAxisResizeAuthoring(*source,id.toStdString(),
                                     axis_scales->first,axis_scales->second,position);
-                            command=componentAxisResizeCommand(*source,**component_authoring);
+                            if (component_release)
+                                command=componentAxisResizeCommand(*source,**component_authoring,
+                                    component_release->mixed_directional_intent);
+                            else if (axis_cohort && !axis_cohort->slab_ids.empty())
+                                command=componentSlabCohortAxisResizeCommand(*source,**component_authoring,
+                                    *axis_cohort,axis_canvas_anchor,axis_scales->first,axis_scales->second,
+                                    view_context ? &view_context->frame : nullptr);
+                            else command=componentAxisResizeCommand(*source,**component_authoring);
                         } else command=axis_scales->first==1.0 && axis_scales->second==1.0
                             ? Command{ApplyEntityChanges{source->revision(),{}, {},"Resize plan dimensions"}}
                             : physicalPlanAxisResizeCommand(*source,id.toStdString(),
@@ -30959,11 +31092,7 @@ public:
         auto cohort=std::make_shared<ComponentAxisResizeCohortCapture>();cohort->ids=ids;cohort->frame=*frame;
         m_entity_transform_source=captureCanvasGeometrySource(canvas);
         if (!m_entity_transform_source) throw std::invalid_argument("The component cohort lost its displayed source.");
-        for (const auto& id:ids) {
-            const auto& actual=m_entity_transform_source->entities().at(id.toStdString());
-            if (actual.type!="assembly_instance" || geometric_assembly_for_child(*m_entity_transform_source,id.toStdString()))
-                throw std::invalid_argument("Component side grips require complete independent roots.");
-        }
+        classifyComponentAxisResizeCohort(*m_entity_transform_source,*cohort);
         if (siteCanvas(canvas)) {
             requireSiteEditCurrent();
             if (m_entity_transform_source!=m_site_edit_source)
@@ -31085,7 +31214,7 @@ public:
                 request.authority=m_entity_transform_context; request.label_font=input->label_font;
                 request.entity_transform_preview=true; request.axis_resize_scales=std::pair{scale_x,scale_y};
                 request.axis_resize_model_angle=angle; request.axis_resize_command=std::make_shared<std::optional<Command>>();
-                if (found->second.type=="assembly_instance")
+                if (found->second.type=="assembly_instance" || m_component_axis_cohort)
                     request.component_axis_authoring=std::make_shared<std::optional<PhaseAssemblyInstancePropertyEditAuthoring>>();
                 request.axis_resize_cohort=m_component_axis_cohort;
                 if (request.axis_resize_cohort) request.axis_resize_cohort_frame=std::make_shared<std::optional<CanvasSelectionFrame>>();
@@ -31116,7 +31245,7 @@ public:
             request.axis_resize_scales=std::pair{scale_x,scale_y};
             request.axis_resize_model_angle=angle;
             request.axis_resize_command=std::make_shared<std::optional<Command>>();
-            if (found->second.type=="assembly_instance")
+            if (found->second.type=="assembly_instance" || m_component_axis_cohort)
                 request.component_axis_authoring=std::make_shared<std::optional<PhaseAssemblyInstancePropertyEditAuthoring>>();
             request.axis_resize_cohort=m_component_axis_cohort;
             if (request.axis_resize_cohort) request.axis_resize_cohort_frame=std::make_shared<std::optional<CanvasSelectionFrame>>();
@@ -32155,6 +32284,15 @@ public:
                             encode_phase_assembly_instance_property_edit_authoring(request.component_axis_release->authoring) ||
                         !componentAxisResizeReleaseCurrent(request.component_axis_release))
                         throw std::invalid_argument("The reviewed component resize or its exact publication changed.");
+                    if (request.component_axis_release->mixed_directional_intent) {
+                        const auto* command=std::get_if<ApplyBoundaryConstraintChanges>(&**request.axis_resize_command);
+                        const auto& retained=*request.component_axis_release->mixed_directional_intent;
+                        if (!command || !command->mixed_selection_edit_completion ||
+                            command->mixed_selection_edit_intent.at("version")!=39 ||
+                            command->mixed_selection_edit_intent.at("slab_geometry")!=retained.at("slab_geometry") ||
+                            command->mixed_selection_edit_intent.at("slab_allocation")!=retained.at("slab_allocation"))
+                            throw std::invalid_argument("The reviewed mixed resize changed its captured horizontal assembly proposal.");
+                    }
                     // The worker manufactured the complete reviewed command,
                     // including actual native geometry and dimension projection.
                     // No provisional retirement decision can reach this branch.
@@ -33007,6 +33145,15 @@ public:
         release->viewport.selected_presentations=canvas->selectedEntityPresentations();
         release->viewport.selected_labels=canvas->selectedLabelPresentations();
         release->authoring=*m_component_axis_authoring;
+        if (release->cohort && !release->cohort->slab_ids.empty()) {
+            if (!m_entity_transform_command)
+                throw std::invalid_argument("The mixed resize proposal is incomplete.");
+            const auto* command=std::get_if<ApplyBoundaryConstraintChanges>(&*m_entity_transform_command);
+            if (!command || !command->mixed_selection_edit_completion ||
+                command->mixed_selection_edit_intent.at("version")!=39)
+                throw std::invalid_argument("The mixed resize proposal lost its source-bound authority.");
+            release->mixed_directional_intent=command->mixed_selection_edit_intent;
+        }
         release->site=m_entity_transform_site_capture;
         release->plan_publication=m_plan_publication_source;release->site_publication=m_site_publication_source;
         release->site_generation=m_site_edit_generation;release->site_publication_generation=m_site_publication_generation;
@@ -33071,6 +33218,10 @@ public:
             fence();release->authoring.profile_dimension_decisions=*decisions;
             allocateComponentAxisResizePresentation(*release->source,release->authoring);
             fence();
+            // The modal review temporarily takes the gesture's focus. Return
+            // it before manufacturing the final result so the existing focus
+            // fence continues to reject subsequent user navigation.
+            if (release->viewport.had_focus) canvas->setFocus(Qt::OtherFocusReason);
             // The final worker reuses the captured profile identities and
             // replacement roots. It manufactures the reviewed geometry and
             // dimension presentation before the only publication path.
@@ -53823,7 +53974,7 @@ private:
                     validate_mixed_clipboard_placement_intent(encoded.at("clipboard_placement_intent")) :
                     validate_mixed_selection_edit_intent(encoded.at("mixed_selection_edit_intent"));
                 const auto dialect=intent.at("version").get<int>();
-                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=29) || dialect==32 || dialect==33 || dialect==34 || dialect==35 || dialect==36 || dialect==37 || dialect==38)) {
+                if (version==52 && ((dialect>=5 && dialect<=13) || (dialect>=15 && dialect<=17) || (dialect>=21 && dialect<=29) || dialect==32 || dialect==33 || dialect==34 || dialect==35 || dialect==36 || dialect==37 || dialect==38 || dialect==39)) {
                     // Properties dialects have no transform roof_authoring.
                     // Active-baseline redirects require independently replayed
                     // source authority rather than extracting supplied maps.
@@ -63524,7 +63675,17 @@ private:
                     mixed_edit=true;
                     const auto intent=validate_mixed_selection_edit_intent(value.mixed_selection_edit_intent);
                     const auto properties_dialect=intent.at("version").get<int>();
-                    if ((properties_dialect>=5 && properties_dialect<=13) || (properties_dialect>=15 && properties_dialect<=17) || (properties_dialect>=21 && properties_dialect<=29) || properties_dialect==32 || properties_dialect==33 || properties_dialect==34 || properties_dialect==35 || properties_dialect==36 || properties_dialect==37 || properties_dialect==38) {
+                    if (properties_dialect==39) {
+                        for (const auto& row:intent.at("slab_geometry"))
+                            targets.insert(decode_slab_geometry_edit_intent(row).slab_id);
+                        const auto authoring=decode_phase_assembly_instance_property_edit_authoring(
+                            intent.at("component_request").at("authoring"));
+                        for (const auto& edit:authoring.intents) {
+                            if (!edit.target.document_entity_id)
+                                throw std::invalid_argument("The mixed resize lost its independent component source.");
+                            targets.insert(*edit.target.document_entity_id);
+                        }
+                    } else if ((properties_dialect>=5 && properties_dialect<=13) || (properties_dialect>=15 && properties_dialect<=17) || (properties_dialect>=21 && properties_dialect<=29) || properties_dialect==32 || properties_dialect==33 || properties_dialect==34 || properties_dialect==35 || properties_dialect==36 || properties_dialect==37 || properties_dialect==38) {
                         // Properties has its own typed lanes, including a null
                         // physical lane for annotation-only edits. Gesture
                         // ordinary_request codecs cannot decode this roster.
@@ -63579,7 +63740,9 @@ private:
                     }
                     // Qualified children never promote their compatibility host
                     // IDs into ordinary presented-object selection authority.
-                    const auto& roof_selection=(intent.at("version")==16 || intent.at("version")==17 || intent.at("version")==22 || intent.at("version")==23 || intent.at("version")==25 || intent.at("version")==26 || intent.at("version")==28 || intent.at("version")==29 || intent.at("version")==32 || intent.at("version")==33 || intent.at("version")==34 || intent.at("version")==35 || intent.at("version")==36 || intent.at("version")==37 || intent.at("version")==38)
+                    const json no_roof_selection=nullptr;
+                    const auto& roof_selection=properties_dialect==39 ? no_roof_selection :
+                        (intent.at("version")==16 || intent.at("version")==17 || intent.at("version")==22 || intent.at("version")==23 || intent.at("version")==25 || intent.at("version")==26 || intent.at("version")==28 || intent.at("version")==29 || intent.at("version")==32 || intent.at("version")==33 || intent.at("version")==34 || intent.at("version")==35 || intent.at("version")==36 || intent.at("version")==37 || intent.at("version")==38)
                         ? intent.at("base_intent") : intent;
                     if (!roof_selection.is_null()) for (const auto& child:roof_selection.at("roof_opening_members"))
                         targets.insert(child.at("opening_id").template get<std::string>());
@@ -68944,6 +69107,7 @@ private:
                     const auto source=captureCanvasGeometrySource(canvas);
                     if (!source) throw std::invalid_argument("The component frame source is unavailable.");
                     ComponentAxisResizeCohortCapture cohort;cohort.ids=m_selected_ids;
+                    classifyComponentAxisResizeCohort(*source,cohort);
                     std::optional<BuildingViewFrame> projection;
                     if (siteCanvas(canvas)) {
                         requireSiteEditCurrent();

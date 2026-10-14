@@ -364,7 +364,8 @@ public:
     // v259 retains source-preserving mapped slab geometry, leaf5/archive5 and phases.
     // v260 retains closed coordinated directional/mapped slab contributions.
     // v261 retains deterministic area-default intents in active/archived inputs.
-    static constexpr std::uint32_t format_version = 261;
+    // v262 retains closed component/slab directional resize composition.
+    static constexpr std::uint32_t format_version = 262;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     // Document semantics only: excludes the native-only v161 shared asset

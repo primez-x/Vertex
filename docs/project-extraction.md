@@ -1,5 +1,9 @@
 # Portable project extraction
 
+Exchange version260 requires native reader262 for closed Properties39
+component/slab directional resize composition. The extraction retains complete
+source-bound intents, allocations and history, including undone commands.
+
 Exchange version259 requires native reader261 for deterministic area-default
 intents in current and archived boundary recovery inputs. The exact ledger,
 including retained and undone inputs, contributes to the extraction reader floor.

@@ -1,4 +1,14 @@
-# Vertex project formats v1 through v261
+# Vertex project formats v1 through v262
+
+Reader262/native extraction260 retains closed Properties39 component/slab
+directional resize composition under command52. Both lanes independently replay
+the same full captured source. Canonical component geometry requests7/8/9 and
+coordinated slab resize leaves4/5 retain their own meanings. Replacement roles
+are source-derived; supplied allocations contain only exact inspected identity
+slots. One final dimension batch shares existing, unit and copied associations.
+The enclosing reader floor survives Undo and retained history. Native load
+refuses downgraded markers before accepting the project, and opaque metadata
+does not contribute this enclosing authority.
 
 Reader261/native extraction259 retains active-recovery v3 area-default intents
 in both current drafts and archived lifecycle inputs. Their semantic reader floor

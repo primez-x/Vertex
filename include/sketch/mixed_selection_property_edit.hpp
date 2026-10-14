@@ -8,12 +8,19 @@
 #include "sketch/stair_property_review.hpp"
 #include "sketch/phase_selection_property_edit.hpp"
 #include "sketch/phase_assembly_instance_property_edit.hpp"
+#include "sketch/phase_slab_replacement.hpp"
 
 #include <optional>
 #include <span>
 #include <string_view>
 
 namespace sketch {
+
+struct ComponentSlabDirectionalResizeAllocation {
+    PhaseSlabReplacementIdentityMap identities;
+    PhaseSlabReplacementHostedInstanceIdentityMap hosted_instance_identities;
+    PhaseSlabReplacementIdentityMap dimension_identities;
+};
 
 // Dialect five is scalar Properties authority only; dialect six additionally
 // requires presentation request two for saved-frame placement and mirrors.
@@ -112,6 +119,9 @@ private:
     std::map<std::pair<std::string, std::string>, RoofOpeningGroupMember> roof_children_;
     std::vector<PhysicalWallRoomPhaseReviewInventory> phase_room_reviews_;
     std::vector<std::size_t> phase_room_review_indices_;
+    // Dialect 39's slab contribution is independently sealed, rather than a
+    // synthetic historical scalar Properties base.
+    std::vector<nlohmann::json> slab_phase_authorings_;
     friend MixedSelectionPropertyEditPreparation replay_mixed_selection_property_edit_preparation(
         const DocumentSnapshot&, const nlohmann::json&);
     friend DocumentSnapshot preview_mixed_selection_property_room_stage(
@@ -124,6 +134,18 @@ private:
         const DocumentSnapshot&, const MixedSelectionPropertyEditPreparation&,
         const std::vector<nlohmann::json>&);
 };
+
+// Closed dialect 39: the five original source fences, version,
+// component_request (7/8/9), component_identity_reservations, slab_geometry,
+// slab_allocation, empty room_reviews/phase_room_reviews, and message. Only
+// independent document component roots admit geometry; scalar and pose patches
+// refuse. Slab resize leaves 4/5 include unchanged unit members. Allocation is
+// null without changed baseline slabs, otherwise the three exact source-derived
+// identity maps. Both lanes replay against the same complete original snapshot.
+[[nodiscard]] MixedSelectionPropertyEditPreparation prepare_component_slab_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
+    std::span<const SlabGeometryEditIntent>,
+    const std::optional<ComponentSlabDirectionalResizeAllocation>&, std::string_view);
 
 // Closed dialect-five/six/seven/eight envelope: version, expected_revision, source_snapshot_digest,
 // source_authoring_digest, source_entities_digest, source_saved_revision,

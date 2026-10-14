@@ -12,6 +12,53 @@ constitute user acceptance.
 
 ## Current delivery state
 
+### October 13 mixed component and slab resizing
+
+Independent components and slabs now share an analytical side-grip frame and
+one captured anchored resize operator. Both selection orders produce detached
+exact previews and publish one command after release. Component profile
+dimensions retain explicit review; Cancel preserves the source and output,
+and view or selection changes reject the complete captured gesture.
+
+Closed Properties39 under command52 independently reconstructs both lanes from
+the original snapshot. Its final dimension batch includes ordinary dimensions,
+baseline copies and unchanged unit associations. Independent review found a
+valid slab-only dimension case taking the reviewed carry path without reviewed
+nodes; it now uses the existing ordinary carry path for that shared batch.
+Reader262 and extraction260 retain the authority even after Undo. Downgraded
+markers refuse without rewriting the file; opaque command-shaped metadata
+does not raise this enclosing floor.
+
+The full Release build passed. The 322-test registration has 321 active tests;
+DXF and IFC workflow tests run in the protected import host. The standard full
+run passed 317 of 319 active tests in 512.69 seconds. The two failures were the
+new fixture's omitted Site rotation and the source-kit allowlist's four missing
+baseline paths. Corrected core checks passed in 36.45 seconds, including all
+ordinary/baseline dimension and migration cases. Source-kit checks passed after
+the tracked-path generator included those paths and this slice's three new
+files (2,064 entries). All six protected import fixtures passed, including DXF
+and IFC. All 321 active tests therefore have passing evidence across the full
+run, affected reruns and protected checks. The production gate stays disabled.
+
+The native mixed gesture test passed in the full run (30.62 seconds), covering
+both owner orders, dimension-review Cancel/Remove, stale view/selection,
+committed output, exact Undo/Redo and editable save/reopen. Captures were
+inspected. Eight application smoke cases passed at 100%, 150% and 200% scaling;
+Plan captures in both workspaces were inspected. Evidence, including original
+failures, is under `artifacts/codex-mixed-resize-20261013/`: `full-build.log`,
+`full-ctest.log`, `core-final-ctest.log`, `affected-ctest.log`,
+`protected-runtime-final-wps2/result.json`, `native-captures/` and
+`final-desktop-smoke/`. The explicit Windows PowerShell child launcher avoids
+this host's known PowerShell MI initialization failure.
+
+This qualifies the ordinary Plan interaction and core mapped, nested/reflected
+and phase composition. Native Site/curved/phase interaction, the other mixed
+physical families and typed skylights remain required. The next extension is
+independent components with separately selected skylights on unselected
+ordinary roofs; its source-backed contract review is complete, implementation
+and runtime checks remain pending. Installed candidate and human acceptance
+remain unchanged. No original Apex or physical device compatibility is claimed.
+
 ### October 13 handoff and baseline consolidation
 
 `main` now contains Claude's pushed checkpoint `1df97f5e`. The delivery-reset,

@@ -5,6 +5,8 @@
 
 #include <vector>
 #include <set>
+#include <optional>
+#include <span>
 
 namespace sketch {
 
@@ -14,6 +16,8 @@ class StairPropertyReviewPreparation;
 class AssemblyInstancePropertyEditPreparation;
 class PhaseAssemblyInstancePropertyEditPreparation;
 class MixedSelectionPropertyEditPreparation;
+struct ComponentSlabDirectionalResizeAllocation;
+struct SlabGeometryEditIntent;
 
 // Collision fence for newly declared global identities against one retained
 // state, including known owned topology/children and render aliases. References
@@ -341,6 +345,22 @@ struct CoordinatedComponentPropertyComposition {
     std::vector<std::string> reserved_component_identity_ids;
     std::vector<std::string> elided_component_identity_ids;
 };
+
+struct ComponentSlabDirectionalResizeComposition {
+    CoordinatedComponentPropertyComposition components;
+    std::map<std::string,std::string,std::less<>> slab_original_to_proposed;
+    std::map<std::string,std::string,std::less<>> slab_selected_original_to_proposed;
+    std::map<std::pair<std::string,std::string>,std::pair<std::string,std::string>> slab_hosted_bindings;
+    std::vector<nlohmann::json> slab_phase_authorings;
+};
+// Reconstruct independent component geometry and source-partitioned slab
+// geometry. No candidate map, historical base, or completed command is accepted.
+// The one final reviewed dimension batch includes ordinary, clone and unit
+// associations from both lanes, with the original source envelopes restored.
+[[nodiscard]] ComponentSlabDirectionalResizeComposition compose_component_slab_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditPreparation&,
+    std::span<const SlabGeometryEditIntent>,
+    const std::optional<ComponentSlabDirectionalResizeAllocation>&, std::string_view);
 [[nodiscard]] CoordinatedComponentPropertyComposition compose_coordinated_component_property_dependencies(
     const DocumentSnapshot& actual,
     const PhaseAssemblyInstancePropertyEditPreparation& assemblies,
