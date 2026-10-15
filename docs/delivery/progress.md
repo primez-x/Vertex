@@ -12,6 +12,54 @@ constitute user acceptance.
 
 ## Current delivery state
 
+### October 14 combined roof-bearing physical resize development
+
+The component/roof/slab checkpoint is committed and pushed as `ecf25f95`; exact
+remote main was verified. Read-only discovery recommends one coherent next
+[contract](../design/vertex-component-roof-physical-resize.md) and
+[plan](../superpowers/plans/2026-10-14-component-roof-physical-resize.md) for components,
+whole roofs and one or two slab/structural/different-host skylight families within
+the existing2..3 physical-contribution cap. The genuine component/roof/column native
+fixture compiles and passes actual solids/corners/volumes, published ink, exact
+selection and source/history/save/output preservation in six orders, then reports
+MissingFrame in every order with no UnexpectedError (`artifacts/codex-component-roof-physical-20261014/native-red.log`,2.13 seconds).
+Independent contract review is complete. The contract now requires one early
+analytical ledger for all qualified hosted roots and combined peak entity growth,
+including structural validation's65536-entity ceiling. Core, controller and
+reader270/extraction268 integration are implemented, retaining the existing45/46
+producer paths. Installation and production acceptance remain separate.
+
+Focused Release compilation passes. The complete new core suite passes67.39
+seconds, including dual baseline/private catalog, combined budgets and canonical
+applied/undone270/268 persistence behind earlier46 history. Integration diagnosis
+found and fixed the general command dispatcher and the desktop release dialect
+check; the new storage fixture now checks retained navigation evidence at the
+storage boundary, while the desktop fixture checks the new Undo session. All78
+native frame orders and four opposite-anchor lifecycles pass with12 fresh
+editable Opens. The full native run passes1026.48 seconds:78 frame orders,
+48 Plan/Site axis/anchor lifecycles,4 dimension reviews,5 stale guards and145
+fresh editable Opens. Root inspected opposite-anchor Plan, rotated Site and
+selected-child committed output. Source-kit2096 and whitespace checks pass.
+Full Release compilation passes336 build steps. Five historical core contracts
+(slab, whole roof, roof/skylight, roof/slab and combined physical) pass138.08
+seconds. CTest registers344 tests:341 active standard tests, two protected-runner
+imports and one disabled production gate. All341 active standard tests pass:
+340 completed before the host session interrupted the final test, which passed
+when resumed separately without source or binary changes. The new native fixture
+also passes in1460.93 seconds under the full-suite load. All six protected-runner
+checks and all eight desktop smoke cases pass; smoke binary hashes match the
+verified Release executable. Smoke performance evidence remains incomplete and
+does not qualify production performance or fresh-room GLA. Earlier failing and
+interrupted evidence is retained in the private wave artifact directory.
+
+A separate manual test copy is available under
+`artifacts/vertex-test-properties47-20261015/Start-Vertex.ps1`; its runtime file
+hashes and offscreen launch are verified. It uses this checkout's prepared
+dependencies and leaves the installed candidate unchanged. The user's October15
+dragging feedback takes priority next: diagnose object anchoring and add magnetic
+alignment to nearby wall faces and edges. Further mixed stair/physical expansion
+is deferred while that interaction is improved.
+
 ### October 14 component, whole-roof and slab resizing
 
 The different-host skylight checkpoint is committed and pushed as `67143a41`;

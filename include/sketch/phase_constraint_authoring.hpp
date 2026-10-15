@@ -457,6 +457,26 @@ struct ComponentPhysicalDirectionalResizeComposition {
     std::map<std::pair<std::string,std::string>,RoofOpeningGroupMember> roof_children;
     std::vector<nlohmann::json> phase_authorings;
 };
+// Properties47 admits one whole-roof roster plus one or two other physical
+// families in one analytical ledger before any native staging or component draft.
+void require_component_roof_physical_directional_resize_source_admission(
+    const DocumentSnapshot&, std::span<const AssemblyDirectionalResizeTarget>,
+    std::span<const RoofPlanResizeIntent>, std::span<const SlabGeometryEditIntent>,
+    std::span<const StructuralDirectionalResizeRequest>, std::span<const RoofOpeningDirectionalResizeRequest>);
+void preflight_component_roof_physical_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
+    std::span<const RoofPlanResizeIntent>, std::span<const SlabGeometryEditIntent>,
+    const std::optional<ComponentSlabDirectionalResizeAllocation>&,
+    std::span<const StructuralDirectionalResizeRequest>,
+    const std::optional<ComponentStructuralDirectionalResizeAllocation>&,
+    std::span<const RoofOpeningDirectionalResizeRequest>);
+[[nodiscard]] ComponentPhysicalDirectionalResizeComposition compose_component_roof_physical_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditPreparation&,
+    std::span<const RoofPlanResizeIntent>, std::span<const SlabGeometryEditIntent>,
+    const std::optional<ComponentSlabDirectionalResizeAllocation>&,
+    std::span<const StructuralDirectionalResizeRequest>,
+    const std::optional<ComponentStructuralDirectionalResizeAllocation>&,
+    std::span<const RoofOpeningDirectionalResizeRequest>, std::string_view);
 [[nodiscard]] ComponentPhysicalDirectionalResizeComposition compose_component_physical_directional_resize(
     const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditPreparation&,
     std::span<const SlabGeometryEditIntent>,

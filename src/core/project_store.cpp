@@ -1886,11 +1886,13 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                      wire.at("mixed_selection_edit_intent").value("version",nlohmann::json())==43 ||
                      wire.at("mixed_selection_edit_intent").value("version",nlohmann::json())==44 ||
                      wire.at("mixed_selection_edit_intent").value("version",nlohmann::json())==45 ||
-                     wire.at("mixed_selection_edit_intent").value("version",nlohmann::json())==46)) {
+                     wire.at("mixed_selection_edit_intent").value("version",nlohmann::json())==46 ||
+                     wire.at("mixed_selection_edit_intent").value("version",nlohmann::json())==47)) {
                     const auto decoded=command_from_json(wire);
                     const auto* command=std::get_if<ApplyBoundaryConstraintChanges>(&decoded);
                     if (command && command->mixed_selection_edit_completion)
-                        return command->mixed_selection_edit_intent.at("version")==46 ? 269 :
+                        return command->mixed_selection_edit_intent.at("version")==47 ? 270 :
+                            command->mixed_selection_edit_intent.at("version")==46 ? 269 :
                             command->mixed_selection_edit_intent.at("version")==45 ? 268 :
                             command->mixed_selection_edit_intent.at("version")==44 ? 267 :
                             command->mixed_selection_edit_intent.at("version")==43 ? 266 :
@@ -1918,15 +1920,15 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
     };
     for (const auto& revision : snapshot.history()) {
         if (revision.phase_entity_import) required=std::max(required,160U);
-        if (required<269 && (revision.boundary_constraint_changes || revision.boundary_geometry_edit)) {
+        if (required<270 && (revision.boundary_constraint_changes || revision.boundary_geometry_edit)) {
             const auto command=revision.boundary_constraint_changes ?
                 encoded_command(*revision.boundary_constraint_changes) : std::nullopt;
             const auto edit=revision.boundary_geometry_edit ?
                 encoded_edit(*revision.boundary_geometry_edit) : std::nullopt;
             if (command) required=std::max(required,component_directional_reader_floor(*command));
             if (command) required=std::max(required,retained_component_reader_floor(*command));
-            if (required<269 && edit) required=std::max(required,typed_edit_reader_floor(*edit));
-            if (required<269 && command) required=std::max(required,typed_edit_reader_floor(*command));
+            if (required<270 && edit) required=std::max(required,typed_edit_reader_floor(*edit));
+            if (required<270 && command) required=std::max(required,typed_edit_reader_floor(*command));
             if (required<122 && edit) required=std::max(required,quantity_reader_floor(*edit));
             if (required<122 && command) required=std::max(required,quantity_reader_floor(*command));
         }
@@ -4535,6 +4537,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 267 &&
          sqlite3_column_int(user_version.get(), 0) != 268 &&
          sqlite3_column_int(user_version.get(), 0) != 269 &&
+         sqlite3_column_int(user_version.get(), 0) != 270 &&
          sqlite3_column_int(user_version.get(), 0) != 253 &&
          sqlite3_column_int(user_version.get(), 0) != 242 &&
          sqlite3_column_int(user_version.get(), 0) != 207 &&
@@ -5262,6 +5265,8 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     // here and authenticate the manifest with its stored version below.
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
+        if (required_format>=270)
+            storage_error(StorageErrorCode::unsupported_format,"This project requires reader 270 for coordinated components, whole roofs and combined physical geometry");
         if (required_format>=269)
             storage_error(StorageErrorCode::unsupported_format,"This project requires reader 269 for coordinated components, whole roofs and slabs");
         if (required_format>=268)

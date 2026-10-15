@@ -1,4 +1,14 @@
-# Vertex project formats v1 through v269
+# Vertex project formats v1 through v270
+
+Reader270/native extraction268 retains closed Properties47 directional resizing
+of independent components, ordinary whole schema1 roofs and one or two supported
+slab, structural or different-host typed skylight families. Command52 retains
+all four operator lists and both family-local allocations, including empty/null
+absent families and applied or undone history. Its seventeen fields bind the
+same complete original source; physical contributions merge once before the
+component dimension finalizer. Existing45/46 UI producers and historical formats
+retain their meaning. Archive4-only authority remains267/265; opaque lookalikes
+do not raise the floor. Runtime qualification is recorded separately.
 
 Reader269/native extraction267 retains closed Properties46 directional resizing
 of independent components, ordinary whole schema1 roofs and coordinated slabs.

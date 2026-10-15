@@ -166,6 +166,16 @@ private:
     const std::optional<ComponentStructuralDirectionalResizeAllocation>&,
     std::span<const RoofOpeningDirectionalResizeRequest>, std::string_view);
 
+// Closed Properties47/command52: seventeen mandatory fields, whole roofs and
+// one or two other physical families, counted before eliminating unit operators.
+[[nodiscard]] MixedSelectionPropertyEditPreparation prepare_component_roof_physical_directional_resize(
+    const DocumentSnapshot&, const PhaseAssemblyInstancePropertyEditAuthoring&,
+    std::span<const RoofPlanResizeIntent>, std::span<const SlabGeometryEditIntent>,
+    const std::optional<ComponentSlabDirectionalResizeAllocation>&,
+    std::span<const StructuralDirectionalResizeRequest>,
+    const std::optional<ComponentStructuralDirectionalResizeAllocation>&,
+    std::span<const RoofOpeningDirectionalResizeRequest>, std::string_view);
+
 // Closed Properties43/command52: independent component geometry request7/8/9
 // and ordinary v1 straight stairs with existing top landings. All requested
 // owners, including units, admit against the complete original source before

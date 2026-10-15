@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version268 requires native reader270 for closed Properties47 component
+and combined roof-bearing physical resizing. Canonical command52 history retains
+all four original-source operator lists and both family-local allocations,
+including applied and undone commands behind earlier46 history. Historical45/46
+and archive4-only authority keep their earlier floors; opaque command-shaped
+metadata acquires no authority. Runtime qualification is recorded separately.
+
 Exchange version267 requires native reader269 for closed Properties46 component,
 whole-roof and slab resizing. Canonical history retains both original-source
 physical rosters, slab replacement allocation and component authority after Undo.

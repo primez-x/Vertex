@@ -1763,6 +1763,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/design/vertex-component-roof-physical-resize.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/design/vertex-component-roof-resize.md"
     },
     {
@@ -2824,6 +2828,10 @@
     {
       "category": "docs",
       "path": "docs/superpowers/plans/2026-10-14-combined-physical-resize.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-14-component-roof-physical-resize.md"
     },
     {
       "category": "docs",
@@ -6928,6 +6936,14 @@
     {
       "category": "source",
       "path": "tests/mixed_component_physical_resize_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/mixed_component_roof_physical_resize_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/mixed_component_roof_physical_resize_tests.cpp"
     },
     {
       "category": "source",

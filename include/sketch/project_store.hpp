@@ -371,7 +371,8 @@ public:
     // v266 retains closed component/straight-stair directional resizing.
     // v267 retains closed component/whole-roof resizing and shared-frame roof archives.
     // v269 retains coordinated components, whole roofs and slab geometry.
-    static constexpr std::uint32_t format_version = 269;
+    // v270 retains coordinated components, whole roofs and combined physical geometry.
+    static constexpr std::uint32_t format_version = 270;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     // Document semantics only: excludes the native-only v161 shared asset
