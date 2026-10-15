@@ -12,6 +12,48 @@ constitute user acceptance.
 
 ## Current delivery state
 
+### October 15 object dragging and magnetic edge alignment
+
+The combined roof-bearing resize work is committed and pushed as `7b4d44a4`;
+exact remote main was verified. The user's dragging feedback takes priority over
+the next mixed-family expansion. Investigation confirms library drops round the
+cursor to the grid and existing moves subtract rounded pointer coordinates;
+neither compares the moved footprint with nearby wall faces or object edges.
+Existing drawing snaps deliberately use wall centerlines and are disabled during
+body dragging, so they cannot supply this interaction unchanged.
+
+The bounded interaction change preserves the grabbed point and object rotation,
+uses a fixed screen-distance attraction to finite nearby physical edges, and
+shares the resolved translation between preview and release. Wall faces, rather
+than their drawing centerlines, are contact targets. Shift, Snap off and raw
+placement bypass attraction; hosted openings retain their constrained host
+station behavior. The implementation shares a twelve-logical-pixel nearest-edge
+resolver for library preview/drop and ordinary body preview/release. It uses
+published wall outlines, transformed symbol footprints and moved-ID exclusion;
+the existing mixed semantic admission path remains unchanged. Contact cues use
+the design system's snap and guide tokens. Curved target edges retain grid
+fallback; curved source extrema can contact straight targets. No automatic
+rotation or project-format change is introduced.
+
+Both initial regression programs fail against the baseline on missing footprint
+contact (`artifacts/codex-object-drag-snap-20261015/red-tests.log`). Release
+application and affected-target compilation pass after fixture-only corrections
+for Windows' reserved `near` macro and a test-local vector subtraction. All22
+affected CTest programs pass in223.23 seconds (`regression-tests.log`), including
+the full desktop workflow, hosted/curved opening edits and Site opening frames.
+The new tests cover four-sided and angled contact, nearest finite edges, zoom,
+bypasses, rigid groups, self-exclusion, release changes, cancellation, actual
+Measure/Design sofa movement, library placement, one-step Undo/Redo and editable
+save/Open. Additional wall-outline and scene-replacement probes pass. Root
+inspected actual Measure/Design and library preview captures with the Wall face
+cue. The full suite was not rerun after this canvas-only change.
+
+Source-kit2098 and whitespace checks pass. A separate hash-verified manual test
+copy is at `artifacts/vertex-test-magnetic-snap-20261015/Start-Vertex.ps1`; its
+offscreen launch passes. It uses the prepared checkout dependencies and leaves
+the installed candidate unchanged. These checks do not establish human usability
+acceptance or production qualification.
+
 ### October 14 combined roof-bearing physical resize development
 
 The component/roof/slab checkpoint is committed and pushed as `ecf25f95`; exact

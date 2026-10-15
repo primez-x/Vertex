@@ -1033,7 +1033,8 @@ private:
     void clearSymbolDragPreview();
     void updatePlacementModifiers(Qt::KeyboardModifiers modifiers);
     [[nodiscard]] bool updateSymbolDragPreview(const QMimeData* mime, QPointF position);
-    [[nodiscard]] std::optional<Vec2> symbolDropPoint(const QString& id, QPointF position);
+    [[nodiscard]] std::optional<Vec2> symbolDropPoint(const QString& id, double scale,
+        QPointF position, std::optional<CanvasEntity>* preview = nullptr);
     using PerformanceClock = std::chrono::steady_clock;
     std::function<void(PerformanceMetric, PerformanceClock::duration)> m_performance_measured;
     std::vector<std::pair<PerformanceMetric, PerformanceClock::time_point>> m_pending_measurements;
@@ -1047,7 +1048,8 @@ private:
     void resetGesture();
     void resetTabletInput();
     void retireDisconnectedTablet();
-    enum class SnapKind { none, grid, length, endpoint, on_wall, on_boundary, alignment, perpendicular };
+    enum class SnapKind { none, grid, length, endpoint, on_wall, on_boundary, alignment, perpendicular,
+                          wall_face, object_edge };
     struct SnapResult {
         Vec2 point{};
         SnapKind kind{SnapKind::none};
@@ -1055,6 +1057,15 @@ private:
         std::optional<Segment> guide;
     };
     [[nodiscard]] SnapResult snapResult(QPointF point) const;
+    [[nodiscard]] Boundary objectSnapEdges(const CanvasEntity& entity) const;
+    struct ObjectTranslationSnap {
+        Vec2 delta{};
+        SnapResult cue;
+    };
+    [[nodiscard]] std::optional<ObjectTranslationSnap> objectTranslationSnap(
+        const std::vector<Boundary>& footprints, Vec2 raw_delta,
+        const QStringList& excluded_ids = {}) const;
+    std::optional<SnapResult> m_object_translation_snap;
     [[nodiscard]] std::optional<Vec2> drawingOrigin() const;
     void handleTouchEvent(QTouchEvent& event);
     void resetTouchInput();

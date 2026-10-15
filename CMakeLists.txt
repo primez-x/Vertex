@@ -1777,6 +1777,28 @@ if(SKETCH_BUILD_DESKTOP)
     target_link_libraries(directional_alignment_canvas_tests PRIVATE sketch_desktop)
     qt_add_resources(directional_alignment_canvas_tests directional_alignment_test_fonts
       PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_executable(object_drag_snap_canvas_tests tests/object_drag_snap_canvas_tests.cpp)
+    target_link_libraries(object_drag_snap_canvas_tests PRIVATE sketch_desktop)
+    qt_add_resources(object_drag_snap_canvas_tests object_drag_snap_test_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_test(NAME object_drag_snap_canvas COMMAND object_drag_snap_canvas_tests)
+    set_tests_properties(object_drag_snap_canvas PROPERTIES
+      TIMEOUT 90
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+    add_executable(object_drag_snap_desktop_tests tests/object_drag_snap_desktop_tests.cpp)
+    target_link_libraries(object_drag_snap_desktop_tests PRIVATE sketch_desktop)
+    qt_add_resources(object_drag_snap_desktop_tests object_drag_snap_desktop_test_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_test(NAME object_drag_snap_desktop COMMAND object_drag_snap_desktop_tests)
+    set_tests_properties(object_drag_snap_desktop PROPERTIES
+      TIMEOUT 120
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+    if(MSVC)
+      target_compile_options(object_drag_snap_canvas_tests PRIVATE /W4 /permissive- /utf-8)
+      target_compile_options(object_drag_snap_desktop_tests PRIVATE /W4 /permissive- /utf-8)
+    endif()
     add_executable(appraisal_details_panel_tests tests/appraisal_details_panel_tests.cpp)
     add_executable(area_class_palette_desktop_tests tests/area_class_palette_desktop_tests.cpp)
     add_executable(sketch_content_output_tests tests/sketch_content_output_tests.cpp)

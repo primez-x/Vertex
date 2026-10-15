@@ -995,13 +995,16 @@ void PlanCanvas::setAngleSnapDegrees(double degrees) {
 }
 
 void PlanCanvas::clearSnapCue() {
-    if (m_snap_cue_cleared) return;
+    if (m_snap_cue_cleared && !m_object_translation_snap) return;
+    m_object_translation_snap.reset();
     m_snap_cue_cleared = true;
     update();
 }
 
 void PlanCanvas::setWallSnapEnabled(bool enabled) {
     if (m_wall_snap_enabled == enabled) return;
+    clearSymbolDragPreview();
+    if (m_left_gesture == LeftGesture::object_move) m_move_preview_pointer.reset();
     clearComponentPlacementPreview();
     m_wall_snap_enabled = enabled;
     if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
@@ -2330,10 +2333,12 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         // Snap glyphs and their name are input feedback: show them while a
         // drawing tool is active or a drag is in progress, and drop them once
         // a point is committed or a project opens until the pointer moves.
-        const bool snap_feedback = !m_snap_cue_cleared &&
-            (m_tool != CanvasTool::select || m_left_dragging);
-        if (snap_feedback && m_wall_snap_enabled && m_last_mouse_position) {
-            const auto snap = snapResult(*m_last_mouse_position);
+        const bool object_snap_feedback = m_object_translation_snap &&
+            (m_symbol_drag_active || m_left_dragging);
+        const bool snap_feedback = object_snap_feedback || (!m_snap_cue_cleared &&
+            (m_tool != CanvasTool::select || m_left_dragging));
+        if (snap_feedback && m_wall_snap_enabled && (object_snap_feedback || m_last_mouse_position)) {
+            const auto snap = object_snap_feedback ? *m_object_translation_snap : snapResult(*m_last_mouse_position);
             if (snap.kind != SnapKind::none) {
                 // Design system: snap glyphs use draw-snap and differ by
                 // shape (never color alone); temporary guides are dashed
@@ -2371,6 +2376,8 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
                 case SnapKind::endpoint: cue = QStringLiteral("Endpoint"); break;
                 case SnapKind::on_wall: cue = QStringLiteral("Wall centerline"); break;
                 case SnapKind::on_boundary: cue = QStringLiteral("On boundary"); break;
+                case SnapKind::wall_face: cue = QStringLiteral("Wall face"); break;
+                case SnapKind::object_edge: cue = QStringLiteral("Object edge"); break;
                 case SnapKind::perpendicular: cue = QStringLiteral("Perpendicular"); break;
                 case SnapKind::alignment: cue = QStringLiteral("Alignment"); break;
                 case SnapKind::grid: cue = QStringLiteral("Grid"); break;
@@ -2990,14 +2997,127 @@ void PlanCanvas::captureOpeningMove(QPointF point) {
     }
 }
 
+Boundary PlanCanvas::objectSnapEdges(const CanvasEntity& entity) const {
+    // Annotation ink and source/reference overlays are not physical contacts.
+    if (entity.dimension_end_ticks || entity.type.contains(QStringLiteral("dimension")) ||
+        entity.type.contains(QStringLiteral("annotation")) ||
+        entity.type.contains(QStringLiteral("overlay")) ||
+        entity.type == QStringLiteral("label") || entity.type == QStringLiteral("text") ||
+        entity.type == QStringLiteral("source") || entity.type == QStringLiteral("reference")) return {};
+    if (entity.type != QStringLiteral("wall") && (entity.svg_symbol || entity.resize_frame)) {
+        const auto frame = entitySelectionAxes(entity);
+        if (!frame) return {};
+        const Vec2 u{std::cos(frame->rotation_radians), std::sin(frame->rotation_radians)};
+        const Vec2 v{-u.y, u.x};
+        const auto corner = [&](double x, double y) {
+            return frame->center + u * x + v * y;
+        };
+        const auto a = corner(-frame->width_metres*.5, -frame->depth_metres*.5);
+        const auto b = corner(frame->width_metres*.5, -frame->depth_metres*.5);
+        const auto c = corner(frame->width_metres*.5, frame->depth_metres*.5);
+        const auto d = corner(-frame->width_metres*.5, frame->depth_metres*.5);
+        return {{a,b,0}, {b,c,0}, {c,d,0}, {d,a,0}};
+    }
+    return entity.segments;
+}
+
+std::optional<PlanCanvas::ObjectTranslationSnap> PlanCanvas::objectTranslationSnap(
+    const std::vector<Boundary>& footprints, Vec2 raw_delta,
+    const QStringList& excluded_ids) const {
+    if (!m_snap_enabled || !m_wall_snap_enabled || m_raw_point_input ||
+        m_placement_modifiers.testFlag(Qt::ShiftModifier) ||
+        !std::isfinite(raw_delta.x) || !std::isfinite(raw_delta.y)) return std::nullopt;
+    // Measure from the raw physical footprint, before grid rounding. Choose
+    // one nearest normal correction; the tangential drag remains literal.
+    double best = 12.0 / std::max(m_scale, minimum_scale);
+    std::optional<ObjectTranslationSnap> result;
+    const auto finite = [](Vec2 p) { return std::isfinite(p.x) && std::isfinite(p.y); };
+    for (const auto& target : m_entities) {
+        if (excluded_ids.contains(target.id)) continue;
+        const bool wall = target.type == QStringLiteral("wall");
+        // Snap eligibility carries active-floor/crop authority. Its baselines
+        // admit a wall but never replace the published physical wall faces.
+        if (wall && target.snap_segments.empty() && target.snap_points.empty()) continue;
+        for (const auto& edge : objectSnapEdges(target)) {
+            if (edge.sweep_radians != 0.0 || !finite(edge.start) || !finite(edge.end)) continue;
+            const auto length = distance(edge.start, edge.end);
+            if (!std::isfinite(length) || length <= 1e-9) continue;
+            const auto tangent = (edge.end - edge.start) * (1.0 / length);
+            const Vec2 normal{-tangent.y, tangent.x};
+            const auto station = [&](Vec2 p) {
+                const auto relative = p + raw_delta - edge.start;
+                return Vec2{relative.x*tangent.x + relative.y*tangent.y,
+                            relative.x*normal.x + relative.y*normal.y};
+            };
+            for (const auto& footprint : footprints) {
+                std::vector<Vec2> supports;
+                for (const auto& source : footprint) {
+                    if (!finite(source.start) || !finite(source.end)) continue;
+                    supports.push_back(station(source.start));
+                    supports.push_back(station(source.end));
+                    // Include true circular extrema rather than an arc's chord.
+                    if (source.sweep_radians != 0.0) {
+                        if (const auto arc = arc_info(source)) {
+                            for (const double sign : {-1.0, 1.0}) {
+                                const auto p = arc->center + normal * (arc->radius * sign);
+                                const auto angle = std::atan2(p.y-arc->center.y, p.x-arc->center.x);
+                                auto sweep = std::fmod((angle-arc->start_angle) *
+                                    (source.sweep_radians > 0 ? 1.0 : -1.0), 2*pi);
+                                if (sweep < 0.0) sweep += 2*pi;
+                                if (sweep <= std::abs(source.sweep_radians) + 1e-10)
+                                    supports.push_back(station(p));
+                            }
+                        }
+                    }
+                }
+                if (supports.empty()) continue;
+                const auto extrema = std::minmax_element(supports.begin(), supports.end(),
+                    [](Vec2 a, Vec2 b) { return a.y < b.y; });
+                for (const double support : {extrema.first->y, extrema.second->y}) {
+                    const auto gap = std::abs(support);
+                    if (!std::isfinite(gap) || gap > best || (result && gap >= best)) continue;
+                    double low = std::numeric_limits<double>::infinity();
+                    double high = -std::numeric_limits<double>::infinity();
+                    for (const auto p : supports) {
+                        if (std::abs(p.y-support) > 1e-9) continue;
+                        low = std::min(low, p.x); high = std::max(high, p.x);
+                    }
+                    // Only the actual support edge/vertex may contact this
+                    // finite face, never an extension beyond either endpoint.
+                    if (high < 0.0 || low > length) continue;
+                    const auto contact_station = (std::max(0.0,low) + std::min(length,high))*.5;
+                    const auto contact = edge.start + tangent * contact_station;
+                    const auto corrected = raw_delta - normal * support;
+                    if (!finite(corrected) || !finite(contact)) continue;
+                    best = gap;
+                    result = ObjectTranslationSnap{corrected,
+                        {contact, wall ? SnapKind::wall_face : SnapKind::object_edge, contact, edge}};
+                }
+            }
+        }
+    }
+    return result;
+}
+
 void PlanCanvas::updateEntitiesMovePreview(QPointF point, Qt::KeyboardModifiers modifiers) {
     if (!m_mixed_selection_capture.empty() && !mixedSelectionCaptureCurrent()) { resetGesture(); return; }
     m_move_preview_pointer = point;
     m_move_preview_fine = modifiers.testFlag(Qt::ShiftModifier) || !m_snap_enabled || m_raw_point_input;
     std::optional<Vec2> delta;
     std::optional<CanvasOpeningMoveIntent> opening_intent;
+    m_object_translation_snap.reset();
     if (!m_opening_move_active) {
         delta = dragDelta(point);
+        if (!m_move_preview_fine && m_mixed_selection_capture.empty()) {
+            std::vector<Boundary> footprints;
+            for (const auto& entity : m_entities)
+                if (m_move_ids.contains(entity.id)) footprints.push_back(objectSnapEdges(entity));
+            const auto raw_delta = toModel(point, rect()) - toModel(m_left_start, rect());
+            if (const auto snap = objectTranslationSnap(footprints, raw_delta, m_move_ids)) {
+                delta = snap->delta;
+                m_object_translation_snap = snap->cue;
+            }
+        }
     } else if (m_opening_move_source && m_opening_move_press_station &&
                m_opening_move_pointer_station && m_opening_move_original_midpoint) {
         const auto& source = *m_opening_move_source;
@@ -3142,6 +3262,7 @@ bool PlanCanvas::applyEntitiesMovePreview(std::uint64_t serial,
     m_move_child_controls_preview = m_move_preview_valid && !m_mixed_selection_capture.empty()
         ? std::move(*child_controls) : std::vector<CanvasRoofOpeningControls>{};
     if (!m_move_preview_valid) {
+        m_object_translation_snap.reset();
         m_move_entities_preview.clear();
         m_move_entities_preview_index.clear();
         m_move_labels_preview.clear(); m_move_references_preview.clear();
@@ -3220,6 +3341,7 @@ void PlanCanvas::setSymbolDragPreviewRequested(
 }
 
 void PlanCanvas::clearSymbolDragPreview() {
+    m_object_translation_snap.reset();
     ++m_symbol_drag_preview_serial;
     if (!m_symbol_drag_active && !m_symbol_drag_preview) return;
     m_symbol_drag_active = false;
@@ -3230,13 +3352,15 @@ void PlanCanvas::clearSymbolDragPreview() {
 bool PlanCanvas::completeSymbolDragPreview(std::uint64_t serial,
                                           std::optional<CanvasEntity> preview) {
     if (!m_symbol_drag_active || serial != m_symbol_drag_preview_serial) return false;
+    if (!preview) m_object_translation_snap.reset();
     if (preview) preview->selected = false;
     m_symbol_drag_preview = std::move(preview);
     update();
     return true;
 }
 
-std::optional<Vec2> PlanCanvas::symbolDropPoint(const QString& id, QPointF position) {
+std::optional<Vec2> PlanCanvas::symbolDropPoint(const QString& id, double scale,
+    QPointF position, std::optional<CanvasEntity>* preview) {
     const auto raw = toModel(position, rect());
     if (!std::isfinite(raw.x) || !std::isfinite(raw.y)) return std::nullopt;
     const auto uses_raw_point = m_symbol_drop_uses_raw_point;
@@ -3250,7 +3374,42 @@ std::optional<Vec2> PlanCanvas::symbolDropPoint(const QString& id, QPointF posit
         return std::nullopt;
     }
     if (!guard || serial != m_symbol_drag_preview_serial) return std::nullopt;
-    const auto point = project_onto_host ? raw : snapped(raw);
+    const bool fine = !m_snap_enabled || m_raw_point_input ||
+        m_placement_modifiers.testFlag(Qt::ShiftModifier);
+    auto point = project_onto_host || fine ? raw : snapped(raw);
+    const auto callback = m_symbol_drag_preview_requested;
+    std::optional<CanvasEntity> geometry;
+    try {
+        if (!project_onto_host && !fine && m_wall_snap_enabled && callback) {
+            // Nonhosted preview is a pure physical projection. Query at the
+            // raw pointer for each event, including release; previous artwork
+            // cannot authorize a placement at a new point or source revision.
+            geometry = callback(id, scale, raw);
+            if (!guard || serial != m_symbol_drag_preview_serial) return std::nullopt;
+            if (geometry) {
+                if (const auto snap = objectTranslationSnap({objectSnapEdges(*geometry)}, {})) {
+                    point = raw + snap->delta;
+                    m_object_translation_snap = snap->cue;
+                }
+            }
+            if (point.x != raw.x || point.y != raw.y) {
+                geometry = callback(id, scale, point);
+                if (!guard || serial != m_symbol_drag_preview_serial) return std::nullopt;
+                // A resolved contact needs fresh geometry at that exact
+                // placement, rather than stale raw or last-move geometry.
+                if (m_object_translation_snap && !geometry) return std::nullopt;
+            }
+        } else if (preview && callback) {
+            // Hosted symbols retain their single raw request and may complete
+            // asynchronously using the existing serial admission protocol.
+            geometry = callback(id, scale, point);
+            if (!guard || serial != m_symbol_drag_preview_serial) return std::nullopt;
+        }
+    } catch (...) {
+        if (guard && serial == m_symbol_drag_preview_serial) clearSymbolDragPreview();
+        return std::nullopt;
+    }
+    if (preview) *preview = std::move(geometry);
     return std::isfinite(point.x) && std::isfinite(point.y) ? std::optional{point} : std::nullopt;
 }
 
@@ -3259,24 +3418,17 @@ bool PlanCanvas::updateSymbolDragPreview(const QMimeData* mime, QPointF position
     const auto payload = decode_symbol_drag(mime);
     if (!m_symbol_dropped || !payload) return false;
     const auto serial = m_symbol_drag_preview_serial;
-    const auto callback = m_symbol_drag_preview_requested;
     const QPointer<PlanCanvas> guard(this);
-    const auto point = symbolDropPoint(payload->id, position);
+    m_symbol_drag_active = true;
+    std::optional<CanvasEntity> preview;
+    const auto point = symbolDropPoint(payload->id, payload->scale, position, &preview);
     if (!guard || serial != m_symbol_drag_preview_serial) return false;
     if (!point) {
         clearSymbolDragPreview();
         return false;
     }
-    m_symbol_drag_active = true;
     // A valid library drag can enter away from a suitable host. An absent
     // proposal clears its ink while allowing later moves to find a host.
-    std::optional<CanvasEntity> preview;
-    try {
-        if (callback) preview = callback(payload->id, payload->scale, *point);
-    } catch (...) {
-        if (guard && serial == m_symbol_drag_preview_serial) clearSymbolDragPreview();
-        return false;
-    }
     if (!guard || serial != m_symbol_drag_preview_serial || !m_symbol_drag_active) return false;
     return completeSymbolDragPreview(serial, std::move(preview));
 }
@@ -3332,7 +3484,7 @@ void PlanCanvas::dropEvent(QDropEvent* event) {
     const auto payload = decode_symbol_drag(event->mimeData());
     const auto callback = m_symbol_dropped;
     if (!callback || !payload) { event->ignore(); return; }
-    const auto point = symbolDropPoint(payload->id, event->position());
+    const auto point = symbolDropPoint(payload->id, payload->scale, event->position());
     if (!guard) { event->ignore(); return; }
     if (serial != m_symbol_drag_preview_serial) { event->ignore(); return; }
     if (!point) {
@@ -9146,6 +9298,7 @@ std::optional<Vec2> PlanCanvas::closingAnchor(QPointF point) const {
 
 void PlanCanvas::setRawPointInput(bool enabled) {
     if (m_raw_point_input == enabled) return;
+    clearSymbolDragPreview();
     clearComponentPlacementPreview();
     m_raw_point_input = enabled;
     update();

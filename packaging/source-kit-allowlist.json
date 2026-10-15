@@ -7055,6 +7055,14 @@
     },
     {
       "category": "source",
+      "path": "tests/object_drag_snap_canvas_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/object_drag_snap_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/offline_policy_tests.cpp"
     },
     {
