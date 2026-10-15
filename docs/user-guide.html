@@ -32,17 +32,40 @@
   project copy and preserves the original. The application keeps local recovery copies
   while a project is being edited.</p>
 
+  <h2>Find your way around</h2>
+  <p><strong>Measure</strong> is for measured drawings and area totals.
+  <strong>Design</strong> adds architectural views and the building model.
+  In Measure, use the labeled <strong>Wall</strong>, <strong>Area</strong> and
+  <strong>Measured lines</strong> tools to choose what plan clicks draw.</p>
+  <p>The left panel has <strong>Layers</strong> for choosing the active floor
+  and layer, <strong>Library</strong> for placing objects, and
+  <strong>Details</strong> for area measurements and GLA. If that panel has
+  been collapsed, choose its tab from <strong>View &gt; Panels</strong> to reopen it.</p>
+  <table>
+    <tr><th>Menu</th><th>Use it for</th></tr>
+    <tr><td>File</td><td>New, open, recent projects, recovery, save, import and export.</td></tr>
+    <tr><td>Edit</td><td>Undo, clipboard, selection, geometry edits and Preferences.</td></tr>
+    <tr><td>Draw</td><td>Drawing tools, walls, openings, building objects and area operations.</td></tr>
+    <tr><td>Annotate</td><td>Dimensions, annotations, labels and constraints.</td></tr>
+    <tr><td>View</td><td>Workspaces, panels, saved views, grid, snapping and theme.</td></tr>
+    <tr><td>Output</td><td>Drawing sheets, layouts, schedules, reports and printing.</td></tr>
+    <tr><td>Project</td><td>Buildings, floors, layers, levels, resources and project settings.</td></tr>
+    <tr><td>Help</td><td>This guide, keyboard shortcuts and Command search.</td></tr>
+  </table>
+  <p>Press <kbd>Ctrl</kbd>+<kbd>K</kbd> to search for a menu command by name.
+  Sheet export stays disabled until the project has a drawing sheet.</p>
+
   <h2>Draw and furnish a room</h2>
   <ol>
     <li>In <strong>Layers</strong>, click the layer that should own the drawing.
     Choose <strong>Wall</strong> in Draw and set thickness and height in
     <strong>Library</strong>. Click the room's corners, then its first corner to
     close the wall loop.</li>
-    <li>Select a wall. Press <kbd>Ctrl</kbd>+<kbd>K</kbd> and choose
-    <strong>Create room boundary from selected geometry</strong>. Name the room,
-    then use <strong>Library &gt; Area classes</strong> to classify it. Double-click
-    the room to open floating Properties and read its clear area under
-    <strong>Area calculation</strong>.</li>
+    <li>In Measure, closing a simple room of walls creates a
+    <strong>Living area</strong> automatically. Open <strong>Details</strong> to
+    see its area and GLA. Choose another area type when needed; facts supplied
+    by that classification are marked <strong>from classification</strong>.
+    Unknown facts still need review before an area qualifies for GLA.</li>
     <li>Drag furniture from Library onto the plan. Select a placed symbol and
     use its side handles to adjust its size. Use <strong>Door</strong> or
     <strong>Window</strong> in Library, choose the style and dimensions, then
@@ -53,17 +76,16 @@
     outside its host wall, or conflicts with the wall's material-layer thicknesses,
     is rejected with an explanation and leaves the drawing unchanged.
     A retained room whose wall sources have changed
-    needs an explicit <strong>Tools &gt; Repair room from walls</strong> review.</li>
+    needs an explicit <strong>Draw &gt; Areas and rooms &gt; Review rooms from walls…</strong> review.</li>
     <li>A saved 2D room remains visible in the plan and can be moved, rotated,
     or resized with its canvas handles. To give it a 3D volume, open
     <strong>Room dimensions</strong> and enter its measured height and base
     elevation. Missing measurements are blank; Apply becomes available after
     both values produce a valid preview. Cancel keeps the original 2D room.</li>
-    <li>For appraisal, select a perimeter wall and choose
-    <strong>Measure exterior from walls…</strong>. Review and create the separate
-    measurement. Use the left <strong>Details &gt; Setup</strong> and
-    <strong>Edit facts</strong> controls to qualify GLA. Clear room area and
-    property GLA are separate calculations.</li>
+    <li>Review appraisal totals in <strong>Details</strong>. For an existing
+    wall layout that has no measured area, use <strong>Draw &gt; Areas and rooms
+    &gt; Measure exterior from walls…</strong>. Clear room area and property GLA are
+    separate calculations.</li>
     <li>Save, try Undo and Redo, then reopen the project and check the room,
     furniture, openings and measurements.</li>
     <li>Use command search for <strong>Edit sheet layout</strong> to open
@@ -129,9 +151,9 @@
   committed sides. Undo at an uncommitted anchor cancels only that anchor.
   Reopening a project does not resume drawing. To assign a closed region an
   area classification, select the saved linework and use
-  <strong>Tools &gt; Detect closed areas</strong>.</p>
+  <strong>Draw &gt; Areas and rooms &gt; Detect closed areas…</strong>.</p>
   <p>Select a finished measured stroke to use Copy, Cut, Paste or Delete through
-    Tools, the usual keyboard shortcuts, or the canvas right-click menu.
+    Edit, the usual keyboard shortcuts, or the canvas right-click menu.
     Paste is also available on empty canvas. A paste into an empty project
     retains the measured position; beside existing geometry it is placed to
     the right and selected for movement. Copies have independent identities
@@ -397,7 +419,7 @@
   and replaces the previous top profile. On a curved wall,
   the top follows one plane across the curve; the rise is not measured along the
   curved length. Doors and windows must fit below the plane's lowest point across
-  their opening and the full wall thickness. <strong>Tools &gt; Insert point</strong>
+  their opening and the full wall thickness. <strong>Edit &gt; Insert point</strong>
   accepts a distance from the wall's Start or End, in feet/inches or metric units;
   on curved walls the distance follows the arc. It splits a sloped wall while
   keeping that same top plane continuous across both pieces, and preserves
@@ -405,7 +427,7 @@
   keep their names, sizes and callout positions while
   their physical-wall sources update. Set Top rise to zero to flatten the wall.</p>
   <p>To remove an inserted wall point, select either piece and choose
-  <strong>Merge walls…</strong> from its right-click menu or Tools. You can also
+  <strong>Merge walls…</strong> from its right-click menu or Edit. You can also
   Ctrl-click both pieces. Choose their connection, inspect the proposed wall and
   its attachments, then Apply. Compatible straight pieces or arcs on the same
   circle become one physical wall; openings on the second piece keep their
@@ -537,7 +559,7 @@
   metres, centimetres and millimetres. The small scale cue shows one grid cell.
   Grid snapping uses the same spacing. Exact object endpoints take priority, and
   changing zoom or units does not round existing measurements.</p>
-  <p>Choose <strong>Tools &gt; Add length, angle or area dimension…</strong> to
+  <p>Choose <strong>Annotate &gt; Add length, chain, angle or area dimension…</strong> to
   restore a deleted edge dimension or add another associated dimension. Choose
   the boundary and edge, then <strong>Add length</strong>. Length labels are placed
   outside the boundary by default; turn that option off to use the entered label
@@ -562,18 +584,18 @@
   <p>When an edited curved edge has related objects, leave
   <strong>Move related objects</strong> checked to update them with the boundary.
   Turning it off can be refused if it would leave connected geometry invalid.</p>
-  <p>To measure while drawing walls, open <strong>Details &gt; Setup</strong>,
-  enable appraisal calculations and choose an <strong>Exterior</strong>
-  measurement basis. Click the wall outline's corners and return to its first
+  <p>To measure while drawing walls in Measure, click the wall outline's
+  corners and return to its first
   point. The completed outline receives a separate exterior measurement and
   dimensions automatically, using the physical wall thickness. The closing wall
-  and measurement share one Undo operation. Use <strong>Details &gt; Edit facts</strong>
-  to supply the observed floor and area facts; drawing a closed outline alone
-  does not qualify it as GLA. An outline inside, enclosing or overlapping an
+  and measurement share one Undo operation. A new simple room defaults to
+  Living area, with classification facts filled in. Use
+  <strong>Details &gt; Edit facts</strong> to review any unknown floor or area
+  facts that still hold back GLA. An outline inside, enclosing or overlapping an
   existing measured area requires explicit measurement review. Vertex keeps
   those walls and explains why it did not add another measured area.</p>
   <p>For an existing closed physical wall layout, select a wall and choose
-  <strong>Measure exterior from walls…</strong> from its right-click menu or Tools.
+  <strong>Measure exterior from walls…</strong> from its right-click menu or <strong>Draw &gt; Areas and rooms</strong>.
   Connected interior partitions are excluded from the exterior perimeter. You can
   select a partition to find its connected shell, or <kbd>Ctrl</kbd>+click an explicit
   set of candidate walls. Review the blue exterior outline, excluded wall count,
@@ -616,7 +638,7 @@
   source replacement review. Overlapping building measurements cannot produce
   qualified totals.</p>
   <p>To repair a stale measurement while retaining its identity, choose
-  <strong>Replace source walls…</strong> from Tools or the measured area's right-click
+  <strong>Replace source walls…</strong> from <strong>Draw &gt; Advanced</strong> or the measured area's right-click
   menu. Review the recorded and proposed outlines before Apply; Cancel leaves the
   drawing unchanged. Refresh continues to use the originally recorded walls, while
   replacement explicitly records the reviewed shell as the new source. If the
@@ -640,7 +662,7 @@
   building measurements before relying on qualified totals; overlapping areas
   withhold those totals. Independent copying of a parent with nested appraisal
   descendants is not yet supported; keep those original links intact.</p>
-  <p>Open <strong>Tools &gt; Appraisal area report…</strong> to review the
+  <p>Open <strong>Output &gt; Appraisal area report…</strong> to review the
   property's summary, individual areas and deductions, and qualification issues.
   Select an area to see gross area, requested and applied deductions, physical net,
   exact factor, adjusted area, perimeter, rounding and the declarations used.
@@ -858,7 +880,7 @@
   Save/reopen retains object bindings and printed sheets use the same values.</p>
 
   <h2>References and assistance</h2>
-  <p>Import a PDF, PNG, JPEG, BMP, or TIFF reference from <strong>More</strong>, select the page when
+  <p>Import a PDF, PNG, JPEG, BMP, or TIFF reference from <strong>File &gt; Import &gt; Reference image</strong>, select the page when
   needed, and calibrate it from a known distance. Transform and visibility changes keep
   the original source bytes. <strong>Assistance</strong> can suggest tracing,
   dimensions, labels, or commands; suggestions are marked unverified and require an
@@ -878,7 +900,7 @@
 
   <h2>Device measurements</h2>
   <p>Select one wall, door, window, slab or room, then choose
-  <strong>Import DISTO reading</strong> from Tools. On the <strong>Keyboard</strong>
+  <strong>Import DISTO reading</strong> from <strong>File &gt; Advanced</strong>. On the <strong>Keyboard</strong>
   tab, enter the device name and choose the dimension to change, the device's
   output units and its decimal separator. Put the cursor in the reading field
   and send one reading from a keyboard-capable device paired in Windows.
@@ -897,7 +919,7 @@
   files do not establish compatibility with every DISTO model.</p>
 
   <h2>CAD interchange</h2>
-  <p>Open <strong>Tools &gt; Imported sources</strong> to find original DXF, IFC
+  <p>Open <strong>File &gt; Advanced &gt; Imported sources</strong> to find original DXF, IFC
   or Pinc files retained in this project. Search by filename or format, select
   a file and browse its import notes. Use <strong>Export original</strong> to
   save the file as it was imported, before subsequent edits. To export your
@@ -907,7 +929,7 @@
   history. Choose the original file extension and a destination separate from
   the native project and its recovery copy. If another application changes the
   destination while the save is being prepared, the export refuses it.</p>
-  <p>Choose <strong>Import DXF</strong> from Tools. Before importing, review each
+  <p>Choose <strong>File &gt; Import &gt; DXF drawing…</strong>. Before importing, review each
   CAD layer and choose its destination building, floor and layer. By default,
   source names are preserved on the active floor: matching layers are reused
   and missing layers are created. You can route individual source layers to
@@ -930,7 +952,7 @@
   ellipse and is reported rather than drawn inaccurately.</p>
 
   <h2>Named revisions</h2>
-  <p>Open <strong>Named revisions</strong> from Tools or command search to name
+  <p>Open <strong>Named revisions</strong> from Project or Command search to name
   a stable project state. Choose <strong>From</strong> and <strong>To</strong>,
   including <strong>Current head</strong>, then compare. Select a floor to see
   its before and after drawings. Panning or zooming either pane keeps the views
@@ -945,7 +967,7 @@
 
   <h2>Output</h2>
   <p>For output at a chosen physical scale, select the output page in
-  <strong>Sheet settings</strong>, then use <strong>Sheet layout manager…</strong>
+  <strong>Output &gt; Drawing sheets</strong>, then use <strong>Sheet layout manager…</strong>
   to set each viewport's scale and placement. Use
   <strong>Export selected sheet PDF</strong>, <strong>Print selected sheet (draft)</strong>,
   or <strong>Export draft SVG</strong>. Print the sheet at actual size, without
@@ -953,16 +975,15 @@
   <strong>Export drawing set PDF</strong> for multiple sheets. Draft sheet output
   carries a visible draft marker and a neighboring fingerprint file that records
   the influencing project and renderer inputs.</p>
-  <p><strong>Export sketch PDF</strong> saves the visible drawing as a tightly
-  cropped vector image for inserting into a report. Its crop and the
-  <strong>Sketch composition guide</strong> do not establish a physical sheet
-  scale. Use selected-sheet output when a printed measurement must match a
-  declared scale.</p>
+  <p><strong>File &gt; Export &gt; Export sketch PDF</strong> places the visible
+  drawing on a Letter page, or A4 for Metric, with a title block, area totals
+  and a standard scale chosen to fit. Print at actual size to retain that scale.
+  Use drawing sheets when you need to choose the viewport layout and scale.</p>
 
   <h2>Command search and shortcuts</h2>
   <p>Press <kbd>Ctrl</kbd>+<kbd>K</kbd> and type a command name. The list includes drawing,
   architectural, output, reference, recovery, and workspace actions. Open
-  <strong>Keyboard shortcuts</strong> from <strong>More</strong> to edit bindings or choose
+  <strong>Help &gt; Keyboard shortcuts</strong> to edit bindings or choose
   the Apex-compatible subset. Conflicts and reserved text-editing keys are rejected.</p>
 
   <div class="note"><strong>Project ownership:</strong> the first editor to open a saved

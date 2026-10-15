@@ -5,12 +5,27 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QClipboard>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QKeySequence>
 #include <QMenu>
+#include <QMenuBar>
+#include <QLineEdit>
+#include <QDialog>
+#include <QComboBox>
+#include <QListWidget>
+#include <QPushButton>
+#include <QPlainTextEdit>
+#include <QSplitter>
+#include <QTabWidget>
+#include <QTextEdit>
+#include <QToolBar>
+#include <QToolButton>
+#include <QTreeWidget>
+#include <QTimer>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QStatusBar>
@@ -40,6 +55,47 @@ Boundary rectangle(double left, double bottom, double right, double top) {
     };
 }
 
+// Optional captures exercise the real widgets without touching user settings.
+void capture_navigation() {
+    const auto directory = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (directory.isEmpty()) return;
+    require(QDir().mkpath(directory), "create navigation capture directory");
+    desktop::MainWindow window;
+    window.resize(1366, 768);
+    window.show();
+    QApplication::processEvents();
+    for (const auto workspace : {desktop::Workspace::measurement, desktop::Workspace::architectural}) {
+        window.setWorkspace(workspace);
+        QApplication::processEvents();
+        const auto prefix = workspace == desktop::Workspace::measurement ? QStringLiteral("measure") : QStringLiteral("design");
+        require(window.grab().save(QDir(directory).filePath(prefix + QStringLiteral("-workspace.png"))), "capture workspace");
+        for (auto* action : window.menuBar()->actions()) {
+            auto* menu = action->menu();
+            if (!menu) continue;
+            menu->popup(window.menuBar()->mapToGlobal(window.menuBar()->actionGeometry(action).bottomLeft()));
+            QApplication::processEvents();
+            require(menu->grab().save(QDir(directory).filePath(prefix + QLatin1Char('-') + menu->objectName() + QStringLiteral(".png"))), "capture menu");
+            menu->hide();
+        }
+    }
+    window.resize(1024, 768);
+    QApplication::processEvents();
+    require(window.grab().save(QDir(directory).filePath(QStringLiteral("design-compact.png"))), "capture compact workspace");
+    for (const auto theme : {WorkspaceTheme::dark, WorkspaceTheme::light,
+                            WorkspaceTheme::high_contrast}) {
+        window.setWorkspaceTheme(theme);
+        for (const auto* id : {"architecturalAuthoringMenu", "buildingObjectsMenu", "viewPanelsMenu"}) {
+            auto* menu = window.findChild<QMenu*>(QString::fromLatin1(id));
+            if (!menu) continue;
+            menu->popup(window.mapToGlobal(QPoint(40, 80)));
+            QApplication::processEvents();
+            require(menu->grab().save(QDir(directory).filePath(QStringLiteral("theme-%1-%2.png")
+                    .arg(static_cast<int>(theme)).arg(QString::fromLatin1(id)))), "capture themed menu");
+            menu->hide();
+        }
+    }
+}
+
 void test_menu_entries() {
     desktop::MainWindow window;
     auto* file_menu = window.findChild<QMenu*>(QStringLiteral("fileMenu"));
@@ -61,6 +117,201 @@ void test_menu_entries() {
         require(action->shortcut() != select_all->shortcut() && action->shortcut() != duplicate->shortcut(),
                 "shortcut conflict with " + action->objectName().toStdString());
     }
+}
+
+void test_navigation_access() {
+    desktop::MainWindow window;
+    window.resize(1366, 768);
+    window.show();
+    QApplication::processEvents();
+    auto* toolbar = window.findChild<QToolBar*>(QStringLiteral("primaryToolbar"));
+    require(toolbar != nullptr, "drawing toolbar exists");
+    for (const auto* id : {"drawModeWall", "drawModeArea", "drawModeMeasuredLines"}) {
+        auto* action = window.findChild<QAction*>(QString::fromLatin1(id));
+        auto* button = action ? qobject_cast<QToolButton*>(toolbar->widgetForAction(action)) : nullptr;
+        require(button && button->toolButtonStyle() == Qt::ToolButtonTextBesideIcon &&
+                    button->width() >= button->sizeHint().width(),
+                std::string("drawing tool must show its full label: ") + id);
+    }
+    auto* layout = window.findChild<QAction*>(QStringLiteral("viewportEditor"));
+    // Preserve the established identity if the label changes.
+    if (!layout) layout = window.findChild<QAction*>(QStringLiteral("sheetLayoutManager"));
+    require(layout && layout->isVisible(), "sheet layout is available in Measure");
+    auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("sidebarTabs"));
+    auto* splitter = window.findChild<QSplitter*>(QStringLiteral("workspaceSplitter"));
+    auto* tree = window.findChild<QTreeWidget*>(QStringLiteral("projectNavigator"));
+    require(tabs && splitter, "navigation panel exists");
+    require(tree && !tree->accessibleName().isEmpty(), "navigator has an accessible name");
+    const auto revision = window.document().revision();
+    for (int index = 0; index < 3; ++index) {
+        splitter->setSizes({0, 1000});
+        const auto id = QStringList{QStringLiteral("showLayersPanel"), QStringLiteral("showLibraryPanel"), QStringLiteral("showDetailsPanel")}.at(index);
+        auto* action = window.findChild<QAction*>(id);
+        require(action && action->isVisible() && action->isEnabled(), "View can reopen every navigation tab");
+        action->trigger();
+        QApplication::processEvents();
+        require(tabs->currentIndex() == index && splitter->sizes().front() > 0,
+                "View command selects the requested tab and restores a collapsed panel");
+    }
+    require(window.document().revision() == revision, "navigation does not edit the project");
+    window.setWorkspace(desktop::Workspace::architectural);
+    QApplication::processEvents();
+    auto* view_choice = window.findChild<QComboBox*>(QStringLiteral("architecturalView"));
+    require(view_choice && view_choice->isVisible() &&
+                toolbar->rect().contains(QRect(view_choice->mapTo(toolbar, QPoint()), view_choice->size())),
+            "Design view selector stays visible in the laptop header");
+    auto* draw = window.findChild<QMenu*>(QStringLiteral("architecturalAuthoringMenu"));
+    require(draw, "Draw menu exists");
+    draw->ensurePolished();
+    draw->adjustSize();
+    require(draw->sizeHint().height() <= 600 && draw->sizeHint().width() <= 480,
+            "Draw fits in one readable column on an ordinary laptop");
+    require(window.findChild<QMenu*>(QStringLiteral("buildingObjectsMenu")), "building objects have a focused submenu");
+}
+
+void test_focused_text_commands() {
+    desktop::MainWindow window;
+    window.show();
+    auto* select_all = window.findChild<QAction*>(QStringLiteral("selectAll"));
+    auto* copy = window.findChild<QAction*>(QStringLiteral("copySelection"));
+    auto* cut = window.findChild<QAction*>(QStringLiteral("cutSelection"));
+    auto* paste = window.findChild<QAction*>(QStringLiteral("pasteSelection"));
+    auto* erase = window.findChild<QAction*>(QStringLiteral("deleteSelection"));
+    require(select_all && copy && cut && paste && erase, "Edit text commands exist");
+    const auto revision = window.document().revision();
+    QLineEdit single(&window);
+    QPlainTextEdit plain(&window);
+    QTextEdit rich(&window);
+    for (auto* editor : {static_cast<QWidget*>(&single), static_cast<QWidget*>(&plain), static_cast<QWidget*>(&rich)}) {
+        editor->setGeometry(400, 120, 240, 100);
+        editor->show();
+        editor->raise();
+        editor->setFocus();
+        QApplication::processEvents();
+        const auto set_text = [&](const QString& text) {
+            if (editor == &single) single.setText(text);
+            else if (editor == &plain) plain.setPlainText(text);
+            else rich.setPlainText(text);
+        };
+        const auto text = [&] {
+            return editor == &single ? single.text() : editor == &plain ? plain.toPlainText() : rich.toPlainText();
+        };
+        set_text(QStringLiteral("Example"));
+        QApplication::clipboard()->setText(QStringLiteral("sentinel"));
+        select_all->trigger();
+        copy->trigger();
+        require(QApplication::clipboard()->text() == QStringLiteral("Example"), "Edit > Select all and Copy operate on focused text");
+        cut->trigger();
+        require(text().isEmpty(), "Edit > Cut operates on focused text");
+        paste->trigger();
+        require(text() == QStringLiteral("Example"), "Edit > Paste operates on focused text");
+        select_all->trigger();
+        erase->trigger();
+        require(text().isEmpty(), "Edit > Delete operates on focused text");
+        set_text(QStringLiteral("Read only"));
+        if (editor == &single) single.setReadOnly(true);
+        else if (editor == &plain) plain.setReadOnly(true);
+        else rich.setReadOnly(true);
+        select_all->trigger();
+        QApplication::clipboard()->setText(QStringLiteral("sentinel"));
+        copy->trigger();
+        require(QApplication::clipboard()->text() == QStringLiteral("Read only"), "read-only text can still be copied");
+        cut->trigger();
+        erase->trigger();
+        QApplication::clipboard()->setText(QStringLiteral("Replacement"));
+        paste->trigger();
+        require(text() == QStringLiteral("Read only"), "Edit commands preserve read-only text");
+        editor->hide();
+    }
+    require(window.document().revision() == revision, "text editing does not alter project history");
+}
+
+void test_command_search_discovery() {
+    desktop::MainWindow window;
+    window.show();
+    for (const auto& query : {QStringLiteral("Appraisal report PDF"), QStringLiteral("Site placement"),
+                              QStringLiteral("georeferencing"), QStringLiteral("Edit dimensions")}) {
+        bool found = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (!dialog) return;
+            auto* search = dialog->findChild<QLineEdit*>();
+            auto* list = dialog->findChild<QListWidget*>();
+            if (search && list) {
+                search->setText(query);
+                found = list->count() == 1 && list->item(0)->text().contains(query, Qt::CaseInsensitive) &&
+                    list->item(0)->text().contains(QStringLiteral(" > "));
+            }
+            dialog->reject();
+        });
+        window.showCommandPalette();
+        require(found, "command search finds the existing menu label once: " + query.toStdString());
+    }
+    bool search_hygiene = false;
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if (!dialog) return;
+        auto* search = dialog->findChild<QLineEdit*>();
+        auto* list = dialog->findChild<QListWidget*>();
+        if (search && list) {
+            search->setText(QStringLiteral("Command search"));
+            const auto no_recursion = list->count() == 0;
+            search->setText(QStringLiteral("Draw curved wall"));
+            const auto no_hidden_design_command = list->count() == 0;
+            search->setText(QStringLiteral("View > Panels >"));
+            search_hygiene = no_recursion && no_hidden_design_command && list->count() == 3;
+        }
+        dialog->reject();
+    });
+    window.showCommandPalette();
+    require(search_hygiene, "search supports menu paths, omits itself and omits hidden workspace actions");
+}
+
+void test_command_search_execution() {
+    desktop::MainWindow window;
+    window.show();
+    const auto first = window.createBoundary(rectangle(0, 0, 4, 3), QStringLiteral("living_area"));
+    const auto second = window.createBoundary(rectangle(10, 0, 14, 3), QStringLiteral("living_area"));
+    require(!first.isEmpty() && !second.isEmpty() && window.selectEntity(first), "command search selection fixture");
+    auto* canvas = window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas"));
+    require(canvas, "plan canvas exists");
+    const auto invoke = [&](const QString& query, bool from_list = false) {
+        bool invoked = false;
+        canvas->setFocus();
+        QApplication::processEvents();
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (!dialog) return;
+            auto* search = dialog->findChild<QLineEdit*>();
+            auto* list = dialog->findChild<QListWidget*>();
+            if (search && list) {
+                search->setText(query);
+                if (list->count() == 1 && list->currentItem()) {
+                    invoked = true;
+                    if (from_list) {
+                        list->setFocus();
+                        Q_EMIT list->itemActivated(list->currentItem());
+                    } else QMetaObject::invokeMethod(search, "returnPressed", Qt::DirectConnection);
+                }
+            }
+            if (!invoked) dialog->reject();
+        });
+        window.showCommandPalette();
+        QApplication::processEvents();
+        require(invoked, "selection command resolves once: " + query.toStdString());
+    };
+    QApplication::clipboard()->setText(QStringLiteral("sentinel"));
+    invoke(QStringLiteral("Copy selection"));
+    require(QApplication::clipboard()->text() != QStringLiteral("Copy selection") &&
+                QApplication::clipboard()->text() != QStringLiteral("sentinel"),
+            "command search copies the drawing rather than its query");
+    const auto revision = window.document().revision();
+    invoke(QStringLiteral("Duplicate selection"));
+    require(window.document().revision() == revision + 1, "command search Duplicate edits the drawing once");
+    require(window.selectEntity(QString{}), "clear selection before command search Select all");
+    invoke(QStringLiteral("Select all"), true);
+    require(window.selectedEntityIds().contains(first) && window.selectedEntityIds().contains(second),
+            "list-activated Select all selects the drawing rather than search results");
 }
 
 void test_recent_projects(const QTemporaryDir& files) {
@@ -252,6 +503,97 @@ void test_export_menu() {
     require(!bare_sheet->isEnabled() && bare_sheet->toolTip().contains(QStringLiteral("No drawing sheets")) &&
                 !bare_set->isEnabled(),
             "sheet output is disabled with a reason when no sheet exists");
+    require(bare_sheet->toolTip().contains(QStringLiteral("Output > Drawing sheets")),
+            "no-sheet hint points to the first-sheet creation path");
+    bool guarded_export = false;
+    QTimer::singleShot(0, &bare, [&] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if (!dialog) return;
+        auto* search = dialog->findChild<QLineEdit*>();
+        auto* list = dialog->findChild<QListWidget*>();
+        if (search && list) {
+            search->setText(QStringLiteral("Export selected sheet PDF"));
+            guarded_export = list->count() == 1 && !(list->item(0)->flags() & Qt::ItemIsEnabled);
+        }
+        dialog->reject();
+    });
+    bare.showCommandPalette();
+    require(guarded_export, "command search exposes the same disabled sheet-export action");
+    bool enabled_result = false;
+    QTimer::singleShot(0, &bare, [&] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if (!dialog) return;
+        auto* search = dialog->findChild<QLineEdit*>();
+        auto* list = dialog->findChild<QListWidget*>();
+        if (search && list) {
+            search->setText(QStringLiteral("sheet"));
+            enabled_result = list->currentRow() > 0 && list->currentItem() &&
+                (list->currentItem()->flags() & Qt::ItemIsEnabled);
+        }
+        dialog->reject();
+    });
+    bare.showCommandPalette();
+    require(enabled_result, "search initially selects an available result after disabled sheet actions");
+    const auto revision = bare.document().revision();
+    require(!bare.createDrawingSheet(QStringLiteral("A1"), QStringLiteral("215.9"),
+                                    QStringLiteral("279.4"), QStringLiteral("Sketch")).isEmpty(),
+            "a project without sheets can create its first sheet: " + bare.lastError().toStdString());
+    require(bare.document().revision() == revision + 1, "first sheet creates one atomic edit");
+    QMetaObject::invokeMethod(bare_menu, "aboutToShow");
+    require(bare_sheet->isEnabled() && bare_set->isEnabled(), "first sheet enables PDF output");
+    require(bare.undoCommand(), "undo first sheet");
+    QMetaObject::invokeMethod(bare_menu, "aboutToShow");
+    require(!bare_sheet->isEnabled(), "one Undo removes the first sheet");
+    require(bare.redoCommand(), "redo first sheet");
+    QMetaObject::invokeMethod(bare_menu, "aboutToShow");
+    require(bare_sheet->isEnabled(), "Redo restores sheet output");
+    require(bare.exportDraftPdf(directory.filePath(QStringLiteral("first-sheet.pdf"))),
+            "the first sheet produces a usable PDF: " + bare.lastError().toStdString());
+    require(bare.saveProjectAs(directory.filePath(QStringLiteral("first-sheet.bldproj"))), "save first sheet");
+    desktop::MainWindow reopened;
+    require(reopened.openProject(directory.filePath(QStringLiteral("first-sheet.bldproj"))), "reopen first sheet");
+    auto* reopened_menu = reopened.findChild<QMenu*>(QStringLiteral("exportMenu"));
+    QMetaObject::invokeMethod(reopened_menu, "aboutToShow");
+    require(reopened.findChild<QAction*>(QStringLiteral("exportSheetPdf"))->isEnabled(), "first sheet survives editable save/Open");
+
+    // Follow the advertised menu path on another project with no output metadata.
+    auto fresh_document = std::make_shared<Document>(Document::create({
+        {"p", "property", {{"name", "No sheets"}}, false},
+        {"b", "building", {{"property_id", "p"}}, false},
+        {"f", "floor", {{"building_id", "b"}}, false},
+        {"l", "layer", {{"floor_id", "f"}, {"name", "Plan"}}, false}}));
+    desktop::MainWindow fresh(fresh_document);
+    auto* output = fresh.findChild<QMenu*>(QStringLiteral("outputMenu"));
+    require(output && !output->actions().isEmpty() && output->actions().front()->text().contains(QStringLiteral("Drawing sheets")),
+            "Output names the same Drawing sheets destination as the recovery hint");
+    bool opened = false;
+    bool created = false;
+    const auto fresh_revision = fresh.document().revision();
+    QTimer::singleShot(0, &fresh, [&] {
+        auto* dialog = fresh.findChild<QDialog*>(QStringLiteral("sheetSettingsDialog"));
+        if (!dialog) return;
+        opened = true;
+        auto* add = dialog->findChild<QPushButton*>(QStringLiteral("addSheet"));
+        if (add) {
+            QTimer::singleShot(0, dialog, [&] {
+                auto* form = fresh.findChild<QDialog*>(QStringLiteral("addDrawingSheetForm"));
+                if (!form) return;
+                if (auto* number = form->findChild<QLineEdit*>(QStringLiteral("newSheetNumber")))
+                    number->setText(QStringLiteral("A1"));
+                form->accept();
+            });
+            add->click();
+            auto* selector = dialog->findChild<QComboBox*>(QStringLiteral("sheetSelector"));
+            auto* project = dialog->findChild<QLineEdit*>(QStringLiteral("sheetProject"));
+            created = selector && selector->count() == 1 && fresh.document().revision() == fresh_revision + 1 &&
+                project && project->text() == QStringLiteral("No sheets");
+        }
+        dialog->reject();
+    });
+    output->actions().front()->trigger();
+    require(opened && created, "Drawing sheets > Add creates the first sheet in one edit");
+    require(fresh.undoCommand() && fresh.document().snapshot().entities().size() == 4,
+            "one Undo restores the original project without hidden output entities");
 }
 }  // namespace
 
@@ -270,7 +612,12 @@ int main(int argc, char** argv) {
         const auto font = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"));
         require(font >= 0, "bundled Inter font required");
         app.setFont(QFont(QFontDatabase::applicationFontFamilies(font).front(), 10));
+        capture_navigation();
         test_menu_entries();
+        test_command_search_execution();
+        test_focused_text_commands();
+        test_navigation_access();
+        test_command_search_discovery();
         test_export_menu();
         test_recent_projects(files);
         test_reopen_last_project(files);

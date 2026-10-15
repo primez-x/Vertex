@@ -311,6 +311,10 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
             buttons->button(QDialogButtonBox::Save)->click();
             require(dialog->isVisible() && status->text().contains("reserved"),
                     "canvas undo must remain reserved");
+            open->setKeySequence(QKeySequence("Ctrl+,"));
+            buttons->button(QDialogButtonBox::Save)->click();
+            require(dialog->isVisible() && status->text().contains("reserved"),
+                    "Preferences shortcut must remain reserved");
             open->setKeySequence(QKeySequence("F3"));
             buttons->button(QDialogButtonBox::Save)->click();
         });
@@ -8845,12 +8849,19 @@ void test_architectural_authoring_commands() {
     sketch::desktop::MainWindow window;
     auto* menu = window.findChild<QMenu*>(QStringLiteral("architecturalAuthoringMenu"));
     require(menu != nullptr, "architectural authoring must have a discoverable menu");
+    const auto contains_action = [](auto&& self, QMenu* parent, QAction* wanted) -> bool {
+        for (auto* action : parent->actions()) {
+            if (action == wanted) return true;
+            if (action->menu() && self(self, action->menu(), wanted)) return true;
+        }
+        return false;
+    };
     for (const auto* name : {"createWall", "createDoor", "createWindow", "createOpening",
                              "createRoom", "createSlab", "createFloor", "createRoof",
                              "createStair", "createColumn", "createBeam", "joinWalls",
                              "unjoinWalls", "joinRoofs", "unjoinRoofs"}) {
         auto* action = window.findChild<QAction*>(QString::fromLatin1(name));
-        require(action && menu->actions().contains(action), "architectural command must be discoverable");
+        require(action && contains_action(contains_action, menu, action), "architectural command must be discoverable");
     }
     const auto first = window.createStraightWall({0, 0}, {4, 0}, QStringLiteral("living"));
     const auto second = window.createStraightWall({4, 0}, {4, 3}, QStringLiteral("living"));

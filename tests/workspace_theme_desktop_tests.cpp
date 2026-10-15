@@ -166,8 +166,12 @@ void test_runtime_theme_switching(const QString& captures) {
                         label_for(button).toStdString() + " (" + std::to_string(scan.contrasting) + " pixels)");
         }
         // High contrast: a disabled command is gray, never enabled white.
-        if (theme == WorkspaceTheme::high_contrast)
+        if (theme == WorkspaceTheme::high_contrast) {
+            if (!captures.isEmpty())
+                require(window.grab(QRect(redo->mapTo(&window, QPoint()), redo->size())).save(
+                    QDir(captures).filePath(QStringLiteral("disabled-redo-high-contrast.png"))), "capture disabled Redo");
             require(scan_glyph(redo).brightest < 0.8, "disabled Redo must not look enabled in high contrast");
+        }
 
         // The palette is the theme's, not one restored from the previous sheet.
         const auto expected_ink = theme == WorkspaceTheme::high_contrast ? QColor(Qt::white) : tokens.ink;

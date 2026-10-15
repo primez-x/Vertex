@@ -12,6 +12,56 @@ constitute user acceptance.
 
 ## Current delivery state
 
+### October 15 menu and navigation usability review
+
+Reviewed the real Qt menus and workspace captures alongside separate menu and
+navigator source investigations. Draw previously spilled into two columns;
+focused text Edit commands silently returned; sheet layout disappeared in
+Measure; and no-sheet export guidance led to a manager that needed a sheet.
+
+Draw now groups walls, openings, building objects, areas and joins. The Object
+dropdown uses the building-object group. Measure has labeled drawing tools;
+Design omits those disabled controls so its view selector remains visible at
+the effective minimum window width. Recovery stays under File, and compact
+Undo/Redo buttons retain their menu labels, tooltips and accessible names.
+View > Panels reopens Layers, Library or Details after collapse. The navigator
+has an explicit accessible name and description.
+
+Command search uses the menu QActions, menu paths and their availability, with
+legacy phrases retained as aliases and a no-results explanation. It omits
+hidden actions and itself, and selects an available result first. Sheet export
+and printing remain unavailable until a sheet exists. Output > Drawing sheets
+can now create that first typed sheet in one command with the project's name;
+its PDF export, Undo/Redo and editable
+save/Open are covered. Copy, Cut, Paste, Delete and Select all use the focused
+text editor with read-only safeguards. Ctrl+, remains reserved for Preferences.
+The local guide now describes the current menus and room-to-GLA workflow.
+
+Release application and affected targets compile. All eleven affected CTest
+checks pass across the reviewed focused and broader desktop runs. The full
+desktop workflow passes in 235.45 seconds; the menu checks pass in 7.50 seconds
+and the theme checks in 2.78 seconds. The old flat-Draw assertion now checks
+recursive reachability of every original command. The original strict
+high-contrast scan is retained: disabled header buttons now have transparent
+borders, so their white outlines no longer imply availability.
+
+Claude Opus high independently reviewed the integrated change. Its concrete
+search presentation, availability, disabled-outline, first-sheet title and guide
+findings were corrected. Its suggested search-focus regression was not
+reproduced by native Copy, Duplicate and list-activated Select all tests on the
+prior code. Those regressions are retained, with an explicit focus-clear guard
+for platforms that queue focus restoration. Root reviewed the final integration.
+
+Evidence is under `artifacts/codex-menu-navigation-ux-20261015/`, including
+before/after menus, final workspace captures, build and test logs. Dark, light
+and high-contrast menus and the effective 1080-pixel minimum Design header were
+inspected. The separate `artifacts/vertex-test-navigation-reviewed-20261015/`
+development copy has 2855 runtime file hashes and the updated guide verified, and its
+offscreen launch passes. It uses prepared checkout dependencies; the installed
+candidate is unchanged. Source-kit 2100 and whitespace checks pass. This is
+focused usability verification, not a full suite rerun, native 3D qualification
+or production acceptance.
+
 ### October 15 automatic wall orientation
 
 The user chose position and rotation when an object approaches a wall, updating

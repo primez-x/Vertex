@@ -12573,6 +12573,7 @@ public:
             QToolBar QToolButton:focus, QWidget#canvasStatusControls QToolButton:focus {
                 border: 2px solid $accent; }
             QPushButton:disabled, QToolButton:disabled { color: $faint; background: transparent; border-color: $border; }
+            QToolBar QToolButton:disabled { border-color: transparent; }
             QComboBox, QLineEdit, QAbstractSpinBox, QDialog#surveyCalculator QPlainTextEdit { color: $ink; background: $inset;
                 border: 1px solid $controlBorder; border-radius: 6px; padding: 0 8px; min-height: 26px;
                 selection-background-color: $accent; selection-color: $onAccent; }
@@ -17322,30 +17323,37 @@ public:
             const auto height = parse_finite(height_mm, "Sheet height");
             const auto source = authoringSnapshot();
             const auto record = selectedSheetModel(source);
-            if (!record || record->model.sheets().empty())
-                throw std::invalid_argument("No typed drawing sheet is available");
-            for (const auto& sheet : record->model.sheets()) {
+            // A project imported without output metadata can create its first
+            // typed sheet through the same atomic command as later additions.
+            // The default model supplies view definitions, never a hidden page.
+            const auto base_model = record ? record->model : default_sheet_view_model();
+            const auto existing_sheets = record ? record->model.sheets() : std::vector<DrawingSheet>{};
+            for (const auto& sheet : existing_sheets) {
                 if (sheet.number == sheet_number.toStdString())
                     throw std::invalid_argument("Sheet number is already in use");
             }
             std::string id;
             do {
                 id = "sheet-" + make_stable_id();
-            } while (std::any_of(record->model.sheets().begin(), record->model.sheets().end(),
+            } while (std::any_of(existing_sheets.begin(), existing_sheets.end(),
                                  [&](const auto& sheet) { return sheet.id == id; }));
             DrawingSheet addition;
             addition.id = id;
             addition.number = sheet_number.toStdString();
             addition.width_mm = width;
             addition.height_mm = height;
-            addition.title_block = record->model.sheets().front().title_block;
+            if (!base_model.sheets().empty()) addition.title_block = base_model.sheets().front().title_block;
+            if (!record) {
+                const auto property = propertyEntity();
+                addition.title_block.project = property ? property->properties.value("name", std::string{}) : std::string{};
+            }
             addition.title_block.title = title.trimmed().isEmpty()
                 ? std::string("New sheet") : title.trimmed().toStdString();
 
             // Seed one independently scaled viewport per coordinated view so
             // a new page is immediately useful.  A small custom page simply
             // starts blank and can be populated through the viewport editor.
-            const auto& views = record->model.views();
+            const auto& views = base_model.views();
             constexpr double margin = 10.0;
             constexpr double gap = 5.0;
             constexpr double title_band = 26.0;
@@ -17367,8 +17375,12 @@ public:
                          cell_width, cell_height}, 100.0});
                 }
             }
-            const auto updated_model = record->model.with_added_sheet(std::move(addition));
-            auto updated_entity = source.entities().at(record->entity_id);
+            const auto updated_model = record ? record->model.with_added_sheet(std::move(addition))
+                : SheetViewModel::create(views, {std::move(addition)}, base_model.schedule_ids());
+            std::string entity_id = record ? record->entity_id : "sheet-view-" + make_stable_id();
+            while (!record && source.entities().contains(entity_id)) entity_id = "sheet-view-" + make_stable_id();
+            auto updated_entity = record ? source.entities().at(entity_id)
+                                         : make_sheet_view_entity(entity_id, updated_model);
             updated_entity.properties = make_sheet_view_entity(
                 updated_entity.id, updated_model).properties;
             const ApplyEntityChanges command{
@@ -17376,7 +17388,7 @@ public:
                 "Create drawing sheet"};
             (void)Document::preview_command(source, command);
             applyDocumentCommand(command);
-            m_output_sheet_owner = QString::fromStdString(record->entity_id);
+            m_output_sheet_owner = QString::fromStdString(entity_id);
             m_output_sheet_document = m_document;
             m_output_sheet_id = QString::fromStdString(id);
             clearError();
@@ -51054,6 +51066,7 @@ public:
             QKeySequence::Undo, QKeySequence::Redo, QKeySequence::Copy,
             QKeySequence::Cut, QKeySequence::Paste, QKeySequence::SelectAll,
             QKeySequence(QStringLiteral("Ctrl+D")), // Edit > Duplicate
+            QKeySequence(QStringLiteral("Ctrl+,")), // Preferences
             QKeySequence(QStringLiteral("Ctrl+Shift+Z")),
             QKeySequence(QStringLiteral("Shift+F10"))};
         for (std::size_t index = 0; index < keys.size(); ++index) {
@@ -52220,66 +52233,35 @@ public:
     }
 
     void showCommandPalette() {
+        const QPointer<QWidget> previous_focus = QApplication::focusWidget();
         QDialog dialog(owner);
         styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("commandSearchDialog"));
         dialog.setWindowTitle(QStringLiteral("Command search"));
         dialog.setModal(true);
         dialog.resize(560, 420);
         auto* layout = new QVBoxLayout(&dialog);
         auto* search = new QLineEdit(&dialog);
+        search->setObjectName(QStringLiteral("commandSearchInput"));
         search->setPlaceholderText(QStringLiteral("Search commands…"));
         auto* list = new QListWidget(&dialog);
+        list->setObjectName(QStringLiteral("commandSearchResults"));
         layout->addWidget(search);
         layout->addWidget(list, 1);
+        auto* no_results = new QLabel(QStringLiteral("No matching commands. Try a shorter name or a menu label."), &dialog);
+        no_results->setObjectName(QStringLiteral("commandSearchNoResults"));
+        no_results->setWordWrap(true);
+        layout->addWidget(no_results);
 
         struct Command {
             QString name;
             std::function<void()> execute;
+            QStringList aliases{};
+            QPointer<QAction> action{};
         };
+        // Only commands without a menu entry need their own callback. Menu
+        // leaves below share the actual QAction, including its availability.
         std::vector<Command> commands{
-            {QStringLiteral("Open user guide"), [this] { showUserGuide(); }},
-            {QStringLiteral("Customize keyboard shortcuts"), [this] { showShortcutSettings(); }},
-            {QStringLiteral("Preferences"), [this] { showPreferences(); }},
-            {QStringLiteral("Measurement keypad"), [this] { showMeasurementKeypad(); }},
-            {QStringLiteral("Import DISTO reading"), [this] { showDistoImport(); }},
-            {QStringLiteral("New project"), [this] { createNewProject(); }},
-            {QStringLiteral("Open project"), [this] { openFromDialog(); }},
-            {QStringLiteral("Save project"), [this] { saveProject(); }},
-            {QStringLiteral("Save project as…"), [this] { saveAsFromDialog(); }},
-            {QStringLiteral("Undo"), [this] { undoCommand(); }},
-            {QStringLiteral("Redo"), [this] { redoCommand(); }},
-            {QStringLiteral("Copy selection"), [this] { copySelection(); }},
-            {QStringLiteral("Cut selection"), [this] { cutSelection(); }},
-            {QStringLiteral("Paste selection"), [this] { pasteSelection(); }},
-            {QStringLiteral("Duplicate selection"), [this] { (void)duplicateSelection(); }},
-            {QStringLiteral("Select all"), [this] { (void)selectAll(); }},
-            {QStringLiteral("Delete selection"), [this] { deleteSelection(); }},
-            {QStringLiteral("Upgrade boundary identities"), [this] { (void)upgradeSelectedBoundaryIdentities(); }},
-            {QStringLiteral("Insert point"), [this] { showBoundaryVertexInsertion(); }},
-            {QStringLiteral("Remove point"), [this] { showBoundaryVertexRemoval(); }},
-            {QStringLiteral("Merge walls"), [this] { (void)showWallMerge(); }},
-            {QStringLiteral("Jump to boundary vertex"), [this] { showBoundaryVertexJump(); }},
-            {QStringLiteral("Align side to original start X (X)"), [this] { (void)proposeDrawingAlignment(true); }},
-            {QStringLiteral("Align side to original start Y (Y)"), [this] { (void)proposeDrawingAlignment(false); }},
-            {QStringLiteral("Align right (Ctrl+Right)"), [this] { proposeDirectionalDrawingAlignment(1, 0, false); }},
-            {QStringLiteral("Align left (Ctrl+Left)"), [this] { proposeDirectionalDrawingAlignment(-1, 0, false); }},
-            {QStringLiteral("Align up (Ctrl+Up)"), [this] { proposeDirectionalDrawingAlignment(0, 1, false); }},
-            {QStringLiteral("Align down (Ctrl+Down)"), [this] { proposeDirectionalDrawingAlignment(0, -1, false); }},
-            {QStringLiteral("Intersect right (Ctrl+Shift+Right)"), [this] { proposeDirectionalDrawingAlignment(1, 0, true); }},
-            {QStringLiteral("Intersect left (Ctrl+Shift+Left)"), [this] { proposeDirectionalDrawingAlignment(-1, 0, true); }},
-            {QStringLiteral("Intersect up (Ctrl+Shift+Up)"), [this] { proposeDirectionalDrawingAlignment(0, 1, true); }},
-            {QStringLiteral("Intersect down (Ctrl+Shift+Down)"), [this] { proposeDirectionalDrawingAlignment(0, -1, true); }},
-            {QStringLiteral("Auto close active drawing (A)"), [this] { (void)autoCloseActiveDrawing(); }},
-            {QStringLiteral("Complete bay-window return (B)"), [this] { (void)completeBayWindowReturn(); }},
-            {QStringLiteral("Redefine boundary"), [this] { showBoundaryRedefinition(); }},
-            {QStringLiteral("Review measured area sources"), [this] { showMeasuredAreaSourceReview(); }},
-            {QStringLiteral("Review rooms from walls"), [this] { showPhysicalRoomRepair(); }},
-            {QStringLiteral("Detect closed areas from walls or measured lines"), [this] { showAutomaticAreaDetection(); }},
-            {QStringLiteral("Measure exterior from walls"), [this] { showWallMeasurementReview(); }},
-            {QStringLiteral("Refresh exterior measurement"), [this] { showWallMeasurementReview(true); }},
-            {QStringLiteral("Add building"), [this] { showOrganizationDialog("building"); }},
-            {QStringLiteral("Add floor"), [this] { showOrganizationDialog("floor"); }},
-            {QStringLiteral("Add drawing layer"), [this] { showOrganizationDialog("layer"); }},
             {QStringLiteral("Rename selected property, building, floor or layer"),
              [this] { showOrganizationDialog("rename"); }},
             {QStringLiteral("Edit project details"), [this] {
@@ -52294,173 +52276,160 @@ public:
             {QStringLiteral("Edit selected area attributes"), [this] {
                  if (m_selected_id.isEmpty() || !selectedEntity().has_value() ||
                      !is_closed_boundary_entity(selectedEntity()->type)) {
-                      setError(QStringLiteral("Select a closed boundary first."));
-                      return;
+                     setError(QStringLiteral("Select a closed boundary first."));
+                     return;
                  }
                  showAreaAttributesEditor();
              }},
-            {QStringLiteral("Edit calculation profile"), [this] { showCalculationProfileEditor(); }},
-            {QStringLiteral("Manage workspace profiles"), [this] { showWorkspaceProfiles(); }},
-            {QStringLiteral("Named revisions and comparison"), [this] { showRevisionHistory(); }},
-            {QStringLiteral("Transform selection"), [this] { showBoundaryTransformEditor(); }},
             {QStringLiteral("Edit assembly layers"), [this] { showWallLayerEditor(); }},
-            {QStringLiteral("Draw sloped wall"), [this] { setTool(CanvasTool::sloped_wall); }},
-            {QStringLiteral("Measurement workspace"), [this] { setWorkspace(Workspace::measurement); }},
-            {QStringLiteral("Architectural workspace"), [this] { setWorkspace(Workspace::architectural); }},
-            {QStringLiteral("Add labels and symbols"), [this] { showAnnotationEditor(); }},
-            {QStringLiteral("Text library"), [this] { showTextLibrary(); }},
-            {QStringLiteral("Add length, chain, angle or area dimension"), [this] { showDimensionCreator(); }},
-            {QStringLiteral("Import reference image"), [this] { showReferenceImport(); }},
-            {QStringLiteral("Open project resources"), [this] { showProjectResources(); }},
-            {QStringLiteral("Calibrate selected reference image"),
-             [this] { showReferenceCalibration(); }},
+            {QStringLiteral("Calibrate selected reference image"), [this] { showReferenceCalibration(); }},
             {QStringLiteral("Trace selected reference"), [this] { beginReferenceTrace(); }},
-            {QStringLiteral("Open schedules"), [this] { showSchedules(); }},
-            {QStringLiteral("Appraisal area report"), [this] { showAppraisalReport(); }},
-            {QStringLiteral("Edit drawing sheet settings"), [this] { showSheetSettings(); }},
-            {QStringLiteral("Edit sheet layout"), [this] { showSheetLayoutManager(); }},
-            {QStringLiteral("Edit architectural view settings"),
-             [this] { showArchitecturalViewSettings(); }},
-            {QStringLiteral("Create or edit saved plans, elevations and sections"), [this] { showNamedViews(); }},
-            {QStringLiteral("Join selected walls"), [this] { (void)joinSelected(ArchitecturalJoinKind::wall); }},
-            {QStringLiteral("Unjoin selected walls"), [this] { (void)unjoinSelected(ArchitecturalJoinKind::wall); }},
-            {QStringLiteral("Join selected roofs"), [this] { (void)joinSelected(ArchitecturalJoinKind::roof); }},
-            {QStringLiteral("Unjoin selected roofs"), [this] { (void)unjoinSelected(ArchitecturalJoinKind::roof); }},
-            {QStringLiteral("Design phases and remodeling alternatives"),
-             [this] { showRemodelingAlternatives(); }},
-            {QStringLiteral("Room and boundary relationships"),
-             [this] { showRoomRelationships(); }},
-            {QStringLiteral("Edit levels and floor-to-floor links"),
-             [this] { showVerticalLevels(); }},
-            {QStringLiteral("Create room boundary from selected geometry"),
-             [this] { createRoomBoundaryFromSelection(); }},
-            {QStringLiteral("Create room volume from selected boundary"),
-             [this] { createRoomVolumeFromDialog(); }},
-            {QStringLiteral("Edit selected room volume"),
-             [this] { editRoomVolumeFromDialog(); }},
-            {QStringLiteral("Edit reusable assemblies"),
-             [this] { showAssemblies(); }},
-            {QStringLiteral("Assistance"), [this] { showAssistance(); }},
-            {QStringLiteral("Start measured boundary with point input"),
-             [this] { setTool(CanvasTool::boundary); }},
+            {QStringLiteral("Create room boundary from selected geometry"), [this] { createRoomBoundaryFromSelection(); }},
+            {QStringLiteral("Edit selected room volume"), [this] { editRoomVolumeFromDialog(); }},
+            {QStringLiteral("Start measured boundary with point input"), [this] { setTool(CanvasTool::boundary); }},
             {QStringLiteral("Start Define First measured boundary"),
              [this] { (void)beginBoundaryDrawing(BoundaryAuthoringMode::define_first, {}); }},
-            {QStringLiteral("Subtract selected area from another area"),[this] { showAutoSubtractDialog(); }},
-            {QStringLiteral("Define area and subtract from another area"),[this] { showAutoSubtractDialog(true); }},
-            {QStringLiteral("Start straight wall with two-point input"),
-             [this] { setTool(CanvasTool::wall); }},
-            {QStringLiteral("Draw curved wall"), [this] { showCurvedWallDialog(); }},
-            {QStringLiteral("Create door opening"),
-             [this] { createOpeningFromDialog(QStringLiteral("door")); }},
-            {QStringLiteral("Create window opening"),
-             [this] { createOpeningFromDialog(QStringLiteral("window")); }},
-            {QStringLiteral("Create corner window between selected walls"),
-             [this] { showCornerWindowEditor(); }},
-            {QStringLiteral("Edit selected corner window"),
-             [this] { showCornerWindowEditor(); }},
-            {QStringLiteral("Duplicate selected corner window"),
-             [this] { duplicateCornerWindowSelection(); }},
-            {QStringLiteral("Create slab from selected boundary"),
-             [this] { createSlabFromDialog(); }},
-            {QStringLiteral("Create horizontal assembly from selected boundary"),
-             [this] { createSlabFromDialog(); }},
-            {QStringLiteral("Create floor from selected boundary"),
-             [this] { createSlabFromDialog(QStringLiteral("floor")); }},
-            {QStringLiteral("Create ceiling from selected boundary"),
-             [this] { createSlabFromDialog(QStringLiteral("ceiling")); }},
-            {QStringLiteral("Create foundation from selected boundary"),
-             [this] { createSlabFromDialog(QStringLiteral("foundation")); }},
-            {QStringLiteral("Create terrain surface from selected boundary"),
-             [this] { showTerrainSurfaceDialog(); }},
-            {QStringLiteral("Create column, beam, stair or roof"),
-             [this] { showBuildingObjectDialog(false); }},
-            {QStringLiteral("Edit selected building object"),
-             [this] { showBuildingObjectDialog(true); }},
-            {QStringLiteral("Dimensions and constraints"), [this] { showConstraintEditor(); }},
-            {QStringLiteral("Toggle grid"), [this] { toggleGrid(); }},
-            {QStringLiteral("Toggle snap"), [this] { toggleSnap(); }},
-            {QStringLiteral("Toggle overview map"), [this] { toggleOverviewMap(); }},
-            {QStringLiteral("Fit view"), [this] { fitView(); }},
-            {QStringLiteral("Light theme"), [this] { chooseTheme(WorkspaceTheme::light); }},
-            {QStringLiteral("Dark theme"), [this] { chooseTheme(WorkspaceTheme::dark); }},
-            {QStringLiteral("High contrast theme"), [this] { chooseTheme(WorkspaceTheme::high_contrast); }},
-            {QStringLiteral("Export selected sheet PDF"), [this] { exportFromDialog(); }},
-            {QStringLiteral("Export sketch PDF"), [this] { exportSketchFromDialog(); }},
-            {QStringLiteral("Toggle sketch composition guide"), [this] {
-                const auto* canvas = outputCanvas();
-                setSketchCompositionGuideEnabled(!canvas || !canvas->sketchCompositionGuideEnabled());
-            }},
-            {QStringLiteral("Export drawing set PDF"), [this] { exportDrawingSetFromDialog(); }},
-            {QStringLiteral("Export SVG"), [this] {
-                const auto selected = QFileDialog::getSaveFileName(
-                    owner, QStringLiteral("Export SVG"), defaultOutputPath(QStringLiteral(".svg")), QStringLiteral("SVG document (*.svg)"));
-                if (!selected.isEmpty()) exportDraftSvg(selected);
-            }},
-            {QStringLiteral("Export image"), [this] {
-                const auto selected = QFileDialog::getSaveFileName(
-                    owner, QStringLiteral("Export image"), defaultOutputPath(QStringLiteral(" sketch.png")),
-                    QStringLiteral("PNG image (*.png)"));
-                if (!selected.isEmpty()) exportDraftImage(selected);
-            }},
-            {QStringLiteral("Import DXF"), [this] {
-                const auto selected = QFileDialog::getOpenFileName(
-                    owner, QStringLiteral("Import DXF"), {}, QStringLiteral("DXF drawing (*.dxf *.DXF)"));
-                if (!selected.isEmpty()) importDxf(selected, true);
-            }},
-            {QStringLiteral("Import PincSketch project"), [this] {
-                const auto selected=QFileDialog::getOpenFileName(owner,QStringLiteral("Import PincSketch project"),{},QStringLiteral("PincSketch project (*.pinc *.PINC)"));
-                if (!selected.isEmpty()) importPinc(selected,true);
-            }},
-            {QStringLiteral("Export DXF"), [this] {
-                const auto selected = QFileDialog::getSaveFileName(
-                    owner, QStringLiteral("Export DXF"), defaultOutputPath(QStringLiteral(".dxf")), QStringLiteral("DXF drawing (*.dxf)"));
-                if (!selected.isEmpty()) exportDxf(selected);
-            }},
-            {QStringLiteral("Import IFC"), [this] {
-                const auto selected = QFileDialog::getOpenFileName(
-                    owner, QStringLiteral("Import IFC"), {}, QStringLiteral("IFC model (*.ifc *.IFC)"));
-                if (!selected.isEmpty()) importIfc(selected);
-            }},
-            {QStringLiteral("Export IFC"), [this] {
-                const auto selected = QFileDialog::getSaveFileName(
-                    owner, QStringLiteral("Export IFC"), defaultOutputPath(QStringLiteral(".ifc")), QStringLiteral("IFC model (*.ifc)"));
-                if (!selected.isEmpty()) exportIfc(selected);
-            }},
-            {QStringLiteral("Imported sources / export original file"), [this] { showImportedSources(); }},
-            {QStringLiteral("Print selected sheet"), [this] { showPrintPreview(); }},
-            {QStringLiteral("Print drawing set"), [this] { showDrawingSetPrintPreview(); }},
-            {QStringLiteral("About"), [this] { showAbout(); }},
+            {QStringLiteral("Subtract selected area from another area"), [this] { showAutoSubtractDialog(); }},
+            {QStringLiteral("Define area and subtract from another area"), [this] { showAutoSubtractDialog(true); }},
+            {QStringLiteral("Duplicate selected corner window"), [this] { duplicateCornerWindowSelection(); }},
+            {QStringLiteral("Create ceiling from selected boundary"), [this] { createSlabFromDialog(QStringLiteral("ceiling")); }},
+            {QStringLiteral("Create foundation from selected boundary"), [this] { createSlabFromDialog(QStringLiteral("foundation")); }},
+            {QStringLiteral("Create column, beam, stair or roof"), [this] { showBuildingObjectDialog(false); }},
+            {QStringLiteral("Edit selected building object"), [this] { showBuildingObjectDialog(true); }},
         };
+        std::map<QAction*, QStringList> aliases;
+        const std::pair<const char*, const char*> legacy_names[]{
+            {"userGuide", "Open user guide"},
+            {"keyboardShortcutSettings", "Customize keyboard shortcuts"},
+            {"measurementKeypad", "Measurement keypad"},
+            {"newProject", "New project"},
+            {"openProject", "Open project"},
+            {"saveProject", "Save project"},
+            {"saveProjectAs", "Save project as…"},
+            {"duplicateSelection", "Duplicate selection"},
+            {"upgradeBoundaryIdentities", "Upgrade boundary identities"},
+            {"insertBoundaryVertex", "Insert point"},
+            {"removeBoundaryVertex", "Remove point"},
+            {"mergePhysicalWalls", "Merge walls"},
+            {"jumpBoundaryVertex", "Jump to boundary vertex"},
+            {"drawingAlignStartX", "Align side to original start X (X)"},
+            {"drawingAlignStartY", "Align side to original start Y (Y)"},
+            {"boundaryRedefinition", "Redefine boundary"},
+            {"reviewMeasuredAreaSources", "Review measured area sources"},
+            {"detectClosedAreas", "Detect closed areas from walls or measured lines"},
+            {"calculationProfile", "Edit calculation profile"},
+            {"workspaceProfiles", "Manage workspace profiles"},
+            {"revisionHistory", "Named revisions and comparison"},
+            {"workspace2D", "Measurement workspace"},
+            {"workspace3D", "Architectural workspace"},
+            {"projectResources", "Open project resources"},
+            {"openSchedules", "Open schedules"},
+            {"sheetLayoutManager", "Edit sheet layout"},
+            {"manageNamedViews", "Create or edit saved plans, elevations and sections"},
+            {"designPhaseSettings", "Design phases and remodeling alternatives"},
+            {"roomRelationships", "Room and boundary relationships"},
+            {"verticalLevels", "Edit levels and floor-to-floor links"},
+            {"createRoom", "Create room volume from selected boundary"},
+            {"assemblyCatalog", "Edit reusable assemblies"},
+            {"createWall", "Start straight wall with two-point input"},
+            {"createDoor", "Create door opening"},
+            {"createWindow", "Create window opening"},
+            {"createCornerWindow", "Create corner window between selected walls"},
+            {"createCornerWindow", "Edit selected corner window"},
+            {"createSlab", "Create slab from selected boundary"},
+            {"createSlab", "Create horizontal assembly from selected boundary"},
+            {"createFloor", "Create floor from selected boundary"},
+            {"createTerrainSurface", "Create terrain surface from selected boundary"},
+            {"viewGrid", "Toggle grid"},
+            {"viewSnap", "Toggle snap"},
+            {"viewOverviewMap", "Toggle overview map"},
+            {"themeLight", "Light theme"},
+            {"themeDark", "Dark theme"},
+            {"themeHighContrast", "High contrast theme"},
+            {"sketchCompositionGuide", "Toggle sketch composition guide"},
+            {"importDxf", "Import DXF"},
+            {"importIfc", "Import IFC"},
+            {"importPinc", "Import PincSketch project"},
+            {"importedSources", "Imported sources / export original file"},
+        };
+        for (const auto& [id, phrase] : legacy_names)
+            if (auto* action = owner->findChild<QAction*>(QString::fromLatin1(id)))
+                aliases[action].push_back(QString::fromUtf8(phrase));
+        aliases[m_annotation_action].push_back(QStringLiteral("Add labels and symbols"));
+        aliases[m_reference_action].push_back(QStringLiteral("Import reference image"));
+        aliases[m_sheet_action].push_back(QStringLiteral("Edit drawing sheet settings"));
+        aliases[m_view_action].push_back(QStringLiteral("Edit architectural view settings"));
+        const auto menu_label = [](QString text) {
+            text.replace(QStringLiteral("&&"), QString(QChar(0x1f)));
+            text.remove(QLatin1Char('&'));
+            text.replace(QChar(0x1f), QLatin1Char('&'));
+            return text;
+        };
+        std::set<QAction*> seen;
+        const auto append_menu = [&](auto&& self, QMenu* menu, const QString& parent_path) -> void {
+            const auto path = parent_path.isEmpty() ? menu_label(menu->title())
+                : parent_path + QStringLiteral(" > ") + menu_label(menu->title());
+            // Refresh dynamic output/recent-project availability before taking
+            // the menu's leaves. Their existing handlers remain authoritative.
+            Q_EMIT menu->aboutToShow();
+            for (auto* action : menu->actions()) {
+                if (action->isSeparator() || action == m_palette_action || !action->isVisible()) continue;
+                if (auto* submenu = action->menu()) { self(self, submenu, path); continue; }
+                if (!seen.insert(action).second) continue;
+                commands.push_back({path + QStringLiteral(" > ") + menu_label(action->text()), [action = QPointer<QAction>(action)] {
+                                        if (action) action->trigger();
+                                    },
+                                    aliases[action], action});
+            }
+        };
+        for (auto* action : owner->menuBar()->actions())
+            if (auto* menu = action->menu()) append_menu(append_menu, menu, {});
 
         const auto repopulate = [&] {
             const auto query = search->text().trimmed();
             list->clear();
+            int first_available = -1;
             for (std::size_t index = 0; index < commands.size(); ++index) {
-                if (!query.isEmpty() &&
-                    !commands[index].name.contains(query, Qt::CaseInsensitive)) {
+                const auto& command = commands[index];
+                if (!query.isEmpty() && !command.name.contains(query, Qt::CaseInsensitive) &&
+                    std::none_of(command.aliases.begin(), command.aliases.end(), [&](const auto& alias) {
+                        return alias.contains(query, Qt::CaseInsensitive);
+                    })) {
                     continue;
                 }
-                auto* item = new QListWidgetItem(commands[index].name, list);
+                auto* item = new QListWidgetItem(command.name, list);
                 item->setData(Qt::UserRole, static_cast<int>(index));
+                if (command.action) {
+                    item->setToolTip(command.action->toolTip());
+                    if (!command.action->isEnabled() || !command.action->isVisible())
+                        item->setFlags(item->flags() & ~Qt::ItemIsEnabled);
+                }
+                if (first_available < 0 && (item->flags() & Qt::ItemIsEnabled)) first_available = list->row(item);
             }
-            if (list->count() > 0) {
-                list->setCurrentRow(0);
-            }
+            no_results->setText(list->count() == 0
+                ? QStringLiteral("No matching commands. Try a shorter name or a menu label.")
+                : QStringLiteral("No commands are available here. Hover over a disabled command for details."));
+            no_results->setVisible(first_available < 0);
+            list->setCurrentRow(first_available);
         };
         QObject::connect(search, &QLineEdit::textChanged, &dialog, repopulate);
-        QObject::connect(search, &QLineEdit::returnPressed, &dialog, [&] {
-            if (list->currentItem()) {
-                const auto index = list->currentItem()->data(Qt::UserRole).toInt();
-                commands[static_cast<std::size_t>(index)].execute();
-                dialog.accept();
-            }
-        });
+        const auto execute_item = [&](QListWidgetItem* item) {
+            if (!item || !(item->flags() & Qt::ItemIsEnabled)) return;
+            const auto index = static_cast<std::size_t>(item->data(Qt::UserRole).toInt());
+            const auto& command = commands[index];
+            if (command.action && (!command.action->isEnabled() || !command.action->isVisible())) return;
+            // A hidden search editor must never be the target of an Edit action,
+            // even on platforms that queue main-window focus restoration.
+            if (auto* focused = QApplication::focusWidget(); focused && focused->window() == &dialog)
+                focused->clearFocus();
+            dialog.hide();
+            if (previous_focus) previous_focus->setFocus(Qt::OtherFocusReason);
+            command.execute();
+            dialog.accept();
+        };
+        QObject::connect(search, &QLineEdit::returnPressed, &dialog, [&] { execute_item(list->currentItem()); });
         QObject::connect(list, &QListWidget::itemActivated, &dialog,
-                         [&](QListWidgetItem* item) {
-                             const auto index = item->data(Qt::UserRole).toInt();
-                             commands[static_cast<std::size_t>(index)].execute();
-                             dialog.accept();
-                         });
+                         execute_item);
         repopulate();
         search->setFocus();
         dialog.exec();
@@ -57927,11 +57896,19 @@ private:
         m_recover_action->setIconText(QStringLiteral("Recover"));
         m_recover_action->setToolTip(QStringLiteral("Recover an autosaved copy of a project"));
         m_recover_action->setStatusTip(QStringLiteral("Recover an autosaved copy of a project"));
+        // Recovery remains in File; keep the header for everyday drawing.
+        toolbar->removeAction(m_recover_action);
         toolbar->addSeparator();
         m_undo_action = add_toolbar_action(QStringLiteral("Undo"), "<path d='M9 7 4 12l5 5'/><path d='M4 12h9a7 7 0 0 1 7 7'/>");
         m_undo_action->setObjectName(QStringLiteral("undoCommand"));
         m_redo_action = add_toolbar_action(QStringLiteral("Redo"), "<path d='m15 7 5 5-5 5'/><path d='M20 12h-9a7 7 0 0 0-7 7'/>");
         m_redo_action->setObjectName(QStringLiteral("redoCommand"));
+        for (auto* action : {m_undo_action, m_redo_action}) {
+            if (auto* button = qobject_cast<QToolButton*>(toolbar->widgetForAction(action))) {
+                button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+                button->setAccessibleName(action->text());
+            }
+        }
         toolbar->addSeparator();
         // Export formats are filled in with the File menu below.
         auto* export_menu = new QMenu(QStringLiteral("Export"), owner);
@@ -57994,9 +57971,9 @@ private:
                 action->setStatusTip(QString::fromLatin1(button.status));
                 draw_modes->addAction(action);
                 if (auto* tool = qobject_cast<QToolButton*>(toolbar->widgetForAction(action))) {
-                    tool->setToolButtonStyle(Qt::ToolButtonIconOnly);
+                    tool->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
                     tool->setAccessibleName(label);
-                    tool->setFixedSize(design::tool_button, design::tool_button);
+                    tool->setMinimumWidth(tool->sizeHint().width());
                 }
                 m_drawing_mode_actions[static_cast<std::size_t>(button.mode)] = action;
                 const auto mode = button.mode;
@@ -58090,7 +58067,7 @@ private:
                          [this] { exportFromDialog(); });
         auto* sketch_pdf_action = make_action("exportSketchPdf", QStringLiteral("Export sketch PDF…"),
                          [this] { exportSketchFromDialog(); });
-        sketch_pdf_action->setToolTip(QStringLiteral("Export visible drawing content with a tight vector crop for inserting into a report"));
+        sketch_pdf_action->setToolTip(QStringLiteral("Export the drawing on Letter or A4 with a title block, GLA and a standard scale"));
         auto* sketch_guide_action = new QAction(QStringLiteral("Sketch composition guide"), owner);
         sketch_guide_action->setObjectName(QStringLiteral("sketchCompositionGuide"));
         sketch_guide_action->setCheckable(true);
@@ -58211,7 +58188,8 @@ private:
         m_project_resources_action->setObjectName(QStringLiteral("projectResources"));
         m_schedule_action = new QAction(QStringLiteral("Schedules"), owner);
         m_schedule_action->setObjectName(QStringLiteral("openSchedules"));
-        m_sheet_action = new QAction(QStringLiteral("Sheet settings"), owner);
+        m_sheet_action = new QAction(QStringLiteral("Drawing sheets…"), owner);
+        m_sheet_action->setObjectName(QStringLiteral("drawingSheetSettings"));
         m_viewport_action = new QAction(QStringLiteral("Sheet layout manager…"), owner);
         m_viewport_action->setObjectName(QStringLiteral("sheetLayoutManager"));
         m_view_action = new QAction(QStringLiteral("Architectural view settings"), owner);
@@ -58264,7 +58242,7 @@ private:
         m_terrain_action = new QAction(QStringLiteral("Create terrain surface…"), owner);
         m_terrain_action->setObjectName(QStringLiteral("createTerrainSurface"));
         m_architectural_actions = {curved_wall_action, sloped_wall_action, m_view_action, m_remodel_action,
-            m_schedule_action, m_viewport_action,
+            m_schedule_action,
             m_relationship_action, m_levels_action, m_reference_grid_action,
             m_assembly_action, m_terrain_action};
         m_about_action = new QAction(QStringLiteral("About"), owner);
@@ -58355,8 +58333,8 @@ private:
         export_menu->addSeparator();
         // Sheet output needs a drawing sheet; say why instead of failing.
         export_menu->setToolTipsVisible(true);
-        QObject::connect(export_menu, &QMenu::aboutToShow, owner,
-                         [this, export_sheet_pdf_action, export_set_action, export_report_action] {
+        const auto refresh_output_actions = [this, export_sheet_pdf_action, export_set_action, export_report_action,
+                                             print_sheet_action, print_set_action] {
             bool has_sheets = false;
             bool has_property = false;
             try {
@@ -58366,8 +58344,8 @@ private:
                 has_property = std::any_of(snapshot.entities().begin(), snapshot.entities().end(),
                     [](const auto& entry) { return entry.second.type == "property"; });
             } catch (const std::exception&) {}
-            const auto reason = QStringLiteral("No drawing sheets yet. Add one with Output > Sheet layout manager, or use Export sketch PDF.");
-            for (auto* action : {export_sheet_pdf_action, export_set_action}) {
+            const auto reason = QStringLiteral("No drawing sheets yet. Add one with Output > Drawing sheets, or use Export sketch PDF.");
+            for (auto* action : {export_sheet_pdf_action, export_set_action, print_sheet_action, print_set_action}) {
                 action->setEnabled(has_sheets);
                 action->setToolTip(has_sheets ? QString{} : reason);
                 action->setStatusTip(has_sheets ? QString{} : reason);
@@ -58376,7 +58354,9 @@ private:
             export_report_action->setToolTip(has_property
                 ? QStringLiteral("Export the appraisal area report with GLA and area totals as a PDF")
                 : QStringLiteral("This project has no property to report on."));
-        });
+        };
+        QObject::connect(export_menu, &QMenu::aboutToShow, owner, refresh_output_actions);
+        QObject::connect(file_menu, &QMenu::aboutToShow, owner, refresh_output_actions);
         export_menu->addAction(export_dxf_action);
         export_menu->addAction(export_ifc_action);
         export_menu->addAction(export_svg_action);
@@ -58418,29 +58398,19 @@ private:
         for (auto* action : m_drawing_mode_actions)
             if (action) architecture_menu->addAction(action);
         architecture_menu->addSeparator();
-        architecture_menu->addAction(create_wall_action);
-        architecture_menu->addAction(curved_wall_action);
-        architecture_menu->addAction(sloped_wall_action);
+        auto* walls_menu = add_submenu(architecture_menu, QStringLiteral("Walls"), "wallsMenu");
+        for (auto* action : {create_wall_action, curved_wall_action, sloped_wall_action}) walls_menu->addAction(action);
+        auto* openings_menu = add_submenu(architecture_menu, QStringLiteral("Doors and windows"), "openingsMenu");
+        for (auto* action : {create_door_action, create_window_action, create_corner_window_action, create_opening_action})
+            openings_menu->addAction(action);
+        auto* building_objects_menu = add_submenu(architecture_menu, QStringLiteral("Building objects"), "buildingObjectsMenu");
+        for (auto* action : building_object_actions) building_objects_menu->addAction(action);
+        for (auto* action : {create_slab_action, create_floor_action, m_terrain_action}) building_objects_menu->addAction(action);
+        auto* areas_menu = add_submenu(architecture_menu, QStringLiteral("Areas and rooms"), "areasAndRoomsMenu");
+        for (auto* action : {create_room_action, m_detect_areas_action, measure_exterior, repair_room}) areas_menu->addAction(action);
+        auto* joins_menu = add_submenu(architecture_menu, QStringLiteral("Join and unjoin"), "joinsMenu");
+        for (auto* action : {join_walls_action, unjoin_walls_action, join_roofs_action, unjoin_roofs_action}) joins_menu->addAction(action);
         architecture_menu->addSeparator();
-        architecture_menu->addAction(create_door_action);
-        architecture_menu->addAction(create_window_action);
-        architecture_menu->addAction(create_corner_window_action);
-        architecture_menu->addAction(create_opening_action);
-        architecture_menu->addSeparator();
-        architecture_menu->addAction(create_room_action);
-        architecture_menu->addAction(create_slab_action);
-        architecture_menu->addAction(create_floor_action);
-        for (auto* action : building_object_actions) architecture_menu->addAction(action);
-        architecture_menu->addAction(m_terrain_action);
-        architecture_menu->addSeparator();
-        architecture_menu->addAction(join_walls_action);
-        architecture_menu->addAction(unjoin_walls_action);
-        architecture_menu->addAction(join_roofs_action);
-        architecture_menu->addAction(unjoin_roofs_action);
-        architecture_menu->addSeparator();
-        architecture_menu->addAction(m_detect_areas_action);
-        architecture_menu->addAction(measure_exterior);
-        architecture_menu->addAction(repair_room);
         auto* drawing_aids = add_submenu(architecture_menu, QStringLiteral("Drawing aids"), "drawingAidsMenu");
         drawing_aids->addAction(lift_pen_action);
         drawing_aids->addAction(travel_action);
@@ -58505,6 +58475,27 @@ private:
         view_menu->addAction(named_views_action);
         view_menu->addAction(m_view_action);
         view_menu->addSeparator();
+        auto* panels_menu = add_submenu(view_menu, QStringLiteral("Panels"), "viewPanelsMenu");
+        const std::array<const char*, 3> panel_ids{"showLayersPanel", "showLibraryPanel", "showDetailsPanel"};
+        const std::array<const char*, 3> panel_labels{"Layers", "Library", "Details"};
+        for (int index = 0; index < 3; ++index) {
+            panels_menu->addAction(make_action(panel_ids[index], QString::fromLatin1(panel_labels[index]), [this, index] {
+                if (!m_workspace_splitter || !m_sidebar_tabs) return;
+                auto sizes = m_workspace_splitter->sizes();
+                if (!sizes.isEmpty() && sizes.front() == 0) {
+                    constexpr int restored_width = 340;
+                    sizes[0] = restored_width;
+                    if (sizes.size() > 1) sizes[1] = std::max(1, sizes[1] - restored_width);
+                    m_workspace_splitter->setSizes(sizes);
+                }
+                m_sidebar_tabs->setCurrentIndex(index);
+                if (index == 0 && m_navigator) m_navigator->setFocus(Qt::MenuBarFocusReason);
+                else if (index == 1 && m_symbol_search) m_symbol_search->setFocus(Qt::MenuBarFocusReason);
+                else if (m_appraisal_details)
+                    if (auto* areas = m_appraisal_details->findChild<QTreeWidget*>(QStringLiteral("appraisalDetailsAreas")))
+                        areas->setFocus(Qt::MenuBarFocusReason);
+            }));
+        }
         view_menu->addMenu(theme_menu);
         auto* view_advanced = add_submenu(view_menu, QStringLiteral("Advanced"), "viewAdvancedMenu");
         view_advanced->addAction(m_workspace_profiles_action);
@@ -58517,6 +58508,7 @@ private:
         });
 
         auto* output_menu = add_menu(QStringLiteral("&Output"), "outputMenu");
+        QObject::connect(output_menu, &QMenu::aboutToShow, owner, refresh_output_actions);
         output_menu->addAction(m_sheet_action);
         output_menu->addAction(m_viewport_action);
         output_menu->addAction(m_schedule_action);
@@ -58556,28 +58548,58 @@ private:
         const auto text_editor_focused = [] {
             auto* focused = QApplication::focusWidget();
             return qobject_cast<QLineEdit*>(focused) != nullptr ||
-                   qobject_cast<QPlainTextEdit*>(focused) != nullptr;
+                   qobject_cast<QPlainTextEdit*>(focused) != nullptr ||
+                   qobject_cast<QTextEdit*>(focused) != nullptr ||
+                   qobject_cast<QAbstractSpinBox*>(focused) != nullptr;
+        };
+        enum class TextCommand { copy, cut, paste, erase, select_all };
+        const auto edit_focused_text = [](TextCommand command) {
+            const auto apply = [command](auto* editor) {
+                if (!editor->isEnabled()) return;
+                if (command == TextCommand::copy) editor->copy();
+                else if (command == TextCommand::select_all) editor->selectAll();
+                else if (!editor->isReadOnly()) {
+                    if (command == TextCommand::cut) editor->cut();
+                    else if (command == TextCommand::paste) editor->paste();
+                    else {
+                        if constexpr (std::is_same_v<std::remove_pointer_t<decltype(editor)>, QLineEdit>) {
+                            editor->del();
+                        } else {
+                            auto cursor = editor->textCursor();
+                            if (cursor.hasSelection()) cursor.removeSelectedText();
+                            else cursor.deleteChar();
+                            editor->setTextCursor(cursor);
+                        }
+                    }
+                }
+            };
+            auto* focused = QApplication::focusWidget();
+            if (auto* editor = qobject_cast<QLineEdit*>(focused)) { apply(editor); return true; }
+            if (auto* editor = qobject_cast<QPlainTextEdit*>(focused)) { apply(editor); return true; }
+            if (auto* editor = qobject_cast<QTextEdit*>(focused)) { apply(editor); return true; }
+            // Spin boxes normally give focus to their line editor. If a
+            // platform focuses the wrapper, it still must not edit the canvas.
+            return qobject_cast<QAbstractSpinBox*>(focused) != nullptr;
         };
         QObject::connect(user_guide_action, &QAction::triggered, owner, [this] { showUserGuide(); });
-        QObject::connect(m_copy_action, &QAction::triggered, owner, [this, text_editor_focused] {
-            if (!text_editor_focused()) (void)copySelection();
+        QObject::connect(m_copy_action, &QAction::triggered, owner, [this, edit_focused_text] {
+            if (!edit_focused_text(TextCommand::copy)) (void)copySelection();
         });
-        QObject::connect(m_cut_action, &QAction::triggered, owner, [this, text_editor_focused] {
-            if (!text_editor_focused()) (void)cutSelection();
+        QObject::connect(m_cut_action, &QAction::triggered, owner, [this, edit_focused_text] {
+            if (!edit_focused_text(TextCommand::cut)) (void)cutSelection();
         });
-        QObject::connect(m_paste_action, &QAction::triggered, owner, [this, text_editor_focused] {
-            if (!text_editor_focused()) (void)pasteSelection();
+        QObject::connect(m_paste_action, &QAction::triggered, owner, [this, edit_focused_text] {
+            if (!edit_focused_text(TextCommand::paste)) (void)pasteSelection();
         });
-        QObject::connect(m_delete_action, &QAction::triggered, owner, [this, text_editor_focused] {
-            if (!text_editor_focused()) (void)deleteSelection();
+        QObject::connect(m_delete_action, &QAction::triggered, owner, [this, edit_focused_text] {
+            if (!edit_focused_text(TextCommand::erase)) (void)deleteSelection();
         });
         QObject::connect(m_duplicate_action, &QAction::triggered, owner, [this, text_editor_focused] {
             if (!text_editor_focused()) (void)duplicateSelection();
         });
-        QObject::connect(m_select_all_action, &QAction::triggered, owner, [this, text_editor_focused] {
+        QObject::connect(m_select_all_action, &QAction::triggered, owner, [this, edit_focused_text] {
             auto* focused = QApplication::focusWidget();
-            if (text_editor_focused() || qobject_cast<QTextEdit*>(focused) ||
-                qobject_cast<QAbstractSpinBox*>(focused)) return;
+            if (edit_focused_text(TextCommand::select_all)) return;
             if (auto* view = qobject_cast<QAbstractItemView*>(focused)) { view->selectAll(); return; }
             (void)selectAll();
         });
@@ -58756,6 +58778,12 @@ private:
             if (button->objectName() != QStringLiteral("qt_toolbar_ext_button"))
                 button->setFocusPolicy(Qt::TabFocus);
         applyTheme(m_theme); // Design system: dark is the primary (default) theme.
+        // Size the labelled mode buttons after the theme has supplied their
+        // font and padding. Qt's toolbar overflow and Draw menu retain access
+        // when the full command strip does not fit a narrow window.
+        for (auto* action : m_drawing_mode_actions)
+            if (auto* button = qobject_cast<QToolButton*>(toolbar->widgetForAction(action)))
+                button->setMinimumWidth(button->sizeHint().width());
 
         auto* central = new QWidget(owner);
         central->setObjectName(QStringLiteral("workspaceRoot"));
@@ -58973,6 +59001,9 @@ private:
         m_navigator = new VisibilityTreeWidget(navigator_panel);
         layers_layout->addWidget(m_navigator, 1);
         m_navigator->setObjectName(QStringLiteral("projectNavigator"));
+        m_navigator->setAccessibleName(QStringLiteral("Project layers and objects"));
+        m_navigator->setAccessibleDescription(QStringLiteral(
+            "Navigate buildings, floors, layers and drawing objects. Select a floor or layer to draw there; toggle visibility with its checkbox."));
         m_navigator->setHeaderHidden(true);
         m_navigator->setContextMenuPolicy(Qt::CustomContextMenu);
         QObject::connect(m_navigator, &QTreeWidget::customContextMenuRequested, owner, [this](QPoint point) {
@@ -59440,7 +59471,7 @@ private:
         m_object_button->setAccessibleName(QStringLiteral("Create architectural object"));
         m_object_button->setToolTip(QStringLiteral("Create a column, beam, stair or roof"));
         m_object_button->setObjectName(QStringLiteral("createBuildingObject"));
-        m_object_button->setMenu(architecture_menu);
+        m_object_button->setMenu(building_objects_menu);
         m_object_button->setPopupMode(QToolButton::MenuButtonPopup);
         m_object_button->setAutoRaise(true);
         components_header_layout->addWidget(m_object_button,1,0,Qt::AlignLeft);
@@ -70033,6 +70064,10 @@ private:
         if (m_model_phase_combo) m_model_phase_combo->setVisible(architectural);
         if (m_manage_phases_button) m_manage_phases_button->setVisible(architectural);
         for (auto* action : m_architectural_actions) action->setVisible(architectural);
+        // These modes apply to Measure. Design uses its wall and object tools;
+        // showing disabled mode buttons hides its view selector on laptops.
+        for (auto* action : m_drawing_mode_actions)
+            if (action) action->setVisible(!architectural);
         // The same schedule projection includes 2D appraisal area summaries.
         if (m_schedule_action) {
             bool appraisal = false;
