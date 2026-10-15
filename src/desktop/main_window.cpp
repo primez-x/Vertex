@@ -6394,10 +6394,13 @@ class MainWindow::Impl {
         QStringList ids;
         Vec2 local_delta;
         Vec2 canvas_delta;
+        double canvas_rotation{};
+        double local_rotation{};
     };
     struct SiteSelectionMoveIntent {
         QStringList ids;
         Vec2 canvas_delta;
+        double canvas_rotation{};
     };
     struct CanvasEditSourceCapture {
         std::optional<WorkspaceEditCapture> workspace;
@@ -26562,6 +26565,45 @@ public:
         return false;
     }
 
+    static Command prepareDetachedSymbolAlignment(const DocumentSnapshot& source,
+        const QStringList& ids, Vec2 canvas_delta, Vec2 local_delta,
+        double canvas_rotation, double local_rotation, const SiteEndpointPreviewInput* site=nullptr) {
+        if (ids.size()!=1 || !std::isfinite(canvas_rotation) || !std::isfinite(local_rotation))
+            throw std::invalid_argument("Wall alignment requires one free component and a finite rotation.");
+        PresentationAnnotationTarget target;
+        if (site) {
+            const auto typed=site->move_annotation_targets.find(ids.front());
+            if (typed==site->move_annotation_targets.end())
+                throw std::invalid_argument("The component's Site Plan identity changed during alignment.");
+            target={typed->second.owner_entity_id,typed->second.child_id};
+        } else {
+            const auto owners=annotation_selection_owners(source,ids);
+            const auto owner=owners.find(ids.front().toStdString());
+            if (owner==owners.end() || source.entities().contains(ids.front().toStdString()))
+                throw std::invalid_argument("The aligned component no longer has one annotation owner.");
+            target={owner->second,owner->first};
+        }
+        const auto state=decode_annotation_entity(source.entities().at(target.owner_id));
+        const auto symbol=std::find_if(state.symbols.begin(),state.symbols.end(),[&](const auto& item) {
+            return item.id==target.child_id;
+        });
+        if (symbol==state.symbols.end())
+            throw std::invalid_argument("Only free components can rotate during a move.");
+        PlanarTransform operation{symbol->placement.position,
+            symbol->model_plan ? local_rotation : canvas_rotation,false,false,
+            symbol->model_plan ? local_delta : canvas_delta};
+        if (site) {
+            const auto& frame=site->move_frames.at(ids.front());
+            operation=siteLocalPlanTransform({site_presented_plan_point(symbol->placement.position,frame),
+                canvas_rotation,false,false,canvas_delta},frame);
+        }
+        const std::array<PresentationAnnotationTransformTarget,1> targets{{{target,operation}}};
+        auto command=presentation_group_transform_command(source,targets,
+            std::span<const PresentationReferenceTransformTarget>{},source.revision());
+        command.message="Align component to wall";
+        return command;
+    }
+
     SelectionTranslationParts prepareSelectionTranslation(const DocumentSnapshot& source,
         const QStringList& ids, Vec2 delta, PlanCanvas* canvas,
         const std::optional<BuildingViewFrame>* captured_frame = nullptr) {
@@ -30721,7 +30763,11 @@ public:
                         // stay in this worker. A zero request bypasses codecs
                         // which otherwise reject an unchanged constraint solve.
                         Command command=ApplyEntityChanges{source->revision(),{}, {},"Move selection"};
-                        if (plan_move->canvas_delta.x!=0.0 || plan_move->canvas_delta.y!=0.0) {
+                        if (plan_move->canvas_rotation!=0.0) {
+                            command=augmentAuthoredCommandForRegistry(prepareDetachedSymbolAlignment(*source,
+                                plan_move->ids,plan_move->canvas_delta,plan_move->local_delta,
+                                plan_move->canvas_rotation,plan_move->local_rotation),*source);
+                        } else if (plan_move->canvas_delta.x!=0.0 || plan_move->canvas_delta.y!=0.0) {
                             auto parts=prepareDetachedSelectionTranslation(*source,plan_move->ids,
                                 plan_move->canvas_delta,plan_move->local_delta,plan_move_model_plan_labels);
                             command=parts.model_ids.isEmpty()
@@ -30794,9 +30840,14 @@ public:
                     } else if (site_wall_move && prepared_move) {
                         if (!site_input || site_input->move_frames.empty() || !room_dimension_placements)
                             throw std::invalid_argument("The Site Plan positions for this move are unavailable. Try the move again.");
-                        const bool no_op=site_wall_move->canvas_delta.x==0.0 && site_wall_move->canvas_delta.y==0.0;
+                        const bool no_op=site_wall_move->canvas_delta.x==0.0 && site_wall_move->canvas_delta.y==0.0 &&
+                            site_wall_move->canvas_rotation==0.0;
                         Command command=no_op
                             ? Command{ApplyEntityChanges{source->revision(),{}, {},"Move selection"}}
+                            : site_wall_move->canvas_rotation!=0.0
+                            ? augmentAuthoredCommandForRegistry(prepareDetachedSymbolAlignment(*source,
+                                site_wall_move->ids,site_wall_move->canvas_delta,{},site_wall_move->canvas_rotation,
+                                site_wall_move->canvas_rotation,site_input.get()),*source)
                             : augmentAuthoredCommandForRegistry(prepareDetachedSiteTranslationCommand(*source,
                                 site_wall_move->ids,site_wall_move->canvas_delta,*site_input,
                                 room_dimension_placements.get()),*source);
@@ -32388,7 +32439,7 @@ public:
         return applyAuthoredCommand(*reviewed);
     }
 
-    bool commitPlanMoveFromCanvas(PlanCanvas* canvas,const QStringList& ids,Vec2 delta) {
+    bool commitPlanMoveFromCanvas(PlanCanvas* canvas,const QStringList& ids,Vec2 delta,double rotation=0.0) {
         const auto capture=m_plan_move_capture;
         // A release consumes its stored proposal even if a later fence refuses.
         const auto preview=std::move(m_plan_move_preview);
@@ -32399,11 +32450,12 @@ public:
             !preview->edit_source || !preview->prepared ||
             preview->serial==std::numeric_limits<std::uint64_t>::max() ||
             canvas->entitiesMovePreviewSerial()!=preview->serial+1 ||
-            delta.x!=preview->intent.canvas_delta.x || delta.y!=preview->intent.canvas_delta.y)
+            delta.x!=preview->intent.canvas_delta.x || delta.y!=preview->intent.canvas_delta.y ||
+            rotation!=preview->intent.canvas_rotation)
             throw std::invalid_argument("The move preview or its displayed context changed. Start the drag again.");
         const auto prepared=preview->prepared;
         const auto edit_source=preview->edit_source;
-        if (delta.x==0.0 && delta.y==0.0) { clearError(); return true; }
+        if (delta.x==0.0 && delta.y==0.0 && rotation==0.0) { clearError(); return true; }
         const auto source=m_wall_move_source;
         const auto authority=m_wall_move_authority;
         const auto candidate=[&]() -> std::optional<DocumentSnapshot> {
@@ -32538,7 +32590,7 @@ public:
         } catch (...) { return false; }
     }
 
-    bool commitSiteWallMoveFromCanvas(PlanCanvas* canvas,const QStringList& ids,Vec2 delta) {
+    bool commitSiteWallMoveFromCanvas(PlanCanvas* canvas,const QStringList& ids,Vec2 delta,double rotation=0.0) {
         const auto capture=m_wall_move_site_capture;
         const auto preview=std::move(m_site_wall_move_preview);
         m_site_wall_move_preview.reset();
@@ -32547,11 +32599,12 @@ public:
             preview->edit_source!=m_model_move_edit_source ||
             preview->serial==std::numeric_limits<std::uint64_t>::max() ||
             canvas->entitiesMovePreviewSerial()!=preview->serial+1 ||
-            delta.x!=preview->intent.canvas_delta.x || delta.y!=preview->intent.canvas_delta.y)
+            delta.x!=preview->intent.canvas_delta.x || delta.y!=preview->intent.canvas_delta.y ||
+            rotation!=preview->intent.canvas_rotation)
             throw std::invalid_argument("The move preview or its displayed context changed. Start the drag again.");
         const auto prepared=preview->prepared;
         const auto edit_source=preview->edit_source;
-        if (delta.x==0.0 && delta.y==0.0) { clearError(); return true; }
+        if (delta.x==0.0 && delta.y==0.0 && rotation==0.0) { clearError(); return true; }
         const auto source = m_wall_move_source;
         const auto authority = m_wall_move_authority;
         const auto command = preview->command;
@@ -32630,7 +32683,9 @@ public:
                 m_vertex_preview_view_context,std::make_shared<std::optional<VertexPreviewProjection>>(),std::nullopt};
             request.authority=m_wall_move_authority;
             request.label_font=capture->font;
-            request.plan_move=SelectionMoveIntent{ids,local,delta};
+            const auto rotation=canvas->entitiesMovePreviewRotationRadians();
+            request.plan_move=SelectionMoveIntent{ids,local,delta,rotation,
+                m_wall_move_frame ? model_plan_rotation_delta(rotation,*m_wall_move_frame) : rotation};
             request.plan_move_command=std::make_shared<std::optional<Command>>();
             request.room_dimension_placements=std::make_shared<std::vector<PhysicalWallRoomDimensionPlacement>>();
             request.plan_move_model_plan_labels=m_wall_move_frame.has_value() && canvas==m_architecturalCanvas;
@@ -32663,7 +32718,7 @@ public:
                 std::nullopt,std::make_shared<std::optional<VertexPreviewProjection>>(),std::nullopt};
             request.authority=m_wall_move_authority;
             request.label_font=input->label_font;
-            request.site_wall_move=SiteSelectionMoveIntent{ids,delta};
+            request.site_wall_move=SiteSelectionMoveIntent{ids,delta,canvas->entitiesMovePreviewRotationRadians()};
             request.plan_move_command=std::make_shared<std::optional<Command>>();
             request.room_dimension_placements=std::make_shared<std::vector<PhysicalWallRoomDimensionPlacement>>();
             request.site_wall_move_capture=capture;
@@ -50309,11 +50364,19 @@ public:
         const auto model=capture.site_frame ? site_source_plan_point(point,*capture.site_frame) :
             capture.plan_frame ? unproject_plan_point(point,*capture.plan_frame) : point;
         auto geometry=capture.artwork;
+        const auto view_rotation=canvas->symbolDragPreviewRotationRadians();
+        const auto rotation=capture.plan_frame ? model_plan_rotation_delta(view_rotation,*capture.plan_frame) : view_rotation;
         for (auto& edge:geometry.segments) {
-            edge.start.x+=model.x;edge.start.y+=model.y;edge.end.x+=model.x;edge.end.y+=model.y;
+            edge=transform_segment(edge,{{},rotation,false,false,model});
         }
-        if (geometry.resize_frame) geometry.resize_frame->center=model;
-        if (geometry.svg_symbol) geometry.svg_symbol->position=model;
+        if (geometry.resize_frame) {
+            geometry.resize_frame->center=model;
+            geometry.resize_frame->rotation_radians+=rotation;
+        }
+        if (geometry.svg_symbol) {
+            geometry.svg_symbol->position=model;
+            geometry.svg_symbol->rotation_radians+=rotation;
+        }
         if (capture.site_frame) geometry=site_presented_canvas_entity(geometry,*capture.site_frame);
         else if (capture.plan_frame) project_model_plan_symbol(geometry,*capture.plan_frame);
         return geometry;
@@ -50420,7 +50483,7 @@ public:
         m_architecturalCanvas->unsetCursor();
     }
 
-    void placeLibrarySymbol(const QString& id, double scale, Vec2 point) {
+    void placeLibrarySymbol(const QString& id, double scale, Vec2 point, double view_rotation=0.0) {
         try {
             if(!m_pending_symbol_id.isEmpty()) requireSymbolPlacementCurrent();
             if (m_boundary_session) {
@@ -50466,8 +50529,10 @@ public:
             }
             const auto model=symbolPlacementModelPoint(point);
             const auto source=m_symbol_placement_source;
-            const auto prepared=m_symbol_placement_instance;
-            const auto created = createAnnotationSymbol(id,model,scale,source.get(),&*prepared);
+            auto prepared=*m_symbol_placement_instance;
+            prepared.placement.rotation_radians+=m_symbol_placement_frame
+                ? model_plan_rotation_delta(view_rotation,*m_symbol_placement_frame) : view_rotation;
+            const auto created = createAnnotationSymbol(id,model,scale,source.get(),&prepared);
             if(created.isEmpty()) cancelSymbolPlacement();
             if (m_symbol_library_status)
                 m_symbol_library_status->setText(created.isEmpty() ? lastError() :
@@ -61249,7 +61314,7 @@ private:
                 setError(QStringLiteral("Object editor: %1").arg(QString::fromUtf8(error.what())));
             }
         });
-        canvas->setSymbolDropped([this,canvas](QString id, double scale, Vec2 point) {
+        canvas->setSymbolDropped([this,canvas](QString id, double scale, Vec2 point, double rotation) {
             const auto* active=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
             if (canvas!=active) return;
             try {
@@ -61258,7 +61323,7 @@ private:
                 const auto definition=std::find_if(catalog.begin(),catalog.end(),[&](const auto& item) { return item.id==id.toStdString(); });
                 if (definition!=catalog.end() && is_hosted_opening_symbol(*definition))
                     preflightPlanOpeningPlacement();
-                placeLibrarySymbol(id,scale,point);
+                placeLibrarySymbol(id,scale,point,rotation);
             }
             catch (const std::exception& error) {cancelSymbolPlacement();setError(QString::fromUtf8(error.what()));}
         }, [](const QString& id) {
@@ -61350,15 +61415,19 @@ private:
                 setError(m_wall_move_start_error);
             }
         });
-        canvas->setEntitiesMoveRequested([this,canvas](QStringList ids, Vec2 delta) {
+        canvas->setEntitiesMoveRequested([this,canvas](QStringList ids, Vec2 delta, double rotation) {
             try {
+                if (rotation!=0.0 && (m_mixed_plan_transform_capture || m_opening_preview_move))
+                    throw std::invalid_argument("Wall alignment requires a free component.");
                 if (m_mixed_plan_transform_capture) return commitMixedPlanTransform(canvas,ids,delta,0.0,{});
                 if (m_opening_preview_move) return commitOpeningMoveFromCanvas(canvas,ids,delta);
-                if (m_plan_move_capture) return commitPlanMoveFromCanvas(canvas,ids,delta);
+                if (m_plan_move_capture) return commitPlanMoveFromCanvas(canvas,ids,delta,rotation);
                 if (siteCanvas(canvas)) {
-                    if (m_wall_move_site_capture) return commitSiteWallMoveFromCanvas(canvas,ids,delta);
+                    if (m_wall_move_site_capture) return commitSiteWallMoveFromCanvas(canvas,ids,delta,rotation);
                     throw std::invalid_argument("The Site Plan move preview is not ready. Drag again.");
                 }
+                if (rotation!=0.0)
+                    throw std::invalid_argument("The complete wall alignment preview is not ready. Drag again.");
                 return moveSelectionBy(ids, delta, canvas);
             } catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); return false; }
         });

@@ -12,6 +12,46 @@ constitute user acceptance.
 
 ## Current delivery state
 
+### October 15 automatic wall orientation
+
+The user chose position and rotation when an object approaches a wall, updating
+the initial rotation-preserving interaction. A genuine native regression fails
+on the prior checkpoint: the sofa beside a15-degree wall remains at zero degrees
+(`artifacts/codex-wall-auto-rotate-20261015/red-tests.log`). The bounded follow-up
+aligns a single free component's width axis with the closest wall orientation,
+then closes the same finite wall face using the rotated footprint. The original
+footprint supplies the twelve-pixel attraction threshold. Shift and free input
+bypass both changes; object-edge contacts and rigid groups retain orientation.
+
+Combined placement uses the existing atomic presentation transform and the
+existing source-bound Plan/Site move preparation, rather than two history edits.
+Rotation travels with the preview ticket and must match the released edit.
+Library creation retains the admitted angle in its prepared symbol. Controller
+and canvas implementation are complete. Rotation-aware providers opt in while
+existing position-only canvas providers retain their contract. A rotation-only
+result remains a real edit; leaving the attraction range or using Shift restores
+the original source orientation during the gesture.
+
+Release application and affected-target compilation pass. All25 affected CTest
+checks pass in264.74 seconds (`regression-tests.log`), including the full desktop
+workflow, Site annotation lifecycle, opening frames and the existing positional
+snapping checks. Native cases verify15-degree and90-degree alignment, library
+creation, Measure/Design, named/rotated/reflected Plan views, a rotated Site
+carrier, original-source isolation, one-step Undo/Redo and editable save/Open.
+Pure canvas cases cover asynchronous release, stale completion, capability
+isolation, cancellation, changed release points and rotation-only edits. The
+frame fixture's first run exposed an incorrect unconditional Site toggle after
+reopening; its corrected idempotent selection passes without production changes.
+Distant and curved fixture expectations retain the existing grid fallback.
+Root inspected actual aligned Measure, reflected Plan and Site previews.
+
+Source-kit2100 and whitespace checks pass. The separate manual copy at
+`artifacts/vertex-test-wall-alignment-20261015/Start-Vertex.ps1` has2855 runtime
+file hashes verified and passes its offscreen launch. It uses prepared checkout
+dependencies; the installed candidate is unchanged. Curved target edges and
+rigid-group rotation retain their prior behavior. The full suite and production
+acceptance have not been rerun or claimed for this change.
+
 ### October 15 object dragging and magnetic edge alignment
 
 The combined roof-bearing resize work is committed and pushed as `7b4d44a4`;

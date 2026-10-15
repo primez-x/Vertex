@@ -2376,7 +2376,9 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
                 case SnapKind::endpoint: cue = QStringLiteral("Endpoint"); break;
                 case SnapKind::on_wall: cue = QStringLiteral("Wall centerline"); break;
                 case SnapKind::on_boundary: cue = QStringLiteral("On boundary"); break;
-                case SnapKind::wall_face: cue = QStringLiteral("Wall face"); break;
+                case SnapKind::wall_face:
+                    cue = snap.wall_aligned ? QStringLiteral("Wall face · Aligned") : QStringLiteral("Wall face");
+                    break;
                 case SnapKind::object_edge: cue = QStringLiteral("Object edge"); break;
                 case SnapKind::perpendicular: cue = QStringLiteral("Perpendicular"); break;
                 case SnapKind::alignment: cue = QStringLiteral("Alignment"); break;
@@ -2936,6 +2938,16 @@ QStringList PlanCanvas::selectableIds() const {
 }
 
 void PlanCanvas::setEntitiesMoveRequested(std::function<bool(QStringList, Vec2)> callback) {
+    setEntitiesMoveRequested(callback ? std::function<bool(QStringList, Vec2, double)>{
+        [callback = std::move(callback)](QStringList ids, Vec2 delta, double) {
+            return callback(std::move(ids), delta);
+        }} : std::function<bool(QStringList, Vec2, double)>{});
+    m_move_rotation_supported = false;
+}
+
+void PlanCanvas::setEntitiesMoveRequested(std::function<bool(QStringList, Vec2, double)> callback) {
+    resetGesture();
+    m_move_rotation_supported = static_cast<bool>(callback);
     m_entities_move_requested = std::move(callback);
 }
 
@@ -3091,11 +3103,74 @@ std::optional<PlanCanvas::ObjectTranslationSnap> PlanCanvas::objectTranslationSn
                     if (!finite(corrected) || !finite(contact)) continue;
                     best = gap;
                     result = ObjectTranslationSnap{corrected,
-                        {contact, wall ? SnapKind::wall_face : SnapKind::object_edge, contact, edge}};
+                        {contact, wall ? SnapKind::wall_face : SnapKind::object_edge, contact, edge},
+                        support == extrema.second->y};
                 }
             }
         }
     }
+    return result;
+}
+
+std::optional<PlanCanvas::ObjectTranslationSnap> PlanCanvas::objectRotationSnap(
+    const CanvasEntity& source, Vec2 raw_delta, Vec2 press_point,
+    const ObjectTranslationSnap& contact) const {
+    // Capability is checked by each caller. Only a genuine free symbol has
+    // physical local axes that can authorize this additional edit intent.
+    if (source.type != QStringLiteral("symbol") ||
+        (!source.svg_symbol && !source.resize_frame) || source.opening_width_controls ||
+        source.corner_window_width_controls || contact.cue.kind != SnapKind::wall_face ||
+        !contact.cue.guide) return std::nullopt;
+    const auto frame = entitySelectionAxes(source);
+    if (!frame || !std::isfinite(frame->rotation_radians) ||
+        !std::isfinite(frame->width_metres) || !std::isfinite(frame->depth_metres) ||
+        frame->width_metres <= 0 || frame->depth_metres <= 0) return std::nullopt;
+    const auto& edge = *contact.cue.guide;
+    const auto length = distance(edge.start, edge.end);
+    if (!std::isfinite(length) || length <= 1e-9 || edge.sweep_radians != 0) return std::nullopt;
+    const auto tangent = (edge.end-edge.start)*(1.0/length);
+    const Vec2 normal{-tangent.y,tangent.x};
+    auto angle = std::remainder(std::atan2(tangent.y,tangent.x)-frame->rotation_radians,pi);
+    // Both perpendicular orientations are equally near: choose +90 degrees.
+    if (std::abs(std::abs(angle)-pi*.5) < 1e-12) angle = pi*.5;
+    const auto rotate = [angle](Vec2 p) {
+        return Vec2{std::cos(angle)*p.x-std::sin(angle)*p.y,
+                    std::sin(angle)*p.x+std::cos(angle)*p.y};
+    };
+    // Preserve the pressed local point along the face while rotation changes
+    // the centre. Only the final normal contact correction may move that grab.
+    const auto center = press_point+raw_delta+rotate(frame->center-press_point);
+    const auto rotated_delta = center-frame->center;
+    std::vector<Vec2> supports;
+    for (const auto& segment : objectSnapEdges(source)) {
+        for (const auto p : {segment.start,segment.end}) {
+            const auto relative = frame->center+rotate(p-frame->center)+rotated_delta-edge.start;
+            supports.push_back({relative.x*tangent.x+relative.y*tangent.y,
+                                relative.x*normal.x+relative.y*normal.y});
+        }
+    }
+    if (supports.empty()) return std::nullopt;
+    const auto extrema = std::minmax_element(supports.begin(),supports.end(),
+        [](Vec2 a,Vec2 b) { return a.y < b.y; });
+    const auto support = contact.maximum_support ? extrema.second->y : extrema.first->y;
+    double low = std::numeric_limits<double>::infinity();
+    double high = -std::numeric_limits<double>::infinity();
+    for (const auto p : supports) {
+        if (std::abs(p.y-support) > 1e-9) continue;
+        low = std::min(low,p.x); high = std::max(high,p.x);
+    }
+    // Rotation cannot turn an endpoint extension into a physical wall face.
+    if (high < 0 || low > length) return std::nullopt;
+    const auto corrected = rotated_delta-normal*support;
+    if (!std::isfinite(corrected.x) || !std::isfinite(corrected.y) || !std::isfinite(angle))
+        return std::nullopt;
+    auto result = contact;
+    result.delta = corrected;
+    result.rotation_radians = angle;
+    const auto point = edge.start+tangent*((std::max(0.0,low)+std::min(length,high))*.5);
+    result.cue.point = point;
+    result.cue.anchor = point;
+    result.cue.wall_aligned = true;
     return result;
 }
 
@@ -3105,6 +3180,7 @@ void PlanCanvas::updateEntitiesMovePreview(QPointF point, Qt::KeyboardModifiers 
     m_move_preview_fine = modifiers.testFlag(Qt::ShiftModifier) || !m_snap_enabled || m_raw_point_input;
     std::optional<Vec2> delta;
     std::optional<CanvasOpeningMoveIntent> opening_intent;
+    m_move_preview_rotation_radians = 0;
     m_object_translation_snap.reset();
     if (!m_opening_move_active) {
         delta = dragDelta(point);
@@ -3113,8 +3189,27 @@ void PlanCanvas::updateEntitiesMovePreview(QPointF point, Qt::KeyboardModifiers 
             for (const auto& entity : m_entities)
                 if (m_move_ids.contains(entity.id)) footprints.push_back(objectSnapEdges(entity));
             const auto raw_delta = toModel(point, rect()) - toModel(m_left_start, rect());
-            if (const auto snap = objectTranslationSnap(footprints, raw_delta, m_move_ids)) {
+            if (auto snap = objectTranslationSnap(footprints, raw_delta, m_move_ids)) {
+                if (m_move_rotation_supported && m_entities_move_preview_requested &&
+                    m_move_ids.size() == 1) {
+                    const CanvasEntity* source = nullptr;
+                    std::size_t presentations = 0;
+                    for (const auto& entity : m_entities) {
+                        if (!m_move_ids.contains(entity.id)) continue;
+                        source = &entity;
+                        ++presentations;
+                    }
+                    const bool other_selection = std::any_of(m_references.begin(),m_references.end(),
+                        [](const auto& reference) { return reference.selected; }) ||
+                        std::any_of(m_labels.begin(),m_labels.end(),
+                        [&](const auto& label) { return m_move_ids.contains(label.id); });
+                    if (presentations == 1 && !other_selection) {
+                        if (const auto aligned = objectRotationSnap(*source,raw_delta,
+                                toModel(m_left_start,rect()),*snap)) snap = aligned;
+                    }
+                }
                 delta = snap->delta;
+                m_move_preview_rotation_radians = snap->rotation_radians;
                 m_object_translation_snap = snap->cue;
             }
         }
@@ -3262,6 +3357,7 @@ bool PlanCanvas::applyEntitiesMovePreview(std::uint64_t serial,
     m_move_child_controls_preview = m_move_preview_valid && !m_mixed_selection_capture.empty()
         ? std::move(*child_controls) : std::vector<CanvasRoofOpeningControls>{};
     if (!m_move_preview_valid) {
+        m_move_preview_rotation_radians = 0;
         m_object_translation_snap.reset();
         m_move_entities_preview.clear();
         m_move_entities_preview_index.clear();
@@ -3285,9 +3381,14 @@ bool PlanCanvas::applyEntitiesMovePreview(std::uint64_t serial,
             if (!m_mixed_selection_capture.empty() && !mixedSelectionCaptureCurrent()) { resetGesture(); return; }
             const auto ids=m_move_ids;
             const auto delta=*m_move_preview_delta;
+            const auto angle=m_move_preview_rotation_radians;
             const auto accepted=m_move_preview_valid;
             resetGesture();
-            if (accepted && m_entities_move_requested) (void)m_entities_move_requested(ids,delta);
+            if (accepted) {
+                if (m_entities_move_requested &&
+                    (std::abs(delta.x)>1e-12 || std::abs(delta.y)>1e-12 || std::abs(angle)>1e-12))
+                    (void)m_entities_move_requested(ids,delta,angle);
+            }
             else if (m_entities_move_rejected) m_entities_move_rejected(ids,delta);
         });
     }
@@ -3329,7 +3430,17 @@ void PlanCanvas::setAreaClassCaption(QString caption) {
 
 void PlanCanvas::setSymbolDropped(std::function<void(QString, double, Vec2)> callback,
                                  std::function<bool(const QString&)> uses_raw_point) {
+    setSymbolDropped(callback ? std::function<void(QString, double, Vec2, double)>{
+        [callback = std::move(callback)](QString id, double scale, Vec2 point, double) {
+            callback(std::move(id), scale, point);
+        }} : std::function<void(QString, double, Vec2, double)>{}, std::move(uses_raw_point));
+    m_symbol_drop_rotation_supported = false;
+}
+
+void PlanCanvas::setSymbolDropped(std::function<void(QString, double, Vec2, double)> callback,
+                                 std::function<bool(const QString&)> uses_raw_point) {
     clearSymbolDragPreview();
+    m_symbol_drop_rotation_supported = static_cast<bool>(callback);
     m_symbol_dropped = std::move(callback);
     m_symbol_drop_uses_raw_point = std::move(uses_raw_point);
 }
@@ -3341,6 +3452,7 @@ void PlanCanvas::setSymbolDragPreviewRequested(
 }
 
 void PlanCanvas::clearSymbolDragPreview() {
+    m_symbol_drag_preview_rotation_radians = 0;
     m_object_translation_snap.reset();
     ++m_symbol_drag_preview_serial;
     if (!m_symbol_drag_active && !m_symbol_drag_preview) return;
@@ -3352,7 +3464,10 @@ void PlanCanvas::clearSymbolDragPreview() {
 bool PlanCanvas::completeSymbolDragPreview(std::uint64_t serial,
                                           std::optional<CanvasEntity> preview) {
     if (!m_symbol_drag_active || serial != m_symbol_drag_preview_serial) return false;
-    if (!preview) m_object_translation_snap.reset();
+    if (!preview) {
+        m_symbol_drag_preview_rotation_radians = 0;
+        m_object_translation_snap.reset();
+    }
     if (preview) preview->selected = false;
     m_symbol_drag_preview = std::move(preview);
     update();
@@ -3361,6 +3476,8 @@ bool PlanCanvas::completeSymbolDragPreview(std::uint64_t serial,
 
 std::optional<Vec2> PlanCanvas::symbolDropPoint(const QString& id, double scale,
     QPointF position, std::optional<CanvasEntity>* preview) {
+    m_symbol_drag_preview_rotation_radians = 0;
+    m_object_translation_snap.reset();
     const auto raw = toModel(position, rect());
     if (!std::isfinite(raw.x) || !std::isfinite(raw.y)) return std::nullopt;
     const auto uses_raw_point = m_symbol_drop_uses_raw_point;
@@ -3387,12 +3504,16 @@ std::optional<Vec2> PlanCanvas::symbolDropPoint(const QString& id, double scale,
             geometry = callback(id, scale, raw);
             if (!guard || serial != m_symbol_drag_preview_serial) return std::nullopt;
             if (geometry) {
-                if (const auto snap = objectTranslationSnap({objectSnapEdges(*geometry)}, {})) {
+                if (auto snap = objectTranslationSnap({objectSnapEdges(*geometry)}, {})) {
+                    if (m_symbol_drop_rotation_supported) {
+                        if (const auto aligned = objectRotationSnap(*geometry,{},raw,*snap)) snap = aligned;
+                    }
                     point = raw + snap->delta;
+                    m_symbol_drag_preview_rotation_radians = snap->rotation_radians;
                     m_object_translation_snap = snap->cue;
                 }
             }
-            if (point.x != raw.x || point.y != raw.y) {
+            if (point.x != raw.x || point.y != raw.y || m_symbol_drag_preview_rotation_radians != 0) {
                 geometry = callback(id, scale, point);
                 if (!guard || serial != m_symbol_drag_preview_serial) return std::nullopt;
                 // A resolved contact needs fresh geometry at that exact
@@ -3493,7 +3614,8 @@ void PlanCanvas::dropEvent(QDropEvent* event) {
         return;
     }
     try {
-        callback(payload->id, payload->scale, *point);
+        const auto angle = m_symbol_drag_preview_rotation_radians;
+        callback(payload->id, payload->scale, *point, angle);
     } catch (...) {
         if (guard && serial == m_symbol_drag_preview_serial) clearSymbolDragPreview();
         event->ignore();
@@ -4751,6 +4873,7 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         if (!m_mixed_selection_capture.empty() && !mixedSelectionCaptureCurrent()) { resetGesture(); return; }
         const auto delta = gesture == LeftGesture::object_move
             ? m_move_preview_delta.value_or(Vec2{}) : dragDelta(position);
+        const auto move_rotation = m_move_preview_rotation_radians;
         if (gesture==LeftGesture::object_move && dragging && m_move_preview_pending) {
             // Keep the final exact proposal alive after button release. A
             // completion commits it on the UI thread; cancel/scene replacement
@@ -4936,8 +5059,8 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
             }
         } else if (gesture == LeftGesture::object_move) {
             if (dragging && m_entities_move_requested &&
-                (std::abs(delta.x) > 1e-12 || std::abs(delta.y) > 1e-12)) {
-                (void)m_entities_move_requested(move_ids, delta);
+                (std::abs(delta.x) > 1e-12 || std::abs(delta.y) > 1e-12 || std::abs(move_rotation) > 1e-12)) {
+                (void)m_entities_move_requested(move_ids, delta, move_rotation);
             } else if (!dragging) {
                 // The frame owns a drag after the platform threshold, but a
                 // stationary click still resolves the exact painted target.
@@ -5061,6 +5184,7 @@ void PlanCanvas::resetGesture() {
     m_move_child_controls_preview.clear();
     m_transform_child_controls_preview.clear();
     m_move_preview_delta.reset();
+    m_move_preview_rotation_radians = 0;
     ++m_move_preview_serial;
     m_move_entities_preview.clear();
     m_move_entities_preview_index.clear();

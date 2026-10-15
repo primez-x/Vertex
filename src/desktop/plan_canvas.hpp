@@ -720,7 +720,15 @@ public:
     // opening's delta is its constrained midpoint displacement; the host keeps
     // the exact semantic command captured by the move-preview provider.
     // Returning false rejects the preview without leaving canvas-only geometry.
+    // The legacy provider receives translation only. The three-argument
+    // provider opts into a combined translation/relative view rotation edit.
     void setEntitiesMoveRequested(std::function<bool(QStringList, Vec2)> callback);
+    void setEntitiesMoveRequested(std::function<bool(QStringList, Vec2, double)> callback);
+    // Read/copy during the exact preview callback; reset/cancel clears this.
+    // Rotation is relative to the source in displayed-plan coordinates.
+    [[nodiscard]] double entitiesMovePreviewRotationRadians() const noexcept {
+        return m_move_preview_rotation_radians;
+    }
     // Capture document authority when a selected frame takes the press.
     void setEntitiesMoveStarted(std::function<void(QStringList)> callback);
     void setEntitiesMoveRejected(std::function<void(QStringList, Vec2)> callback);
@@ -958,6 +966,15 @@ public:
         std::function<bool(QString, QString, Vec2, std::uint64_t)> callback);
     void setSymbolDropped(std::function<void(QString, double, Vec2)> callback,
                           std::function<bool(const QString&)> uses_raw_point = {});
+    // The four-argument provider opts into wall alignment; legacy drops keep
+    // their authored angle. The last argument is relative view rotation.
+    void setSymbolDropped(std::function<void(QString, double, Vec2, double)> callback,
+                          std::function<bool(const QString&)> uses_raw_point = {});
+    // Read/copy during the preview callback: zero for the raw query, then the
+    // resolved relative rotation for the fresh query at the final position.
+    [[nodiscard]] double symbolDragPreviewRotationRadians() const noexcept {
+        return m_symbol_drag_preview_rotation_radians;
+    }
     // Pure, screen-only geometry at the same raw or snapped point used by drop.
     // Hovering never invokes the armed click-placement command.
     void setSymbolDragPreviewRequested(
@@ -1055,16 +1072,22 @@ private:
         SnapKind kind{SnapKind::none};
         std::optional<Vec2> anchor;
         std::optional<Segment> guide;
+        bool wall_aligned{};
     };
     [[nodiscard]] SnapResult snapResult(QPointF point) const;
     [[nodiscard]] Boundary objectSnapEdges(const CanvasEntity& entity) const;
     struct ObjectTranslationSnap {
         Vec2 delta{};
         SnapResult cue;
+        bool maximum_support{};
+        double rotation_radians{};
     };
     [[nodiscard]] std::optional<ObjectTranslationSnap> objectTranslationSnap(
         const std::vector<Boundary>& footprints, Vec2 raw_delta,
         const QStringList& excluded_ids = {}) const;
+    [[nodiscard]] std::optional<ObjectTranslationSnap> objectRotationSnap(
+        const CanvasEntity& source, Vec2 raw_delta, Vec2 press_point,
+        const ObjectTranslationSnap& contact) const;
     std::optional<SnapResult> m_object_translation_snap;
     [[nodiscard]] std::optional<Vec2> drawingOrigin() const;
     void handleTouchEvent(QTouchEvent& event);
@@ -1559,6 +1582,8 @@ private:
     QSize m_mixed_view_size;
     qreal m_mixed_view_dpr{};
     std::optional<Vec2> m_move_preview_delta;
+    double m_move_preview_rotation_radians{};
+    bool m_move_rotation_supported{};
     std::vector<CanvasEntity> m_move_entities_preview;
     // Owned preview replacements rebuild exact presentation lookup. Positions
     // preserve the first duplicate and never retain pointers into these vectors.
@@ -1698,7 +1723,7 @@ private:
     std::function<bool(bool, QStringList, std::vector<CanvasRoofOpeningTarget>)>
         m_semantic_overlap_selection_requested;
     std::function<void(QStringList, bool)> m_entities_selected;
-    std::function<bool(QStringList, Vec2)> m_entities_move_requested;
+    std::function<bool(QStringList, Vec2, double)> m_entities_move_requested;
     std::function<void(QStringList)> m_entities_move_started;
     std::function<void(QStringList, Vec2)> m_entities_move_rejected;
     std::function<std::optional<std::vector<CanvasEntity>>(
@@ -1747,7 +1772,9 @@ private:
         QString, QString, Vec2, std::uint64_t)> m_boundary_vertex_preview_requested;
     std::function<bool(QString, QString, Vec2, std::uint64_t)>
         m_boundary_vertex_move_requested;
-    std::function<void(QString, double, Vec2)> m_symbol_dropped;
+    std::function<void(QString, double, Vec2, double)> m_symbol_dropped;
+    double m_symbol_drag_preview_rotation_radians{};
+    bool m_symbol_drop_rotation_supported{};
     std::function<std::optional<CanvasEntity>(const QString&, double, Vec2)>
         m_symbol_drag_preview_requested;
     std::function<bool(QString, Vec2)> m_area_class_dropped;

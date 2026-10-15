@@ -23,6 +23,20 @@ namespace {
 using namespace sketch;
 using namespace sketch::desktop;
 Vec2 operator+(Vec2 a, Vec2 b) { return {a.x+b.x,a.y+b.y}; }
+Vec2 operator-(Vec2 a, Vec2 b) { return {a.x-b.x,a.y-b.y}; }
+Vec2 operator*(Vec2 a, double scale) { return {a.x*scale,a.y*scale}; }
+double dot(Vec2 a,Vec2 b) { return a.x*b.x+a.y*b.y; }
+Vec2 rotate(Vec2 p,double angle) {
+    return {std::cos(angle)*p.x-std::sin(angle)*p.y,
+            std::sin(angle)*p.x+std::cos(angle)*p.y};
+}
+void expectAngle(double actual,double expected,const char* message) {
+    if (std::abs(actual-expected)<1e-9) return;
+    std::ostringstream detail;
+    detail.precision(15);
+    detail << message << ": expected " << expected << ", actual " << actual;
+    throw std::runtime_error(detail.str());
+}
 void require(bool value, const char* message) {
     if (!value) throw std::runtime_error(message);
 }
@@ -81,6 +95,24 @@ CanvasEntity translated(CanvasEntity entity, Vec2 delta) {
     if (entity.svg_symbol) entity.svg_symbol->position=entity.svg_symbol->position+delta;
     return entity;
 }
+CanvasEntity transformed(CanvasEntity entity,Vec2 delta,double angle) {
+    require(entity.svg_symbol.has_value() || entity.resize_frame.has_value(),
+        "rotation fake requires physical symbol axes");
+    const auto center=entity.svg_symbol ? entity.svg_symbol->position : entity.resize_frame->center;
+    const auto transform=[&](Vec2 p) { return center+rotate(p-center,angle)+delta; };
+    for (auto& segment:entity.segments) {
+        segment.start=transform(segment.start); segment.end=transform(segment.end);
+    }
+    if (entity.svg_symbol) {
+        entity.svg_symbol->position=center+delta;
+        entity.svg_symbol->rotation_radians+=angle;
+    }
+    if (entity.resize_frame) {
+        entity.resize_frame->center=center+delta;
+        entity.resize_frame->rotation_radians+=angle;
+    }
+    return entity;
+}
 void setup(PlanCanvas& canvas, std::vector<CanvasEntity> entities, double scale = 100) {
     canvas.resize(900,700);
     canvas.setOverviewMapEnabled(false);
@@ -102,17 +134,27 @@ struct LibraryDrag {
     PlanCanvas& canvas;
     QMimeData mime;
     std::optional<Vec2> preview, committed;
-    double angle{};
-    LibraryDrag(PlanCanvas& target, double rotation = 0, bool raw = false)
+    double angle{}, preview_angle{}, committed_angle{};
+    std::vector<double> requested_angles;
+    LibraryDrag(PlanCanvas& target, double rotation = 0, bool raw = false, bool rotation_enabled = false)
         : canvas(target), angle(rotation) {
         mime.setData("application/x-vertex-symbol", QJsonDocument(QJsonObject{
             {"id","fixture-symbol"},{"scale",1.0}}).toJson(QJsonDocument::Compact));
-        canvas.setSymbolDragPreviewRequested([this](const QString&, double, Vec2 point) {
+        canvas.setSymbolDragPreviewRequested([this,rotation_enabled](const QString&, double, Vec2 point) {
             preview=point;
-            return std::optional<CanvasEntity>{symbol(point,angle)};
+            if (!rotation_enabled) expectAngle(canvas.symbolDragPreviewRotationRadians(),0,
+                "legacy library provider remains translation only");
+            preview_angle=rotation_enabled ? canvas.symbolDragPreviewRotationRadians() : 0;
+            requested_angles.push_back(preview_angle);
+            return std::optional<CanvasEntity>{symbol(point,angle+preview_angle)};
         });
-        canvas.setSymbolDropped([this](QString, double, Vec2 point) { committed=point; },
-            [raw](const QString&) { return raw; });
+        if (rotation_enabled)
+            canvas.setSymbolDropped([this](QString, double, Vec2 point,double rotation_delta) {
+                committed=point; committed_angle=rotation_delta;
+            },[raw](const QString&) { return raw; });
+        else
+            canvas.setSymbolDropped([this](QString, double, Vec2 point) { committed=point; },
+                [raw](const QString&) { return raw; });
     }
     void enter(Vec2 point, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
         QDragEnterEvent event(screen(canvas,point).toPoint(),Qt::CopyAction,&mime,Qt::LeftButton,modifiers);
@@ -241,19 +283,31 @@ struct ObjectDrag {
     PlanCanvas& canvas;
     CanvasEntity source;
     std::optional<Vec2> preview, committed;
+    double preview_angle{}, committed_angle{};
     int commits{};
-    ObjectDrag(PlanCanvas& target, CanvasEntity entity) : canvas(target),source(std::move(entity)) {
+    ObjectDrag(PlanCanvas& target, CanvasEntity entity, bool rotation_enabled = false)
+        : canvas(target),source(std::move(entity)) {
         canvas.setSelectedId(source.id);
-        canvas.setEntitiesMovePreviewRequested([this](QStringList ids,Vec2 delta,std::uint64_t) {
+        canvas.setEntitiesMovePreviewRequested([this,rotation_enabled](QStringList ids,Vec2 delta,std::uint64_t) {
             require(ids==QStringList{source.id},"move provider receives the captured selected ID");
             preview=delta;
+            if (!rotation_enabled) expectAngle(canvas.entitiesMovePreviewRotationRadians(),0,
+                "legacy move provider remains translation only");
+            preview_angle=rotation_enabled ? canvas.entitiesMovePreviewRotationRadians() : 0;
             return std::optional<std::vector<CanvasEntity>>{
-                std::vector<CanvasEntity>{translated(source,delta)}};
+                std::vector<CanvasEntity>{rotation_enabled ? transformed(source,delta,preview_angle)
+                                                         : translated(source,delta)}};
         });
-        canvas.setEntitiesMoveRequested([this](QStringList ids,Vec2 delta) {
-            require(ids==QStringList{source.id},"commit keeps captured selected ID");
-            committed=delta; ++commits; return true;
-        });
+        if (rotation_enabled)
+            canvas.setEntitiesMoveRequested([this](QStringList ids,Vec2 delta,double angle) {
+                require(ids==QStringList{source.id},"rotation commit keeps captured selected ID");
+                committed=delta; committed_angle=angle; ++commits; return true;
+            });
+        else
+            canvas.setEntitiesMoveRequested([this](QStringList ids,Vec2 delta) {
+                require(ids==QStringList{source.id},"commit keeps captured selected ID");
+                committed=delta; ++commits; return true;
+            });
     }
     void start(Vec2 press,Vec2 destination,Qt::KeyboardModifiers modifiers=Qt::NoModifier) {
         mouse(canvas,QEvent::MouseButtonPress,press,modifiers);
@@ -356,7 +410,7 @@ void finalPositionAndInvalidation() {
     require(drag.commits==1,"changed object release commits once");
     expect(*drag.committed,{2.4,1},"object release recomputes final footprint contact");
 }
-void rigidGroupContact() {
+void rigidGroupContact(bool rotation_enabled=false) {
     PlanCanvas canvas;
     const auto first=symbol({-2,-1});
     auto second=symbol({-1,-1}); second.id="second-symbol";
@@ -367,12 +421,19 @@ void rigidGroupContact() {
         require(ids.contains(first.id) && ids.contains(second.id) && ids.size()==2,
             "group move retains both semantic IDs");
         preview=delta;
+        expectAngle(canvas.entitiesMovePreviewRotationRadians(),0,"multi-symbol group cannot auto-rotate");
         return std::optional<std::vector<CanvasEntity>>{{translated(first,delta),translated(second,delta)}};
     });
-    canvas.setEntitiesMoveRequested([&](QStringList ids,Vec2 delta) {
+    const auto commit=[&](QStringList ids,Vec2 delta) {
         require(ids.size()==2,"group commit retains both semantic IDs");
         committed=delta; return true;
-    });
+    };
+    if (rotation_enabled)
+        canvas.setEntitiesMoveRequested([&](QStringList ids,Vec2 delta,double angle) {
+            expectAngle(angle,0,"rotation-capable group commit remains translation only");
+            return commit(std::move(ids),delta);
+        });
+    else canvas.setEntitiesMoveRequested(commit);
     mouse(canvas,QEvent::MouseButtonPress,{-1.8,-.9});
     mouse(canvas,QEvent::MouseMove,{.54,.1});
     require(preview.has_value(),"group move publishes its exact preview");
@@ -387,6 +448,290 @@ void rigidGroupContact() {
     require(committed.has_value(),"group drag commits");
     expect(*committed,*preview,"group preview and release agree");
 }
+
+CanvasEntity angledWall(double angle,double low=-3,double high=3) {
+    const Vec2 u{std::cos(angle),std::sin(angle)};
+    auto entity=rectangle("angled-wall","wall",u*((low+high)*.5),high-low,.2,angle);
+    entity.snap_segments={{u*low,u*high,0}};
+    return entity;
+}
+Vec2 libraryPointer(const PlanCanvas& canvas,Vec2 point) {
+    const auto pixel=screen(canvas,point).toPoint();
+    const auto center=QRectF(canvas.rect()).center();
+    return {canvas.viewCenter().x+(pixel.x()-center.x())/canvas.viewScale(),
+            canvas.viewCenter().y-(pixel.y()-center.y())/canvas.viewScale()};
+}
+void rotatingObjectContacts() {
+    constexpr double angle=std::numbers::pi/12;
+    const Vec2 u{std::cos(angle),std::sin(angle)},n{-u.y,u.x};
+    const Vec2 origin{-1,2},grab{.2,.1};
+    // Independent support geometry, matching the native +15 degree fixture:
+    // admission uses the old axes; contact uses half the rotated depth.
+    const double support=std::abs(n.x)*.6+std::abs(n.y)*.4;
+    const auto raw=u*.4+n*(.1+support+.06);
+    const auto pivot=raw+grab-rotate(grab,angle);
+    const auto expected=u*dot(pivot,u)+n*.5;
+    PlanCanvas canvas;
+    const auto source=symbol(origin);
+    setup(canvas,{source,angledWall(angle)});
+    ObjectDrag drag(canvas,source,true);
+    drag.start(origin+grab,raw+grab);
+    expectAngle(drag.preview_angle,angle,"angled preview relative rotation");
+    expect(*drag.preview,expected-origin,"angled proposal includes pivot and face correction");
+    const auto preview=canvas.entitiesMovePreview();
+    require(preview.size()==1 && preview.front().svg_symbol,"rotated exact preview retained");
+    expect(preview.front().svg_symbol->position,expected,"host applies one exact translation");
+    expectAngle(preview.front().svg_symbol->rotation_radians,angle,"host applies one exact rotation");
+    expectAngle(dot(expected+rotate(grab,angle),u),dot(raw+grab,u),
+        "grabbed local point has no tangential jump");
+    expect(canvas.entities().front().svg_symbol->position,origin,"preview leaves source center untouched");
+    expectAngle(canvas.entities().front().svg_symbol->rotation_radians,0,"preview leaves source angle untouched");
+    const auto shown=*drag.preview;
+    mouse(canvas,QEvent::MouseButtonRelease,raw+grab);
+    require(drag.commits==1,"rotating move commits once");
+    expect(*drag.committed,shown,"rotating release equals preview position");
+    expectAngle(drag.committed_angle,angle,"rotating release preserves angle across reset");
+    expectAngle(canvas.entitiesMovePreviewRotationRadians(),0,"completed gesture clears relative angle");
+
+    PlanCanvas vertical;
+    const auto verticalSource=symbol({-1,-1});
+    setup(vertical,{verticalSource,wall()});
+    ObjectDrag perpendicular(vertical,verticalSource,true);
+    perpendicular.start({-.8,-.9},{1.54,.1});
+    expectAngle(perpendicular.preview_angle,std::numbers::pi/2,"perpendicular tie chooses positive ninety");
+    expect(*perpendicular.preview,{2.6,.9},"vertical alignment preserves tangential grab and uses half depth");
+    mouse(vertical,QEvent::MouseButtonRelease,{1.54,.1});
+    expectAngle(perpendicular.committed_angle,std::numbers::pi/2,"ninety degree release agrees");
+
+    PlanCanvas finite;
+    setup(finite,{verticalSource,wall(true,2,0,.2)});
+    ObjectDrag endpoint(finite,verticalSource,true);
+    endpoint.start({-.45,-1.35},{1.89,-.15});
+    expectAngle(endpoint.preview_angle,0,"rotated support beyond finite span falls back to position only");
+    expect(*endpoint.preview,{2.4,1.2},"finite-span fallback retains original contact proposal");
+    mouse(finite,QEvent::MouseButtonRelease,{1.89,-.15});
+
+    PlanCanvas object;
+    setup(object,{verticalSource,rectangle("cabinet","symbol",{2.4,0},.8,2)});
+    ObjectDrag edge(object,verticalSource,true);
+    edge.start({-.8,-.9},{1.54,.1});
+    expectAngle(edge.preview_angle,0,"object-edge target never rotates a free symbol");
+    expect(*edge.preview,{2.4,1},"object-edge target retains existing translation");
+    mouse(object,QEvent::MouseButtonRelease,{1.54,.1});
+
+    // A source already near pi uses the short modulo-pi turn, not a flip.
+    PlanCanvas modulo;
+    const auto turned=symbol(origin,std::numbers::pi-.05);
+    const double oldSupport=std::abs(std::sin(angle+.05))*.6+
+        std::abs(std::cos(angle+.05))*.4;
+    const auto turnedRaw=u*.4+n*(.1+oldSupport+.06);
+    setup(modulo,{turned,angledWall(angle)});
+    ObjectDrag nearest(modulo,turned,true);
+    nearest.start(origin,turnedRaw);
+    expectAngle(nearest.preview_angle,angle+.05,"nearest modulo-pi rotation avoids an artwork flip");
+    mouse(modulo,QEvent::MouseButtonRelease,turnedRaw);
+
+    for (bool freeSymbol : {false,true}) {
+        PlanCanvas framed;
+        auto frameSource=rectangle("frame-object",freeSymbol ? "symbol" : "component",{-1,-1},1.2,.8);
+        frameSource.resize_frame=CanvasSelectionFrame{{-1,-1},0,1.2,.8};
+        setup(framed,{frameSource,wall()});
+        ObjectDrag frameDrag(framed,frameSource,true);
+        frameDrag.start({-.8,-.9},{1.54,.1});
+        expectAngle(frameDrag.preview_angle,freeSymbol ? std::numbers::pi/2 : 0,
+            "physical frame admits free symbols and excludes native components");
+        expect(*frameDrag.preview,freeSymbol ? Vec2{2.6,.9} : Vec2{2.4,1},
+            "semantic eligibility keeps exact frame proposal");
+        mouse(framed,QEvent::MouseButtonRelease,{1.54,.1});
+    }
+}
+
+void rotatingReleaseAndInvalidation() {
+    const Vec2 origin{-1,-1},press{-.8,-.9},pointer{1.54,.1};
+    for (int mode=0;mode<6;++mode) {
+        PlanCanvas canvas;
+        const auto source=symbol(origin);
+        setup(canvas,{source,wall()});
+        ObjectDrag drag(canvas,source,true);
+        drag.start(press,pointer);
+        expectAngle(drag.preview_angle,std::numbers::pi/2,"initial rotating contact");
+        const auto serial=canvas.entitiesMovePreviewSerial();
+        if (mode<4) {
+            if (mode==1) canvas.setSnapEnabled(false);
+            if (mode==2) canvas.setRawPointInput(true);
+            const auto release=mode==3 ? Vec2{0,.1} : pointer;
+            mouse(canvas,QEvent::MouseButtonRelease,release,
+                mode==0 ? Qt::ShiftModifier : Qt::NoModifier);
+            require(drag.commits==1,"changed release proposal commits once");
+            expectAngle(drag.committed_angle,0,"release bypass/distance clears old angle");
+            expect(*drag.committed,mode==3 ? gridPoint(canvas,release)-gridPoint(canvas,press)
+                                          : pointer-press,"release recomputes unrotated translation");
+        } else {
+            if (mode==4) canvas.setEntities({source,wall(true,3)});
+            else {
+                QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
+                QApplication::sendEvent(&canvas,&escape);
+            }
+            expectAngle(canvas.entitiesMovePreviewRotationRadians(),0,"cancel/source change clears angle");
+            require(!canvas.completeEntitiesMovePreview(serial,
+                std::vector<CanvasEntity>{transformed(source,{2.6,.9},std::numbers::pi/2)}),
+                "canceled rotation rejects stale exact output");
+            mouse(canvas,QEvent::MouseButtonRelease,pointer);
+            require(drag.commits==0,"canceled rotation cannot commit");
+        }
+    }
+    PlanCanvas changed;
+    const auto source=symbol(origin);
+    setup(changed,{source,wall()});
+    ObjectDrag release(changed,source,true);
+    release.start(press,{0,.1});
+    expectAngle(release.preview_angle,0,"distant preview has no rotation");
+    mouse(changed,QEvent::MouseButtonRelease,pointer);
+    expectAngle(release.committed_angle,std::numbers::pi/2,"release position enables fresh rotation");
+    expect(*release.committed,{2.6,.9},"release recomputes rotated center from final pointer");
+}
+
+void rotatingLibraryContacts() {
+    constexpr double angle=std::numbers::pi/12;
+    const Vec2 u{std::cos(angle),std::sin(angle)},n{-u.y,u.x};
+    PlanCanvas canvas;
+    setup(canvas,{angledWall(angle)});
+    LibraryDrag library(canvas,0,false,true);
+    const double support=std::abs(n.x)*.6+std::abs(n.y)*.4;
+    const auto input=u*.4+n*(.1+support+.06);
+    const auto raw=libraryPointer(canvas,input);
+    const auto expected=u*dot(raw,u)+n*.5;
+    library.enter(input); library.move(input);
+    expect(*library.preview,expected,"library aligned center touches same physical face");
+    expectAngle(library.preview_angle,angle,"library provider reads relative rotation");
+    require(library.requested_angles.size()==4,"each library pointer requests raw then final geometry");
+    expectAngle(library.requested_angles[0],0,"first library raw request has zero relative rotation");
+    expectAngle(library.requested_angles[2],0,"new library raw request clears previous rotation");
+    const auto shown=*library.preview;
+    library.drop(input);
+    expect(*library.committed,shown,"library preview and drop centers agree");
+    expectAngle(library.committed_angle,angle,"library final callback gets relative angle");
+    expectAngle(canvas.symbolDragPreviewRotationRadians(),0,"completed library drop clears angle");
+
+    for (int mode=0;mode<6;++mode) {
+        PlanCanvas vertical;
+        setup(vertical,{wall()});
+        LibraryDrag drag(vertical,0,false,true);
+        drag.enter({1.34,0}); drag.move({1.34,0});
+        expectAngle(drag.preview_angle,std::numbers::pi/2,"library perpendicular tie rotates positive ninety");
+        expect(*drag.preview,{1.6,0},"library uses its center as the grab anchor");
+        const auto serial=vertical.symbolDragPreviewSerial();
+        if (mode<4) {
+            if (mode==1) vertical.setSnapEnabled(false);
+            if (mode==2) vertical.setRawPointInput(true);
+            const Vec2 point=mode==3 ? Vec2{0,0} : Vec2{1.34,0};
+            drag.drop(point,mode==0 ? Qt::ShiftModifier : Qt::NoModifier);
+            expectAngle(drag.committed_angle,0,"library final bypass/distance clears old rotation");
+            expect(*drag.committed,point,"library final bypass/distance recomputes raw center");
+        } else {
+            if (mode==4) vertical.setEntities({wall(true,3)});
+            else {
+                QDragLeaveEvent leave;
+                QApplication::sendEvent(&vertical,&leave);
+            }
+            expectAngle(vertical.symbolDragPreviewRotationRadians(),0,"library source/leave clears angle");
+            require(!vertical.completeSymbolDragPreview(serial,symbol({1.6,0},std::numbers::pi/2)),
+                "retired library rotation rejects late geometry");
+        }
+    }
+    PlanCanvas rawCanvas;
+    setup(rawCanvas,{wall()});
+    LibraryDrag rawDrag(rawCanvas,0,true,true);
+    rawDrag.enter({1.34,0}); rawDrag.move({1.34,0}); rawDrag.drop({1.34,0});
+    expectAngle(rawDrag.committed_angle,0,"hosted/raw symbol provider never auto-rotates");
+    expect(*rawDrag.committed,{1.34,0},"hosted/raw symbol provider keeps original point");
+
+    for (double scale : {50.,100.,200.}) {
+        for (double gap : {10.,14.}) {
+            PlanCanvas threshold;
+            setup(threshold,{wall()},scale);
+            LibraryDrag drag(threshold,0,false,true);
+            const Vec2 point{1.4-gap/scale,0};
+            drag.enter(point); drag.move(point);
+            expectAngle(drag.preview_angle,gap<12 ? std::numbers::pi/2 : 0,
+                "rotation admission uses original unrotated twelve-pixel gap at every zoom");
+            drag.drop(point);
+            expectAngle(drag.committed_angle,drag.preview_angle,"threshold release keeps exact angle");
+        }
+    }
+}
+
+void asynchronousRotationAndRotationOnly() {
+    PlanCanvas canvas;
+    const auto source=symbol({-1,-1});
+    setup(canvas,{source,wall()});
+    canvas.setSelectedId(source.id);
+    std::uint64_t pending{};
+    Vec2 proposed{},committed{};
+    double proposedAngle{},committedAngle{};
+    int commits=0;
+    canvas.setEntitiesMovePreviewRequested([&](QStringList,Vec2 delta,std::uint64_t serial)
+            -> std::optional<std::vector<CanvasEntity>> {
+        pending=serial; proposed=delta; proposedAngle=canvas.entitiesMovePreviewRotationRadians();
+        require(canvas.markEntitiesMovePreviewPending(serial),"async rotation marks current proposal pending");
+        return std::nullopt;
+    });
+    canvas.setEntitiesMoveRequested([&](QStringList ids,Vec2 delta,double angle) {
+        require(ids==QStringList{source.id},"async rotation retains captured ID");
+        committed=delta; committedAngle=angle; ++commits;
+        expectAngle(canvas.entitiesMovePreviewRotationRadians(),0,"async callback follows gesture reset");
+        return true;
+    });
+    mouse(canvas,QEvent::MouseButtonPress,{-.8,-.9});
+    mouse(canvas,QEvent::MouseMove,{1.54,.1});
+    expectAngle(proposedAngle,std::numbers::pi/2,"async provider captures relative preview angle");
+    mouse(canvas,QEvent::MouseButtonRelease,{1.54,.1});
+    require(commits==0 && canvas.entitiesMovePreviewPending(),"released async edit waits for exact output");
+    require(canvas.completeEntitiesMovePreview(pending,
+        std::vector<CanvasEntity>{transformed(source,proposed,proposedAngle)}),
+        "released rotation accepts current exact output");
+    QApplication::processEvents();
+    require(commits==1,"async rotated edit commits once after admission");
+    expect(committed,proposed,"async rotation commit preserves exact preview delta");
+    expectAngle(committedAngle,proposedAngle,"async commit copies angle before reset");
+    require(!canvas.completeEntitiesMovePreview(pending,
+        std::vector<CanvasEntity>{transformed(source,proposed,proposedAngle)}),
+        "completed async rotation cannot revive its old serial");
+
+    // A narrow width/depth difference admits the old footprint within 12 px,
+    // while the aligned final centre is precisely the original centre.
+    auto squareish=symbol({1.6,0});
+    squareish.svg_symbol->width_metres=.9;
+    squareish.segments=rectangle(squareish.id,"symbol",{1.6,0},.9,.8).segments;
+    PlanCanvas rotationOnly;
+    setup(rotationOnly,{squareish,wall()});
+    ObjectDrag only(rotationOnly,squareish,true);
+    only.start({1.6,0},{0,0});
+    mouse(rotationOnly,QEvent::MouseMove,{1.6,0});
+    expect(*only.preview,{0,0},"rotation-only proposal has no translation");
+    expectAngle(only.preview_angle,std::numbers::pi/2,"rotation-only proposal has a real turn");
+    mouse(rotationOnly,QEvent::MouseButtonRelease,{1.6,0});
+    require(only.commits==1,"nonzero rotation is not discarded by no-motion commit check");
+    expectAngle(only.committed_angle,std::numbers::pi/2,"rotation-only commit preserves angle");
+}
+
+void independentProviderCapabilities() {
+    const auto source=symbol({-1,-1});
+    PlanCanvas moveCanvas;
+    setup(moveCanvas,{source,wall()});
+    ObjectDrag moving(moveCanvas,source,true);
+    LibraryDrag legacyLibrary(moveCanvas);
+    moving.start({-.8,-.9},{1.54,.1});
+    expectAngle(moving.preview_angle,std::numbers::pi/2,"legacy library setter preserves move capability");
+    mouse(moveCanvas,QEvent::MouseButtonRelease,{1.54,.1});
+
+    PlanCanvas libraryCanvas;
+    setup(libraryCanvas,{source,wall()});
+    LibraryDrag library(libraryCanvas,0,false,true);
+    ObjectDrag legacyMove(libraryCanvas,source);
+    library.enter({1.34,0}); library.move({1.34,0}); library.drop({1.34,0});
+    expectAngle(library.committed_angle,std::numbers::pi/2,"legacy move setter preserves library capability");
+}
 } // namespace
 
 int main(int argc,char** argv) {
@@ -400,6 +745,12 @@ int main(int argc,char** argv) {
         existingObjectCases();
         finalPositionAndInvalidation();
         rigidGroupContact();
+        rigidGroupContact(true);
+        rotatingObjectContacts();
+        rotatingReleaseAndInvalidation();
+        rotatingLibraryContacts();
+        asynchronousRotationAndRotationOnly();
+        independentProviderCapabilities();
         std::cout << "object_drag_snap_canvas_tests passed\n";
         return 0;
     } catch (const std::exception& error) {

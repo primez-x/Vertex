@@ -1799,6 +1799,30 @@ if(SKETCH_BUILD_DESKTOP)
       target_compile_options(object_drag_snap_canvas_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(object_drag_snap_desktop_tests PRIVATE /W4 /permissive- /utf-8)
     endif()
+    add_executable(wall_alignment_rotation_desktop_tests tests/wall_alignment_rotation_desktop_tests.cpp)
+    target_link_libraries(wall_alignment_rotation_desktop_tests PRIVATE sketch_desktop)
+    qt_add_resources(wall_alignment_rotation_desktop_tests wall_alignment_rotation_test_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_test(NAME wall_alignment_rotation_desktop COMMAND wall_alignment_rotation_desktop_tests)
+    set_tests_properties(wall_alignment_rotation_desktop PROPERTIES
+      TIMEOUT 120
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+    if(MSVC)
+      target_compile_options(wall_alignment_rotation_desktop_tests PRIVATE /W4 /permissive- /utf-8)
+    endif()
+    add_executable(wall_alignment_rotation_frame_tests tests/wall_alignment_rotation_frame_tests.cpp)
+    target_link_libraries(wall_alignment_rotation_frame_tests PRIVATE sketch_desktop)
+    qt_add_resources(wall_alignment_rotation_frame_tests wall_alignment_rotation_frame_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_test(NAME wall_alignment_rotation_frames COMMAND wall_alignment_rotation_frame_tests)
+    set_tests_properties(wall_alignment_rotation_frames PROPERTIES
+      TIMEOUT 120
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+    if(MSVC)
+      target_compile_options(wall_alignment_rotation_frame_tests PRIVATE /W4 /permissive- /utf-8)
+    endif()
     add_executable(appraisal_details_panel_tests tests/appraisal_details_panel_tests.cpp)
     add_executable(area_class_palette_desktop_tests tests/area_class_palette_desktop_tests.cpp)
     add_executable(sketch_content_output_tests tests/sketch_content_output_tests.cpp)

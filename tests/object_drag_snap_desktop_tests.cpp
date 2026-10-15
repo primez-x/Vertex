@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <numbers>
 #include <stdexcept>
 
 namespace {
@@ -124,10 +125,11 @@ void existingObjectSnapsToWallFace(bool vertical, bool design = false) {
     // Its nonzero grab offset must survive both movement and wall attraction.
     const sketch::Vec2 grab{.23, .13};
     const auto gap = 6.0/canvas->viewScale();
+    const auto expected_rotation=vertical ? std::numbers::pi/2 : 0.0;
     const sketch::Vec2 expected = vertical
-        ? sketch::Vec2{.1+before.width_metres/2, .83}
+        ? sketch::Vec2{.1+before.depth_metres/2, .83+grab.y-grab.x}
         : sketch::Vec2{.83, .1+before.depth_metres/2};
-    auto proposed = expected;
+    auto proposed = vertical ? sketch::Vec2{.1+before.width_metres/2,.83} : expected;
     if (vertical) proposed.x += gap; else proposed.y += gap;
     const auto press = screen({original.x+grab.x, original.y+grab.y});
     const auto target = screen({proposed.x+grab.x, proposed.y+grab.y});
@@ -149,7 +151,7 @@ void existingObjectSnapsToWallFace(bool vertical, bool design = false) {
                   << live.position.x << ',' << live.position.y << "; scale " << canvas->viewScale() << '\n';
     require(close_enough(live.position.x, expected.x) && close_enough(live.position.y, expected.y),
             "drag preview must attract sofa footprint to wall face and preserve tangential grab offset");
-    require(close_enough(live.rotation_radians, before.rotation_radians), "wall attraction rotated the sofa");
+    require(close_enough(live.rotation_radians, expected_rotation), "wall attraction did not align the sofa width axis");
     const auto still_saved = persisted(window, id);
     require(close_enough(still_saved.placement.position.x, original.x) &&
             close_enough(still_saved.placement.position.y, original.y), "preview mutated persisted placement");
@@ -161,7 +163,7 @@ void existingObjectSnapsToWallFace(bool vertical, bool design = false) {
     const auto committed = retained(*canvas, id);
     const auto moved = persisted(window, id);
     require(close_enough(committed.position.x, live.position.x) && close_enough(committed.position.y, live.position.y) &&
-            close_enough(moved.placement.rotation_radians, saved.placement.rotation_radians) &&
+            close_enough(moved.placement.rotation_radians, expected_rotation) &&
             close_enough(moved.placement.scale, saved.placement.scale) && moved.pinned_svg == saved.pinned_svg,
             "release changed preview placement, orientation, scale or artwork");
     require(window.undoCommand(), "drag cannot undo");
@@ -175,7 +177,7 @@ void existingObjectSnapsToWallFace(bool vertical, bool design = false) {
     require(window.saveProject() && window.openProject(path), "snapped placement save/reopen failed");
     const auto reopened = persisted(window, id);
     require(close_enough(reopened.placement.position.x, expected.x) && close_enough(reopened.placement.position.y, expected.y) &&
-            close_enough(reopened.placement.rotation_radians, saved.placement.rotation_radians) && !undo->isEnabled(),
+            close_enough(reopened.placement.rotation_radians, expected_rotation) && !undo->isEnabled(),
             "save/reopen lost snapped placement, orientation or empty history");
 }
 
