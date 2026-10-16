@@ -21,6 +21,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QStringList>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -408,11 +409,12 @@ public:
         const auto count = presentation_targets.size() + ordinary_targets.size() + skylights.size() + assembly_targets.size();
         require(count > 0 && count <= 1000, "Select between one and 1000 supported items.");
         owner->setObjectName("selectionPropertiesDialog");
-        owner->setWindowTitle("Selection properties");
+        owner->setWindowTitle("Properties");
         owner->resize(600, 570);
         auto* layout = new QVBoxLayout(owner);
         layout->setSpacing(10);
-        auto* heading = new QLabel(QString("%1 selected items").arg(static_cast<qulonglong>(count)), owner);
+        auto* heading = new QLabel(QString("%1 items selected").arg(static_cast<qulonglong>(count)), owner);
+        heading->setObjectName("selectionPropertiesHeading");
         layout->addWidget(heading);
         selection = new QTreeWidget(owner);
         selection->setObjectName("selectionPropertiesRoster");
@@ -426,7 +428,7 @@ public:
         selection->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
         selection->setMaximumHeight(150);
         layout->addWidget(selection);
-        auto* instruction = new QLabel("Enter values to apply to the matching selected items. Blank fields keep current values.", owner);
+        auto* instruction = new QLabel("Blank fields keep their current values.", owner);
         instruction->setWordWrap(true);
         layout->addWidget(instruction);
         tabs = new QTabWidget(owner);
@@ -832,6 +834,14 @@ public:
         layout->addWidget(buttons);
         QObject::connect(buttons, &QDialogButtonBox::rejected, owner, &QDialog::reject);
         QObject::connect(buttons, &QDialogButtonBox::accepted, owner, [this] { (void)owner->submit(); });
+        // A single kind of item needs no tab strip.
+        tabs->tabBar()->setVisible(tabs->count() > 1);
+        // One item needs no roster: its name is the heading.
+        if (selection->topLevelItemCount() == 1) {
+            heading->setText(selection->topLevelItem(0)->text(0));
+            heading->setStyleSheet("font-size: 15px; font-weight: 600;");
+            selection->hide();
+        }
     }
 
     SelectionPropertyEditRequest ordinary_request() const {

@@ -4,6 +4,8 @@
 
 #include "sketch/assembly_profile_geometry.hpp"
 #include "sketch/quantity.hpp"
+#include "advanced_section.hpp"
+#include "measurement_format.hpp"
 
 #include <QComboBox>
 #include <QFormLayout>
@@ -12,12 +14,14 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QScrollArea>
 #include <QStandardItemModel>
 #include <QStackedWidget>
 #include <QStringList>
 #include <QTabWidget>
 #include <QTableWidget>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -53,6 +57,14 @@ QString unit_name(AssemblyQuantityUnit unit) {
     case AssemblyQuantityUnit::kilogram: return "kg";
     }
     throw std::invalid_argument("Assembly Properties: unknown declared quantity unit.");
+}
+// A declared key such as "shelf_count" reads as "Shelf count".
+QString plain(const std::string& key) {
+    auto text = QString::fromStdString(key);
+    text.replace(QLatin1Char('_'), QLatin1Char(' '));
+    text.replace(QLatin1Char('-'), QLatin1Char(' '));
+    if (!text.isEmpty()) text[0] = text[0].toUpper();
+    return text;
 }
 QString path_label(const Path& path) {
     QStringList parts;
@@ -101,6 +113,7 @@ struct ValueRow {
     QComboBox* operation{};
     QLineEdit* text{};
     QComboBox* material{};
+    QToolButton* reset{};
     AssemblyQuantityUnit unit{AssemblyQuantityUnit::count};
 };
 struct ProfileRow {
@@ -129,6 +142,7 @@ struct Page {
     QComboBox *pose_operation{}, *mirrored{};
     std::array<QLineEdit*, 6> pose{};
     QComboBox* geometry_operation{};
+    QToolButton *geometry_reset{}, *pose_reset{};
     std::array<QLineEdit*, 3> dimensions{};
     QComboBox* profile_source{};
     QStackedWidget* profile_stack{};
@@ -271,6 +285,12 @@ auto common_slots(const std::vector<Source>& sources, Map values, const auto& co
 Operation operation(QComboBox* field) {
     return static_cast<Operation>(field->currentData().toInt());
 }
+// The Keep/Set/Use-definition combos stay as hidden state. What a person
+// types decides Set or Keep; Reset chooses the definition's value.
+void set_operation(QComboBox* field, Operation value) {
+    const QSignalBlocker blocker(field);
+    field->setCurrentIndex(std::max(0, field->findData(static_cast<int>(value))));
+}
 } // namespace
 
 class AssemblyPropertiesPanel::Impl final {
@@ -283,6 +303,7 @@ public:
     std::map<Target, AssemblyExpansion> roots;
     std::vector<std::unique_ptr<Page>> pages;
     QComboBox* selector{};
+    QLabel* part_label{};
     QStackedWidget* stack{};
     QLabel* error{};
 
@@ -328,10 +349,11 @@ public:
         auto* layout = new QVBoxLayout(owner);
         layout->setContentsMargins(0, 0, 0, 0);
         auto* bar = new QHBoxLayout;
-        bar->addWidget(new QLabel("Assembly part", owner));
+        part_label = new QLabel("Part", owner);
+        bar->addWidget(part_label);
         selector = new QComboBox(owner);
         selector->setObjectName("assemblyPropertiesPart");
-        selector->setAccessibleName("Assembly part");
+        selector->setAccessibleName("Part");
         selector->setToolTip("Choose a component part to edit. Entered values remain when you switch parts.");
         bar->addWidget(selector, 1);
         layout->addLayout(bar);
@@ -356,8 +378,10 @@ public:
         }
         require(paths.contains(Path{}), "An original selected path is absent from its source expansion.");
         add_page(Path{}, std::all_of(original.begin(), original.end(), [](const auto& t) { return t.part_path.empty(); })
-            ? QString("Root") : QString("Selected parts"));
+            ? QString("Whole component") : QString("Selected parts"));
         for (const auto& path : paths) if (!path.empty()) add_page(path, part_name(path));
+        selector->setVisible(selector->count() > 1);
+        part_label->setVisible(selector->count() > 1);
         build(*pages.front());
         stack->setCurrentWidget(pages.front()->widget);
         QObject::connect(selector, &QComboBox::currentIndexChanged, owner, [this](int index) {
@@ -444,7 +468,7 @@ public:
         result->setAccessibleName(name);
         result->setMaxLength(4096);
         result->setClearButtonEnabled(true);
-        result->setPlaceholderText(hint + " (unchanged)");
+        result->setPlaceholderText(hint);
         result->setToolTip("Current: " + hint);
         return result;
     }
@@ -456,6 +480,17 @@ public:
         result->addItem("Set", static_cast<int>(Operation::set));
         if (clear) result->addItem("Use definition", static_cast<int>(Operation::clear));
         result->setToolTip("Keep retains each current value. Use definition removes this instance's override.");
+        result->hide();
+        return result;
+    }
+    QToolButton* reset_button(QWidget* parent, const QString& name, const QString& tip) {
+        auto* result = new QToolButton(parent);
+        result->setObjectName(name + "Reset");
+        result->setText("Reset");
+        result->setCheckable(true);
+        result->setAutoRaise(true);
+        result->setToolTip(tip);
+        result->setAccessibleName(tip);
         return result;
     }
     ValueRow row(QFormLayout* form, const QString& label, const std::string& key,
@@ -467,18 +502,21 @@ public:
         result.key = key;
         result.operation = operations(holder, "assembly" + family + q(key));
         result.text = field(holder, label, hint);
-        result.text->setEnabled(false);
+        result.reset = reset_button(holder, "assembly" + family + q(key), "Use the component type's value");
         layout->addWidget(result.operation);
         layout->addWidget(result.text, 1);
-        QObject::connect(result.operation, &QComboBox::currentIndexChanged, owner,
-            [op = result.operation, input = result.text](int) { input->setEnabled(operation(op) == Operation::set); });
+        layout->addWidget(result.reset);
+        const auto sync = [op = result.operation, input = result.text, reset = result.reset] {
+            input->setEnabled(!reset->isChecked());
+            set_operation(op, reset->isChecked() ? Operation::clear :
+                input->text().trimmed().isEmpty() ? Operation::unchanged : Operation::set);
+        };
+        QObject::connect(result.text, &QLineEdit::textChanged, owner, sync);
+        QObject::connect(result.reset, &QToolButton::toggled, owner, sync);
         form->addRow(label, holder);
         return result;
     }
-    QString length(double metres) const {
-        return exact(length_unit == Unit::metre ? metres : metres / 0.3048) +
-            (length_unit == Unit::metre ? " m" : " ft");
-    }
+    QString length(double metres) const { return units::length_text(metres, length_unit == Unit::metre); }
     QString profile_summary(const AssemblyProfile& profile) const {
         return QString("%1 outline edges; %2 cutouts%3").arg(static_cast<qulonglong>(profile.outer.size()))
             .arg(static_cast<qulonglong>(profile.holes.size()))
@@ -524,16 +562,16 @@ public:
         const bool pending = std::any_of(page.profile_collections.begin(), page.profile_collections.end(),
             [](const auto& collection) { return collection && collection->initialize_profile_topology; });
         page.geometry_operation->setEnabled(!pending);
-        if (auto* model = qobject_cast<QStandardItemModel*>(page.geometry_operation->model())) {
-            if (auto* item = model->item(2)) {
-                item->setEnabled(!pending);
-                item->setToolTip("Return to this component's exact type geometry. You can review affected dimensions before applying.");
-            }
+        if (pending && page.geometry_reset->isChecked()) {
+            const QSignalBlocker blocker(page.geometry_reset);
+            page.geometry_reset->setChecked(false);
         }
-        const bool enabled = operation(page.geometry_operation) == Operation::set;
+        page.geometry_reset->setEnabled(!pending);
+        set_operation(page.geometry_operation, automatic_geometry(page));
+        const bool reset = page.geometry_reset->isChecked();
         for (auto* dimension : page.dimensions)
-            dimension->setEnabled(enabled && !pending);
-        page.profile_stack->setEnabled(enabled);
+            dimension->setEnabled(!reset && !pending);
+        page.profile_stack->setEnabled(!reset);
         for (auto& collection : page.profile_collections) {
             if (!collection) continue;
             const bool frozen = collection->initialize_profile_topology;
@@ -564,6 +602,20 @@ public:
                 note += "\nApply the pending edge identities on this page before changing its common dimensions or geometry operation.";
             collection->topology_note->setText(note);
         }
+    }
+    Operation automatic_geometry(const Page& page) const {
+        if (page.geometry_reset->isChecked()) return Operation::clear;
+        if (std::any_of(page.dimensions.begin(), page.dimensions.end(), supplied)) return Operation::set;
+        for (const auto& collection : page.profile_collections) {
+            if (!collection) continue;
+            if (collection->initialize_profile_topology) return Operation::set;
+            try {
+                if (profile_draft(*collection) != *page.sources[collection->source_index].profiles) return Operation::set;
+            } catch (const std::exception&) {
+                return Operation::set;  // Apply reports the invalid profile value.
+            }
+        }
+        return Operation::unchanged;
     }
     void append_profile(ProfileCollection& collection, const Source& selected, AssemblyProfile profile, Page& page) {
         require(collection.profiles.size() < maximum_profiles, "This node already has 4096 own profiles.");
@@ -750,18 +802,13 @@ public:
         update_geometry_controls(page);
     }
     void build_geometry(Page& page, QTabWidget* tabs) {
-        auto* form = tab(tabs, "Geometry");
+        auto* form = tab(tabs, "Size");
         page.geometry_operation = operations(tabs, "assemblyGeometry");
         page.geometry_operation->setItemText(2, "Use type geometry");
-        page.geometry_operation->setToolTip("Keep retains each node's own geometry. Set stores a local profile override, "
-            "including when all dimension fields are blank. Use type geometry removes only this node's profile override.");
-        form->addRow("Geometry operation", page.geometry_operation);
-        auto* note = new QLabel("Dimensions measure this node's own outlines and extrusion, along its local axes, "
-            "with root and part pose scales included. Entered dimensions also account for pose changes on other part pages. "
-            "Child parts have their own Geometry pages. "
-            "Blank dimensions retain each source; resizing anchors the local minimum X, Y and elevation. "
-            "Current values describe the captured geometry and pose.", tabs);
-        note->setWordWrap(true); form->addRow(note);
+        form->addRow(page.geometry_operation);
+        page.geometry_reset = reset_button(tabs, "assemblyGeometry", "Use the component type's shape");
+        page.geometry_reset->setText("Use the type's shape");
+        page.geometry_reset->setToolButtonStyle(Qt::ToolButtonTextOnly);
         const std::array<QString, 3> labels{"Width", "Depth", "Height"};
         for (std::size_t i = 0; i < page.dimensions.size(); ++i) {
             QString hint;
@@ -777,7 +824,6 @@ public:
                 mixed ? "Multiple values" : length(*first);
             auto* input = field(tabs, "assemblyGeometry" + labels[i], hint);
             input->setAccessibleName("Geometry " + labels[i]);
-            input->setEnabled(false);
             input->setToolTip("Current: " + hint + "\nEnter a positive physical length; blank retains each node's size. "
                 "Each selected node is resized from its own profiles. You can review affected dimensions before applying. " +
                 (length_unit == Unit::metre ? QString("Bare numbers use metres.") : QString("Bare numbers use feet.")) +
@@ -787,12 +833,12 @@ public:
             QObject::connect(input, &QLineEdit::textChanged, owner, [this, page_ptr = &page] { update_geometry_controls(*page_ptr); });
             form->addRow(labels[i], input);
         }
-        auto* local_note = new QLabel("Own profiles belong to the chosen component; nested parts retain their own geometry. "
-            "Adding, removing or editing a profile changes only this component's local draft. "
-            "Local elevation and extrusion height are measured before pose scaling. "
-            "Edit outline and cutouts opens the vertex and circular-arc editor. "
-            "Keep and Use type geometry ignore these drafts; Set applies them together with the common dimensions above.", tabs);
-        local_note->setWordWrap(true); form->addRow(local_note);
+        form->addRow(page.geometry_reset);
+        // Outlines, cutouts and extrusions are expert edits.
+        auto* shape = new AdvancedSection("assemblyPropertiesShape", tabs, "Outlines and profiles");
+        shape->setObjectName("assemblyGeometryAdvanced");
+        form->addRow(shape);
+        form = shape->form();
         page.profile_stack = new QStackedWidget(tabs);
         page.profile_stack->setObjectName("assemblyGeometryProfileCollections");
         page.profile_collections.resize(page.sources.size());
@@ -832,22 +878,27 @@ public:
         QObject::connect(page.geometry_operation, &QComboBox::currentIndexChanged, owner, [this, page_ptr = &page](int) {
             update_geometry_controls(*page_ptr);
         });
+        QObject::connect(page.geometry_reset, &QToolButton::toggled, owner, [this, page_ptr = &page](bool) {
+            update_geometry_controls(*page_ptr);
+        });
     }
     void build(Page& page) {
         auto* tabs = new QTabWidget(stack);
         build_geometry(page, tabs);
+        build_pose(page, tabs);
         const auto properties = common_slots(page.sources, [](const auto& type) -> const auto& { return type.properties; },
             [](const auto&, const auto&) { return true; });
-        auto* form = tab(tabs, "Properties");
+        auto* form = tab(tabs, "Details");
+        auto* details_form = form;
+        auto* details_page = tabs->widget(tabs->count() - 1);
         for (const auto& [key, value] : properties) {
             (void)value;
             const auto hint = common_hint<std::string>(page.sources,
                 [](const auto& node) -> const auto& { return node.properties; }, key, [](const auto& v) { return q(v); });
-            auto input = row(form, q(key), key, hint, "Property");
-            input.text->setToolTip("Current: " + hint + "\nSet accepts an empty string. Keep preserves each selected value.");
+            auto input = row(form, plain(key), key, hint, "Property");
+            input.text->setToolTip("Current: " + hint + "\nLeave blank to keep each selected value.");
             page.properties.push_back(input);
         }
-        if (properties.empty()) form->addRow(new QLabel("No common declared properties.", tabs));
 
         const auto materials = common_slots(page.sources, [](const auto& type) -> const auto& { return type.materials; },
             [](const auto&, const auto&) { return true; });
@@ -863,7 +914,8 @@ public:
                 if (auto found = choices.find(material.id); found != choices.end() && !found->second.contains(q(material.name)))
                     found->second.push_back(q(material.name));
         }
-        form = tab(tabs, "Materials");
+        // Materials lead the Details page.
+        int material_row = 0;
         for (const auto& [key, value] : materials) {
             (void)value;
             const auto first = page.sources.front().node->materials.at(key);
@@ -886,45 +938,55 @@ public:
             input.material = new QComboBox(holder);
             input.material->setObjectName("assemblyMaterial" + q(key));
             input.material->setAccessibleName(q(key));
-            input.material->addItem("Choose material", QString());
+            input.material->addItem(hint + " (current)", QString());
             for (const auto& [id, names] : choices) {
                 input.material->addItem(names.join(" / "), q(id));
                 input.material->setItemData(input.material->count() - 1, q(id), Qt::ToolTipRole);
             }
             input.material->setToolTip("Current: " + hint + "\nChoices are valid in every selected source catalog.");
-            input.material->setEnabled(false);
-            input.operation->setItemText(0, "Keep (" + hint + ")");
-            QObject::connect(input.operation, &QComboBox::currentIndexChanged, owner,
-                [op = input.operation, choice = input.material](int) { choice->setEnabled(operation(op) == Operation::set); });
-            layout->addWidget(input.operation); layout->addWidget(input.material, 1);
-            form->addRow(q(key), holder);
+            input.reset = reset_button(holder, "assemblyMaterial" + q(key), "Use the component type's material");
+            const auto sync = [op = input.operation, choice = input.material, reset = input.reset] {
+                choice->setEnabled(!reset->isChecked());
+                set_operation(op, reset->isChecked() ? Operation::clear :
+                    choice->currentIndex() > 0 ? Operation::set : Operation::unchanged);
+            };
+            QObject::connect(input.material, &QComboBox::currentIndexChanged, owner, sync);
+            QObject::connect(input.reset, &QToolButton::toggled, owner, sync);
+            layout->addWidget(input.operation); layout->addWidget(input.material, 1); layout->addWidget(input.reset);
+            details_form->insertRow(material_row++, plain(key) + " material", holder);
             page.materials.push_back(input);
         }
-        if (materials.empty()) form->addRow(new QLabel("No common declared material slots.", tabs));
 
         const auto quantities = common_slots(page.sources, [](const auto& type) -> const auto& { return type.quantities; },
             [](const auto& a, const auto& b) { return a.unit == b.unit; });
-        form = tab(tabs, "Quantities");
         for (const auto& [key, value] : quantities) {
             const auto hint = common_hint<AssemblyQuantityProperty>(page.sources,
                 [](const auto& node) -> const auto& { return node.quantities; }, key,
-                [](const auto& v) { return exact(v.value) + " " + unit_name(v.unit); });
-            auto input = row(form, q(key) + " (" + unit_name(value.unit) + ")", key, hint, "Quantity");
+                [](const auto& v) { return v.unit == AssemblyQuantityUnit::count ? exact(v.value) : exact(v.value) + " " + unit_name(v.unit); });
+            auto input = row(form, value.unit == AssemblyQuantityUnit::count ? plain(key) :
+                plain(key) + " (" + unit_name(value.unit) + ")", key, hint, "Quantity");
             input.unit = value.unit;
             input.text->setToolTip("Current: " + hint + (value.unit == AssemblyQuantityUnit::metre ?
                 "\nEnter a length with units; bare numbers use metres." :
                 "\nEnter a nonnegative number in the labeled SI unit. Counts must be whole numbers."));
             page.quantities.push_back(input);
         }
-        if (quantities.empty()) form->addRow(new QLabel("No common declared quantities with matching units.", tabs));
+        if (properties.empty() && materials.empty() && quantities.empty())
+            tabs->removeTab(tabs->indexOf(details_page));
+        page.widget = tabs;
+        stack->addWidget(tabs);
+    }
 
-        form = tab(tabs, "Pose");
+    void build_pose(Page& page, QTabWidget* tabs) {
+        auto* form = tab(tabs, "Position");
         const bool nested = std::all_of(page.sources.begin(), page.sources.end(), [](const auto& s) { return !s.target.part_path.empty(); });
         page.pose_operation = operations(tabs, "assemblyPose", nested);
         if (nested) page.pose_operation->setItemText(2, "Use part pose");
-        page.pose_operation->setToolTip(nested ? "Use part pose removes the local instance pose override." : "Root poses support Keep and Set.");
-        form->addRow("Pose operation", page.pose_operation);
-        const std::array<QString, 6> labels{"X", "Y", "Z", "Angle (degrees)", "XY scale", "Vertical scale multiplier"};
+        form->addRow(page.pose_operation);
+        // Scale and mirroring are rare; they sit in a collapsed section.
+        auto* scale = new AdvancedSection("assemblyPropertiesScale", tabs, "Scale and mirror");
+        scale->setObjectName("assemblyPoseAdvanced");
+        const std::array<QString, 6> labels{"X", "Y", "Elevation", "Rotation (°)", "Scale", "Height scale"};
         const auto components = [](const AssemblyTransform& p) {
             return std::array<double, 6>{p.translation_m.x, p.translation_m.y, p.translation_m.z,
                 p.rotation_radians, p.scale, p.vertical_scale};
@@ -933,33 +995,41 @@ public:
         for (std::size_t i = 0; i < page.pose.size(); ++i) {
             const bool mixed = std::any_of(page.sources.begin(), page.sources.end(), [&](const auto& s) { return components(s.pose)[i] != first[i]; });
             QString hint = "Multiple values";
-            if (!mixed) hint = i < 3 ? exact(length_unit == Unit::metre ? first[i] : first[i] / 0.3048) +
-                (length_unit == Unit::metre ? " m" : " ft") : i == 3 ? exact(first[i] * 180 / std::numbers::pi) + " deg" : exact(first[i]);
+            if (!mixed) hint = i < 3 ? length(first[i]) : i == 3 ? exact(first[i] * 180 / std::numbers::pi) + "°" : exact(first[i]);
             page.pose[i] = field(tabs, "assemblyPose" + QString::number(i), hint);
             page.pose[i]->setAccessibleName(labels[i]);
-            page.pose[i]->setEnabled(false);
             page.pose[i]->setToolTip("Current: " + hint + (i < 3 ?
                 (length_unit == Unit::metre ? "\nBlank keeps each value. Lengths accept units; bare numbers use metres." :
                     "\nBlank keeps each value. Lengths accept units; bare numbers use feet.") :
                 i == 3 ? "\nBlank keeps each value. Enter a finite angle in degrees." :
                 "\nBlank keeps each value. Enter a positive multiplier. Z scale is XY scale times vertical multiplier."));
-            form->addRow(labels[i], page.pose[i]);
+            (i < 4 ? form : scale->form())->addRow(labels[i], page.pose[i]);
         }
+        form->addRow(scale);
         page.mirrored = new QComboBox(tabs);
         page.mirrored->setObjectName("assemblyPoseMirrored");
         page.mirrored->setAccessibleName("Mirrored Y");
         const bool mirror_mixed = std::any_of(page.sources.begin(), page.sources.end(), [&](const auto& s) { return s.pose.mirrored_y != page.sources.front().pose.mirrored_y; });
-        page.mirrored->addItem(mirror_mixed ? "Keep (mixed)" : page.sources.front().pose.mirrored_y ? "Keep (yes)" : "Keep (no)");
+        page.mirrored->addItem(mirror_mixed ? "Mixed (current)" : page.sources.front().pose.mirrored_y ? "Yes (current)" : "No (current)");
         page.mirrored->addItem("Yes", true); page.mirrored->addItem("No", false);
-        page.mirrored->setEnabled(false);
-        form->addRow("Mirrored Y", page.mirrored);
-        QObject::connect(page.pose_operation, &QComboBox::currentIndexChanged, owner, [page_ptr = &page](int) {
-            const bool enabled = operation(page_ptr->pose_operation) == Operation::set;
-            for (auto* input : page_ptr->pose) input->setEnabled(enabled);
-            page_ptr->mirrored->setEnabled(enabled);
-        });
-        page.widget = tabs;
-        stack->addWidget(tabs);
+        scale->form()->addRow("Mirrored", page.mirrored);
+        if (nested) {
+            page.pose_reset = reset_button(tabs, "assemblyPose", "Use the part's position in the component type");
+            page.pose_reset->setText("Use the part's position");
+            page.pose_reset->setToolButtonStyle(Qt::ToolButtonTextOnly);
+            form->addRow(page.pose_reset);
+        }
+        const auto sync = [page_ptr = &page] {
+            const bool reset = page_ptr->pose_reset && page_ptr->pose_reset->isChecked();
+            for (auto* input : page_ptr->pose) input->setEnabled(!reset);
+            page_ptr->mirrored->setEnabled(!reset);
+            const bool entered = page_ptr->mirrored->currentIndex() > 0 ||
+                std::any_of(page_ptr->pose.begin(), page_ptr->pose.end(), supplied);
+            set_operation(page_ptr->pose_operation, reset ? Operation::clear : entered ? Operation::set : Operation::unchanged);
+        };
+        for (auto* input : page.pose) QObject::connect(input, &QLineEdit::textChanged, owner, sync);
+        QObject::connect(page.mirrored, &QComboBox::currentIndexChanged, owner, sync);
+        if (page.pose_reset) QObject::connect(page.pose_reset, &QToolButton::toggled, owner, sync);
     }
 
     std::array<std::optional<double>, 3> read_dimensions(const Page& page) const {

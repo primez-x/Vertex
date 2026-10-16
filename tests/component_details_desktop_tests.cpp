@@ -4,6 +4,8 @@
 // a PNG of each panel for visual review.
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/assembly_document_adapter.hpp"
+#include "sketch/desktop/selection_properties_dialog.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 
@@ -21,6 +23,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QStandardPaths>
+#include <QTabWidget>
 #include <QTimer>
 #include <QToolButton>
 #include <QUuid>
@@ -209,6 +212,118 @@ void wall(MainWindow& window) {
     require(host.isVisibleTo(&moreBody(more)) && !host.isVisible(), "host wall sits in More options");
     require(!host.currentText().contains(id.right(8)), "host wall choice reads by name, observed " + host.currentText().toStdString());
 }
+
+// A placed 3D component: a vanity cabinet with a door part, a material slot,
+// a property and a quantity, as the Assembly catalog authors them.
+struct AssemblyFixture {
+    DocumentSnapshot snapshot;
+    AssemblyInstancePropertyEditTarget target;
+};
+AssemblyFixture assemblyFixture() {
+    const auto rectangle = [](double width, double depth) {
+        return Boundary{{{0, 0}, {width, 0}, 0}, {{width, 0}, {width, depth}, 0},
+                        {{width, depth}, {0, depth}, 0}, {{0, depth}, {0, 0}, 0}};
+    };
+    AssemblyProfile slab_profile;
+    slab_profile.id = "slab";
+    slab_profile.outer = rectangle(0.45, 0.02);
+    slab_profile.height_m = 0.7;
+    AssemblyType door;
+    door.id = "door";
+    door.name = "Cabinet door";
+    door.materials = {{"face", "oak"}};
+    door.profiles = {slab_profile};
+    AssemblyProfile body;
+    body.id = "body";
+    body.outer = rectangle(0.9144, 0.6096);
+    body.height_m = 0.8636;
+    AssemblyType vanity;
+    vanity.id = "vanity";
+    vanity.name = "Vanity cabinet";
+    vanity.properties = {{"model", "V-36"}};
+    vanity.materials = {{"body", "oak"}};
+    vanity.quantities = {{"shelves", AssemblyQuantityProperty{1, AssemblyQuantityUnit::count}}};
+    vanity.profiles = {body};
+    AssemblyPart part;
+    part.id = "door-left";
+    part.type_id = "door";
+    part.transform = AssemblyTransform{{0.01, -0.02, 0.1}, 0, 1};
+    vanity.parts = {part};
+    const auto model = AssemblyModel::create({{"oak", "White oak", "#C8A97E"}, {"steel", "Brushed steel", "#9AA0A6"}},
+                                             {door, vanity}, {});
+    const nlohmann::json context{{"property_id", "property-1"}, {"building_id", "building-1"},
+                                 {"floor_id", "floor-1"}, {"layer_id", "layer-1"}};
+    AssemblyInstance instance;
+    instance.id = "vanity-1";
+    instance.type_id = "vanity";
+    instance.root_transform = AssemblyTransform{{2, 1, 0}, 0, 1};
+    Entity catalog{"catalog-1", "assembly_model", {{"model", model.to_json()}}};
+    auto component = encode_document_assembly_instance({"vanity-1", "assembly_instance", context}, {"catalog-1", instance});
+    component.properties["name"] = "Vanity";
+    std::vector<Entity> entities{
+        {"property-1", "property", {{"name", "Component details"}}, false},
+        {"building-1", "building", {{"property_id", "property-1"}, {"name", "Building"}}, false},
+        {"floor-1", "floor", {{"building_id", "building-1"}, {"name", "Ground"}, {"elevation_m", 0}}, false},
+        {"layer-1", "layer", {{"floor_id", "floor-1"}, {"name", "Plan"}}, false},
+        catalog, component};
+    const auto document = Document::create(std::move(entities), {});
+    return {document.snapshot(), {"catalog-1", "vanity-1", std::string("vanity-1"), {}}};
+}
+
+void assemblyDialog() {
+    using Operation = AssemblyInstancePropertyPatchOperation;
+    const auto fixture = assemblyFixture();
+    SelectionPropertiesDialog dialog(fixture.snapshot, {}, {}, {}, {fixture.target}, false);
+    dialog.resize(600, 570);
+    dialog.setAttribute(Qt::WA_DontShowOnScreen);
+    dialog.show();
+    QApplication::processEvents();
+    save(dialog, "assembly-dialog");
+    for (auto* tabs : dialog.findChildren<QTabWidget*>())
+        for (int index = 0; index < tabs->count(); ++index) {
+            tabs->setCurrentIndex(index);
+            QApplication::processEvents();
+            save(dialog, QStringLiteral("assembly-dialog-%1").arg(tabs->tabText(index)));
+        }
+    require(control<QLabel>(dialog, "selectionPropertiesHeading").text() == QStringLiteral("Vanity"),
+            "one component is named in the heading");
+    for (auto* combo : dialog.findChildren<QComboBox*>())
+        require(!combo->isVisibleTo(&dialog) || combo->findText(QStringLiteral("Keep")) < 0,
+                "no Keep/Set/Use-definition choices are shown");
+    for (auto* label : dialog.findChildren<QLabel*>())
+        require(!label->isVisibleTo(&dialog) || label->text().size() < 120,
+                "no paragraph notes: " + label->text().toStdString());
+    require(control<QLineEdit>(dialog, "assemblyGeometryHeight").placeholderText().contains(QLatin1Char('"')),
+            "current height reads in feet and inches, observed " +
+            control<QLineEdit>(dialog, "assemblyGeometryHeight").placeholderText().toStdString());
+
+    // Untouched fields keep everything.
+    require(dialog.submit(), "unchanged dialog applies");
+    auto intent = dialog.assemblyIntents().at(0);
+    require(intent.properties.at("model").operation == Operation::unchanged &&
+            intent.materials.at("body").operation == Operation::unchanged &&
+            intent.pose.operation == Operation::unchanged &&
+            intent.profile_geometry.operation == Operation::unchanged, "blank fields keep current values");
+
+    // Typing sets; Reset returns to the type's value.
+    control<QLineEdit>(dialog, "Model").setText(QStringLiteral("V-48"));
+    auto& material = control<QComboBox>(dialog, "assemblyMaterialbody");
+    material.setCurrentIndex(material.findData(QStringLiteral("steel")));
+    control<QLineEdit>(dialog, "assemblyPose0").setText(QStringLiteral("10'"));
+    require(dialog.submit(), "edited dialog applies");
+    intent = dialog.assemblyIntents().at(0);
+    require(intent.properties.at("model").operation == Operation::set && intent.properties.at("model").value == "V-48",
+            "typing a property sets it");
+    require(intent.materials.at("body").operation == Operation::set && intent.materials.at("body").value == "steel",
+            "choosing a material sets it");
+    require(intent.pose.operation == Operation::set && intent.pose.x_metres &&
+            std::abs(*intent.pose.x_metres - 3.048) < 1e-9 && !intent.pose.y_metres,
+            "a position typed in feet sets only X");
+    control<QToolButton>(dialog, "assemblyPropertymodelReset").click();
+    require(dialog.submit(), "reset dialog applies");
+    require(dialog.assemblyIntents().at(0).properties.at("model").operation == Operation::clear,
+            "Reset returns the property to the component type's value");
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -226,6 +341,7 @@ int main(int argc, char** argv) {
         QApplication::processEvents();
         component(window);
         wall(window);
+        assemblyDialog();
         std::cout << "Component details passed\n";
         return 0;
     } catch (const std::exception& e) {
