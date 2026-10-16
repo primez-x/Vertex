@@ -4,7 +4,16 @@ Status as of 2026-10-06: the selected x64 CRT bytes match an inspected Microsoft
 
 ## Selected payload
 
-The app-local payload is exactly these five nondebug DLLs. Windows file and product version resources both report `14.44.35211.0` for every file.
+Alpha preparation on 2026-10-16 adds `msvcp140_atomic_wait.dll`, directly imported
+by the current desktop executable. Its SDK SHA-256 is
+`640b2aefced484d0368eea5bdd06addd0658a3a70a49256e560d6923b404a479`
+and its file version is `14.44.35211.0`. The new six-DLL cohort is prepared at
+`.deps/msvc-runtime/14.44.35211.0-complete`; the previous five-DLL directory is
+retained. All five earlier DLLs match the same regular x64 SDK redist directory
+byte-for-byte. This adds a technical dependency receipt and does not change the
+licensing-clearance declarations below.
+
+The 2026-10-06 payload was exactly these five nondebug DLLs. Windows file and product version resources both report `14.44.35211.0` for every file.
 
 | File | Bytes | File / product version | SHA-256 |
 | --- | ---: | --- | --- |

@@ -13,12 +13,13 @@ constraint-authoring service, so that DLL is a required local runtime component.
 Explicit entry points include separately built components and dynamically
 loaded plugins that an executable import table alone cannot discover.
 
-The current inspected closure contains 42 application/component binaries and
-has no unresolved static imports on this development machine. In addition to
+An earlier non-CAD inspection found 42 application/component binaries with no
+unresolved static imports on this development machine. Use the freshly generated
+report for the current closure, which also includes the embedded CAD runtime. In addition to
 the directly linked OCCT toolkits, recursion finds TKShHealing, TKHLR, TKMesh,
 FreeType, libpng, zlib, Brotli and bzip2. Windows operating-system libraries are
 recorded as system dependencies, not copied from System32 for distribution.
-The five required MSVC runtime DLLs are instead selected from an explicitly
+The six required MSVC runtime DLLs, including `msvcp140_atomic_wait.dll`, are selected from an explicitly
 prepared, hash-pinned x64 SDK redistributable payload. `inspect-runtime.ps1`
 searches that payload before System32; system alternatives are recorded
 separately from local packaging candidates.

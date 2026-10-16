@@ -45,7 +45,7 @@ except ModuleNotFoundError:
 
 
 REQUIRED_MODULES = {
-    "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll",
+    "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "msvcp140_atomic_wait.dll",
     "vcruntime140.dll", "vcruntime140_1.dll", "qwindows.dll",
 }
 PROJECT_MAGIC = b"SQLite format 3\0"

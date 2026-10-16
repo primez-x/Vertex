@@ -28,6 +28,10 @@ def synthetic_dll(machine=0x8664, characteristics=0x2022):
     return bytes(data)
 
 
+def tree_snapshot(root):
+    return {path.relative_to(root).as_posix(): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+
+
 class PrepareMsvcRuntimeTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -51,6 +55,9 @@ class PrepareMsvcRuntimeTests(unittest.TestCase):
     def test_exact_allowlist_portable_manifest_and_identical_rerun(self):
         (self.source / "concrt140.dll").write_bytes(synthetic_dll())
         manifest = self.prepare()
+        self.assertEqual(set(runtime.RUNTIME_NAMES), {
+            "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "msvcp140_atomic_wait.dll",
+            "vcruntime140.dll", "vcruntime140_1.dll"})
         expected = {f"bin/{name}" for name in runtime.RUNTIME_NAMES}
         self.assertEqual({row["path"] for row in manifest["files"]}, expected)
         self.assertEqual(set(path.name for path in (self.output / "bin").iterdir()), set(runtime.RUNTIME_NAMES))
@@ -68,27 +75,32 @@ class PrepareMsvcRuntimeTests(unittest.TestCase):
         self.assertEqual(before, {path: path.stat().st_mtime_ns for path in self.output.rglob("*")})
         self.assertEqual(json.loads(text), manifest)
 
-    def test_missing_and_changed_sources_rejected_even_when_output_exists(self):
+    def test_each_missing_or_changed_source_rejected_even_when_output_exists(self):
         self.prepare()
-        dll = self.source / runtime.RUNTIME_NAMES[0]
-        original = dll.read_bytes()
-        dll.unlink()
-        with self.assertRaisesRegex(ValueError, "Missing"):
-            self.prepare()
-        dll.write_bytes(original + b"changed")
-        with self.assertRaisesRegex(ValueError, "differs"):
-            self.prepare()
-        self.assertEqual((self.output / "bin" / dll.name).read_bytes(), original)
+        for name in runtime.RUNTIME_NAMES:
+            with self.subTest(name=name):
+                dll = self.source / name
+                original = dll.read_bytes()
+                dll.unlink()
+                with self.assertRaisesRegex(ValueError, f"Missing redistributable: {name}"):
+                    self.prepare()
+                dll.write_bytes(original + b"changed")
+                with self.assertRaisesRegex(ValueError, "differs"):
+                    self.prepare()
+                self.assertEqual((self.output / "bin" / name).read_bytes(), original)
+                dll.write_bytes(original)
 
     def test_invalid_pe_architecture_and_non_dll_rejected_before_output(self):
         bad_inputs = [b"not a DLL", synthetic_dll(machine=0x14C), synthetic_dll(characteristics=0x22),
                       synthetic_dll()[:200]]
-        for data in bad_inputs:
-            with self.subTest(size=len(data)):
-                (self.source / runtime.RUNTIME_NAMES[0]).write_bytes(data)
-                with self.assertRaises(ValueError):
-                    self.prepare()
-                self.assertFalse(self.output.exists())
+        for name in runtime.RUNTIME_NAMES:
+            for data in bad_inputs:
+                with self.subTest(name=name, size=len(data)):
+                    (self.source / name).write_bytes(data)
+                    with self.assertRaises(ValueError):
+                        self.prepare()
+                    self.assertFalse(self.output.exists())
+                    (self.source / name).write_bytes(synthetic_dll())
 
     def test_existing_extra_or_modified_output_is_never_overwritten(self):
         self.prepare()
@@ -137,7 +149,8 @@ class PrepareMsvcRuntimeTests(unittest.TestCase):
 
     def test_reparse_sources_and_destination_ancestors_rejected(self):
         original_lstat = Path.lstat
-        for blocked in (self.source / runtime.RUNTIME_NAMES[0], self.output.parent):
+        blocked_paths = [self.source / name for name in runtime.RUNTIME_NAMES] + [self.output.parent]
+        for blocked in blocked_paths:
             def fake_lstat(path, *args, **kwargs):
                 if path == blocked:
                     return SimpleNamespace(st_mode=stat.S_IFREG, st_file_attributes=0x400)
@@ -146,6 +159,55 @@ class PrepareMsvcRuntimeTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "Reparse"):
                     self.prepare()
         self.assertFalse(self.output.exists())
+
+    def test_fresh_named_complete_sibling_stages_all_members(self):
+        complete = self.root / ".deps/msvc-runtime" / f"{self.version}-complete"
+        manifest = self.prepare(output=complete)
+        self.assertEqual(manifest["version"], self.version)
+        self.assertEqual({row["path"] for row in manifest["files"]},
+                         {f"bin/{name}" for name in runtime.RUNTIME_NAMES})
+        self.assertEqual(set(path.name for path in (complete / "bin").iterdir()), set(runtime.RUNTIME_NAMES))
+        self.assertFalse(self.output.exists())
+        self.assertEqual(self.prepare(output=complete), manifest)
+
+    def test_legacy_five_dll_cohort_preserved_when_complete_sibling_is_staged(self):
+        legacy_names = tuple(name for name in runtime.RUNTIME_NAMES if name != "msvcp140_atomic_wait.dll")
+        with mock.patch.object(runtime, "RUNTIME_NAMES", legacy_names):
+            legacy_manifest = self.prepare()
+        self.assertEqual(len(legacy_manifest["files"]), 5)
+        legacy_tree = tree_snapshot(self.output)
+        self.prepare(output=self.root / ".deps/msvc-runtime" / f"{self.version}-complete")
+        self.assertEqual(tree_snapshot(self.output), legacy_tree)
+        with self.assertRaisesRegex(ValueError, "differs"):
+            self.prepare()
+        self.assertEqual(tree_snapshot(self.output), legacy_tree)
+
+    def test_output_name_limited_to_version_or_strict_cohort_suffix(self):
+        deps = self.root / ".deps/msvc-runtime"
+        # Reject before staging any sibling: Windows paths are case-insensitive, so
+        # a created "-complete" directory would make "-COMPLETE" exist for the wrong reason.
+        rejected = [f"{self.version}-", f"{self.version}-{'a' * 41}", f"{self.version}-COMPLETE",
+                    f"{self.version}-complete_x", f"{self.version}-complete.old", f"{self.version}-complete x",
+                    f"{self.version}--complete", f"{self.version}-complete-", f"{self.version}x",
+                    "14.44.35211.1-complete"]
+        for name in rejected:
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, "Output"):
+                    self.prepare(output=deps / name)
+                self.assertFalse((deps / name).exists())
+        accepted = [f"{self.version}-{'a' * 40}", f"{self.version}-complete", f"{self.version}-a1-b2"]
+        for name in accepted:
+            with self.subTest(name=name):
+                self.prepare(output=deps / name)
+                self.assertTrue((deps / name / "manifest.json").is_file())
+        escapes = [self.root / ".deps" / f"{self.version}-complete",
+                   self.root / ".deps/msvc-runtime-other" / f"{self.version}-complete",
+                   deps / f"{self.version}-complete" / "nested",
+                   deps / ".." / f"{self.version}-complete"]
+        for destination in escapes:
+            with self.subTest(destination=destination):
+                with self.assertRaisesRegex(ValueError, "Output"):
+                    self.prepare(output=destination)
 
 
 if __name__ == "__main__":

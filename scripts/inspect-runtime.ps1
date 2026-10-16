@@ -91,14 +91,14 @@ if ($EntryPoints.Count -eq 0) {
 if ($null -eq $cadPayload) {
     $searchDirectories = @($releaseDirectory,
                            (Join-Path $releaseDirectory 'cad-runtime'),
-                           (Join-Path $projectRoot '.deps\msvc-runtime\14.44.35211.0\bin'),
+                           (Join-Path $projectRoot '.deps\msvc-runtime\14.44.35211.0-complete\bin'),
                            [Environment]::SystemDirectory,
                            (Join-Path $qtPrefix 'bin'),
                            (Join-Path $projectRoot '.deps\native\x64-windows\bin'))
 } else {
     $EntryPoints = @($EntryPoints) + @($cadPayload.entry_points)
     $searchDirectories = @($releaseDirectory,
-                           (Join-Path $projectRoot '.deps\msvc-runtime\14.44.35211.0\bin'),
+                           (Join-Path $projectRoot '.deps\msvc-runtime\14.44.35211.0-complete\bin'),
                            (Join-Path $qtPrefix 'bin'),
                            (Join-Path $projectRoot '.deps\native\x64-windows\bin')) +
                          @($cadPayload.directories) + @([Environment]::SystemDirectory)

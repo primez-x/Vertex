@@ -10,13 +10,13 @@
     {
       "kind": "notice",
       "inventory_entry": "msvc-runtime",
-      "path": ".deps/msvc-runtime/14.44.35211.0/notices/Redist.txt",
+      "path": ".deps/msvc-runtime/14.44.35211.0-complete/notices/Redist.txt",
       "destination": "licenses/MSVC-Redist.txt"
     },
     {
       "kind": "notice",
       "inventory_entry": "msvc-runtime",
-      "path": ".deps/msvc-runtime/14.44.35211.0/notices/ThirdPartyNotices.txt",
+      "path": ".deps/msvc-runtime/14.44.35211.0-complete/notices/ThirdPartyNotices.txt",
       "destination": "licenses/MSVC-ThirdPartyNotices.txt"
     },
     {

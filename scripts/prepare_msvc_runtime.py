@@ -23,10 +23,12 @@ RUNTIME_NAMES = (
     "msvcp140.dll",
     "msvcp140_1.dll",
     "msvcp140_2.dll",
+    "msvcp140_atomic_wait.dll",
     "vcruntime140.dll",
     "vcruntime140_1.dll",
 )
 _FORBIDDEN_PARTS = {"system32", "syswow64", "systemwow64", "debug_nonredist"}
+_COHORT_SUFFIX = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?")
 
 
 def checked_path(path: Path) -> Path:
@@ -92,15 +94,22 @@ def _existing_matches(output: Path, expected: dict[str, bytes]) -> bool:
     return actual_files == set(expected) and actual_dirs == {"bin", "notices"}
 
 
+def _output_name_allowed(name: str, version: str) -> bool:
+    """Allow the legacy <version> directory or one <version>-<cohort> sibling."""
+    if name == version:
+        return True
+    prefix = f"{version}-"
+    return name.startswith(prefix) and _COHORT_SUFFIX.fullmatch(name[len(prefix):]) is not None
+
+
 def prepare(crt_dir: Path, notice_files: list[Path], output: Path, version: str,
             *, workspace_root: Path) -> dict:
     if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){3}", version):
         raise ValueError("Version must contain four numeric components")
     workspace = checked_path(workspace_root)
     output = checked_path(output)
-    expected_output = workspace / ".deps" / "msvc-runtime" / version
-    if output != expected_output:
-        raise ValueError("Output must be .deps/msvc-runtime/<version> in this workspace")
+    if output.parent != workspace / ".deps" / "msvc-runtime" or not _output_name_allowed(output.name, version):
+        raise ValueError("Output must be .deps/msvc-runtime/<version> or <version>-<cohort> in this workspace")
     crt_dir = source_path(crt_dir)
     if (crt_dir.name.casefold() != "microsoft.vc143.crt" or crt_dir.parent.name.casefold() != "x64"
             or "redist" not in {part.casefold() for part in crt_dir.parts} or not crt_dir.is_dir()):

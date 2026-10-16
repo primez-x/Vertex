@@ -37,22 +37,29 @@ class InstalledRuntimeTests(unittest.TestCase):
     def declarations(self):
         return {name: {"C:\\installed\\bin\\" + name} for name in runtime.REQUIRED_MODULES}
 
+    def test_required_module_set_is_pinned_to_installed_runtime_contract(self):
+        self.assertEqual(runtime.REQUIRED_MODULES, {
+            "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "msvcp140_atomic_wait.dll",
+            "vcruntime140.dll", "vcruntime140_1.dll", "qwindows.dll"})
+
     def test_required_modules_match_case_insensitive_installed_paths(self):
         declared = self.declarations()
         observed = [next(iter(paths)).upper() for paths in declared.values()]
         observed.append("C:\\Windows\\System32\\kernel32.dll")
         result = runtime.validate_module_paths(observed, declared)
         self.assertEqual(result["errors"], [])
-        self.assertEqual(len(result["required_modules_observed"]), 6)
+        self.assertEqual(result["required_modules_observed"], sorted(runtime.REQUIRED_MODULES))
         self.assertEqual(result["other_module_paths_unqualified"],
                          ["C:\\Windows\\System32\\kernel32.dll"])
 
     def test_sdk_copy_fails_even_if_same_module_also_seen_in_install(self):
-        declared = self.declarations()
-        observed = [next(iter(paths)) for paths in declared.values()]
-        observed.append("C:\\SDK\\bin\\msvcp140.dll")
-        result = runtime.validate_module_paths(observed, declared)
-        self.assertTrue(any("undeclared path" in error for error in result["errors"]))
+        for name in sorted(runtime.REQUIRED_MODULES):
+            with self.subTest(module=name):
+                declared = self.declarations()
+                observed = [next(iter(paths)) for paths in declared.values()]
+                observed.append("C:\\SDK\\bin\\" + name)
+                result = runtime.validate_module_paths(observed, declared)
+                self.assertTrue(any("undeclared path" in error for error in result["errors"]))
 
     def test_optional_packaged_module_cannot_load_from_sdk(self):
         declared = self.declarations()
@@ -62,11 +69,38 @@ class InstalledRuntimeTests(unittest.TestCase):
         self.assertTrue(runtime.validate_module_paths(observed, declared)["errors"])
 
     def test_missing_or_undeclared_required_modules_fail(self):
-        declared = self.declarations()
-        observed = [next(iter(paths)) for paths in declared.values()]
-        self.assertTrue(runtime.validate_module_paths(observed[:-1], declared)["errors"])
-        del declared["qwindows.dll"]
-        self.assertTrue(runtime.validate_module_paths(observed, declared)["errors"])
+        for name in sorted(runtime.REQUIRED_MODULES):
+            with self.subTest(module=name):
+                declared = self.declarations()
+                observed = [next(iter(paths)) for module, paths in declared.items() if module != name]
+                result = runtime.validate_module_paths(observed, declared)
+                self.assertIn(f"required installed modules not observed: {name}", result["errors"])
+                undeclared = {module: paths for module, paths in declared.items() if module != name}
+                observed = [next(iter(paths)) for paths in declared.values()]
+                result = runtime.validate_module_paths(observed, undeclared)
+                self.assertIn("required module not declared in runtime manifest: C:\\installed\\bin\\" + name,
+                              result["errors"])
+
+    def test_manifest_must_declare_every_required_module(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            for name in runtime.REQUIRED_MODULES:
+                (root / name).write_bytes(b"MZ")
+
+            def write_manifest(names):
+                rows = [{"path": name, "sha256": "a" * 64} for name in sorted(names)]
+                (root / "runtime-manifest.json").write_text(
+                    json.dumps({"manifest_kind": "runtime", "files": rows}), encoding="utf-8")
+
+            for name in sorted(runtime.REQUIRED_MODULES):
+                with self.subTest(omitted=name):
+                    write_manifest(runtime.REQUIRED_MODULES - {name})
+                    with self.assertRaises(ValueError) as context:
+                        runtime.load_runtime_manifest(root)
+                    self.assertEqual(str(context.exception), "runtime manifest does not declare: " + name)
+            write_manifest(runtime.REQUIRED_MODULES)
+            _, declared, _ = runtime.load_runtime_manifest(root)
+            self.assertEqual(set(declared), runtime.REQUIRED_MODULES)
 
     def test_environment_removes_sdk_searches_without_dumping_inherited_values(self):
         original = {"Path": "C:\\SDK", "QT_PLUGIN_PATH": "C:\\SDK\\plugins",

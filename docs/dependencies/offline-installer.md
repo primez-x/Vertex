@@ -10,9 +10,11 @@ EXE installer, or production release.
 Prepare the app-local runtime from the licensed SDK's x64 CRT directory using
 `scripts/prepare_msvc_runtime.py --crt-dir <SDK-CRT-directory> --version 14.44.35211.0
 --notice-file <Redist.txt> --notice-file <ThirdPartyNotices.txt>
---output .deps/msvc-runtime/14.44.35211.0`. This is a developer packaging step;
+--output .deps/msvc-runtime/14.44.35211.0-complete`. This is a developer packaging step;
 it does not install anything globally. The script validates x64 DLL headers,
-copies only five named runtime DLLs, and records portable hashes and provenance.
+copies only six named runtime DLLs, including `msvcp140_atomic_wait.dll`, and
+records portable hashes and provenance. A named sibling cohort preserves the
+previous five-DLL preparation without overwriting it.
 The component catalog independently pins their reviewed hashes. Do not copy
 DLLs from System32 or use debug runtimes. See Microsoft's
 [deployment methods](https://learn.microsoft.com/en-us/cpp/windows/choosing-a-deployment-method?view=msvc-170)
@@ -227,7 +229,7 @@ This generated PNG check does not cover PDF or arbitrary raster compatibility,
 independently attest worker controls, or qualify production isolation.
 The harness samples loaded module paths and checks observed
 packaged modules against the installed manifest and hashes.
-The five CRT DLLs and Qt Windows platform plugin must be observed inside the
+The six CRT DLLs and Qt Windows platform plugin must be observed inside the
 installation. Each run writes a new evidence directory, including failure
 reports. Sampling cannot establish complete dynamic-load coverage; screenshot
 headers and dimensions are checked automatically, with visual review separate.
