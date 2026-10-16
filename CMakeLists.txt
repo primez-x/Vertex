@@ -1542,6 +1542,15 @@ if(SKETCH_BUILD_DESKTOP)
     set_tests_properties(mixed_component_structural_resize_desktop PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+    add_executable(component_details_desktop_tests tests/component_details_desktop_tests.cpp)
+    target_link_libraries(component_details_desktop_tests PRIVATE sketch_desktop)
+    if(MSVC)
+      target_compile_options(component_details_desktop_tests PRIVATE /W4 /permissive- /utf-8)
+    endif()
+    add_test(NAME component_details_desktop COMMAND component_details_desktop_tests)
+    set_tests_properties(component_details_desktop PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     add_executable(mixed_component_physical_resize_desktop_tests tests/mixed_component_physical_resize_desktop_tests.cpp)
     target_link_libraries(mixed_component_physical_resize_desktop_tests PRIVATE sketch_desktop)
     qt_add_resources(mixed_component_physical_resize_desktop_tests mixed_component_physical_test_fonts PREFIX "/fonts" BASE assets/fonts

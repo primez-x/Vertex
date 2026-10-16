@@ -15,6 +15,7 @@
 #include <QFont>
 #include <QFontDatabase>
 #include <QGroupBox>
+#include <QToolButton>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMouseEvent>
@@ -184,6 +185,11 @@ void actual_wall_controls_preserve_geometry_and_raw_siblings() {
     display(window);require(window.selectEntity(wall),"select wall for actual Dimension controls");
     mouse(canvas(window),QEvent::MouseButtonDblClick,screen(canvas(window),{2.5,0}));
     QApplication::processEvents();
+    // Wall length-label styling sits under the panel's collapsed More options.
+    auto* more=window.findChild<QWidget*>(QStringLiteral("inspectorMoreOptions"));
+    auto* toggle=more ? more->findChild<QToolButton*>(QStringLiteral("advancedSectionToggle")) : nullptr;
+    require(toggle!=nullptr,"wall quick properties offers More options");
+    if(!toggle->isChecked())toggle->click();QApplication::processEvents();
     auto* group=window.findChild<QGroupBox*>(QStringLiteral("dimensionProperties"));
     require(group && group->isVisible() && button(window,"applyBoundaryDimension").isEnabled(),"selected wall must offer enabled Dimension controls");
     const auto defaults=visible_label(window,wall);require(defaults.text==QStringLiteral("4 m"),"default wall value must derive its analytical length");

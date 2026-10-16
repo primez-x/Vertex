@@ -19,6 +19,7 @@
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QToolButton>
 #include <algorithm>
 #include <exception>
 #include <functional>
@@ -58,6 +59,9 @@ void properties(MainWindow& window,const QString& id,sketch::Vec2 point){
     const QPointF pixel(viewport.center().x()+(point.x-center.x)*scale,viewport.center().y()-(point.y-center.y)*scale);
     QMouseEvent event(QEvent::MouseButtonDblClick,pixel,drawing.mapToGlobal(pixel.toPoint()),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
     QApplication::sendEvent(&drawing,&event);QApplication::processEvents();
+    // Colors sits under the panel's collapsed More options.
+    auto& more=*child<QWidget>(window,"annotationMoreOptions").findChild<QToolButton*>(QStringLiteral("advancedSectionToggle"));
+    if(!more.isChecked())more.click();QApplication::processEvents();
     require(child<QScrollArea>(window,"contextEditor").isVisible()&&child<QPushButton>(window,"symbolColorsButton").isVisible(),"actual component double click exposes Colors in quick properties");
 }
 void editor(MainWindow& window,const std::function<void(QDialog&)>& edit){

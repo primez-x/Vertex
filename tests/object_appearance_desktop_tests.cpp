@@ -20,6 +20,7 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QScrollArea>
+#include <QToolButton>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QTreeWidget>
@@ -64,6 +65,9 @@ void hierarchy_properties(MainWindow& window,const QString& id) {
     send(QEvent::MouseButtonDblClick);send(QEvent::MouseButtonRelease);QApplication::processEvents();
     require(window.selectedEntityId()==id && child<QScrollArea>(window,"contextEditor").isVisible(),
         "actual hidden-object hierarchy double click must open quick properties");
+    // Drawing appearance sits under the panel's collapsed More options.
+    auto& more=*child<QWidget>(window,"inspectorMoreOptions").findChild<QToolButton*>(QStringLiteral("advancedSectionToggle"));
+    if(!more.isChecked())more.click();QApplication::processEvents();
     require(child<QPushButton>(window,"objectAppearanceButton").isVisible() &&
         child<QPushButton>(window,"objectAppearanceButton").isEnabled(),"hierarchy quick properties exposes hidden-object drawing appearance");
 }

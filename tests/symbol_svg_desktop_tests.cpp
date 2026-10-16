@@ -476,8 +476,9 @@ int main(int argc, char** argv) {
             require(control != nullptr, "annotation inspector control is missing");
             control->setText(QString::fromLatin1(value));
         };
-        set_property("annotationX", "3");
-        set_property("annotationY", "2");
+        // Position fields read in project units; state metres explicitly.
+        set_property("annotationX", "3 m");
+        set_property("annotationY", "2 m");
         set_property("annotationRotation", "30");
         set_property("annotationScale", "1.5");
         auto* apply = window.findChild<QPushButton*>(QStringLiteral("applyAnnotation"));

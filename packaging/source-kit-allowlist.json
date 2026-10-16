@@ -6575,6 +6575,10 @@
     },
     {
       "category": "source",
+      "path": "tests/component_details_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/connected_wall_canvas_tests.cpp"
     },
     {

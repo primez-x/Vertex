@@ -60003,6 +60003,14 @@ private:
         m_inspector_context->setWordWrap(true);
         m_inspector_context->setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Maximum);
         inspector_layout->addWidget(m_inspector_context);
+        m_inspector_layout = inspector_layout;
+        // Everyday fields stay in view; less common settings and editors sit
+        // in one collapsed section (design-system InspectorSection pattern).
+        m_inspector_more = new AdvancedSection(QStringLiteral("contextEditor"), inspector_body,
+                                               QStringLiteral("More options"));
+        m_inspector_more->setObjectName(QStringLiteral("inspectorMoreOptions"));
+        m_inspector_more->form()->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        m_inspector_more->form()->setRowWrapPolicy(QFormLayout::WrapLongRows);
         m_material_group = new QWidget(inspector_body);
         auto* material_layout = new QVBoxLayout(m_material_group);
         material_layout->setContentsMargins(0, 0, 0, 0);
@@ -60023,16 +60031,16 @@ private:
         m_material_error->setObjectName("materialAssignmentError");
         m_material_error->setWordWrap(true);
         material_layout->addWidget(m_material_error);
-        inspector_layout->addWidget(m_material_group);
+        m_inspector_more->form()->addRow(m_material_group);
         m_door_swing_button = new QPushButton("Door operation…", inspector_body);
         m_door_swing_button->setObjectName("editDoorSwing");
-        inspector_layout->addWidget(m_door_swing_button);
+        m_inspector_more->form()->addRow(m_door_swing_button);
         QObject::connect(m_door_swing_button, &QPushButton::clicked, owner, [this] { showDoorSwingEditor(); });
         m_opening_assembly_button = new QPushButton(QStringLiteral("Opening assembly…"), inspector_body);
         m_opening_assembly_button->setObjectName(QStringLiteral("editOpeningAssembly"));
         m_opening_assembly_button->setToolTip(QStringLiteral(
             "Edit the hosted frame, panel or sash, glazing, and wall-centreline inset."));
-        inspector_layout->addWidget(m_opening_assembly_button);
+        m_inspector_more->form()->addRow(m_opening_assembly_button);
         QObject::connect(m_opening_assembly_button, &QPushButton::clicked, owner,
                          [this] { showOpeningAssemblyEditor(); });
         QObject::connect(apply_material, &QPushButton::clicked, owner, [this] {
@@ -60077,7 +60085,7 @@ private:
         m_object_appearance_button = new QPushButton(QStringLiteral("Drawing appearance…"), inspector_body);
         m_object_appearance_button->setObjectName(QStringLiteral("objectAppearanceButton"));
         m_object_appearance_button->setAccessibleName(QStringLiteral("Selected object drawing appearance"));
-        inspector_layout->addWidget(m_object_appearance_button);
+        m_inspector_more->form()->addRow(m_object_appearance_button);
         QObject::connect(m_object_appearance_button, &QPushButton::clicked, owner,
                          [this] { showObjectAppearance(); });
         m_edit_curve_button = new QPushButton(QStringLiteral("Edit curve…"), inspector_body);
@@ -60094,7 +60102,7 @@ private:
         m_edit_layers_button->setObjectName(QStringLiteral("editWallLayers"));
         m_edit_layers_button->setToolTip(QStringLiteral(
             "Edit the selected architectural assembly's ordered material layers and thicknesses"));
-        inspector_layout->addWidget(m_edit_layers_button);
+        m_inspector_more->form()->addRow(m_edit_layers_button);
         QObject::connect(m_edit_layers_button, &QPushButton::clicked, owner,
                          [this] { showWallLayerEditor(); });
         m_roof_properties_group = new QGroupBox(QStringLiteral("Roof dimensions"), inspector_body);
@@ -60255,25 +60263,33 @@ private:
                                      m_project_subject_reference_edit->text(),
                                      m_project_subject_attributes_edit->toPlainText());
         });
-        m_annotation_group = new QGroupBox(QStringLiteral("Annotation properties"), inspector_body);
+        m_annotation_group = new QGroupBox(inspector_body);
         m_annotation_group->setObjectName(QStringLiteral("annotationProperties"));
+        m_annotation_group->setFlat(true);
+        m_annotation_group->setStyleSheet(QStringLiteral(
+            "QGroupBox#annotationProperties { border: none; margin: 0; padding: 0; }"));
         auto* annotation_layout = new QFormLayout(m_annotation_group);
+        annotation_layout->setContentsMargins(0, 0, 0, 0);
         m_annotation_layout = annotation_layout;
+        m_annotation_more = new AdvancedSection(QStringLiteral("contextEditorAnnotation"), m_annotation_group,
+                                                QStringLiteral("More options"));
+        m_annotation_more->setObjectName(QStringLiteral("annotationMoreOptions"));
+        auto* annotation_more_layout = m_annotation_more->form();
         m_annotation_content_edit = new QLineEdit(m_annotation_group);
         m_annotation_content_edit->setObjectName(QStringLiteral("annotationContent"));
         annotation_layout->addRow(QStringLiteral("Text"), m_annotation_content_edit);
         m_annotation_x_edit = new QLineEdit(m_annotation_group);
         m_annotation_x_edit->setObjectName(QStringLiteral("annotationX"));
-        annotation_layout->addRow(QStringLiteral("Position X (m)"), m_annotation_x_edit);
+        annotation_more_layout->addRow(QStringLiteral("Position X"), m_annotation_x_edit);
         m_annotation_y_edit = new QLineEdit(m_annotation_group);
         m_annotation_y_edit->setObjectName(QStringLiteral("annotationY"));
-        annotation_layout->addRow(QStringLiteral("Position Y (m)"), m_annotation_y_edit);
+        annotation_more_layout->addRow(QStringLiteral("Position Y"), m_annotation_y_edit);
         m_annotation_rotation_edit = new QLineEdit(m_annotation_group);
         m_annotation_rotation_edit->setObjectName(QStringLiteral("annotationRotation"));
-        annotation_layout->addRow(QStringLiteral("Rotation (deg)"), m_annotation_rotation_edit);
+        annotation_layout->addRow(QStringLiteral("Rotation (°)"), m_annotation_rotation_edit);
         m_annotation_scale_edit = new QLineEdit(m_annotation_group);
         m_annotation_scale_edit->setObjectName(QStringLiteral("annotationScale"));
-        annotation_layout->addRow(QStringLiteral("Scale"), m_annotation_scale_edit);
+        annotation_more_layout->addRow(QStringLiteral("Scale"), m_annotation_scale_edit);
         m_symbol_width_edit = new QLineEdit(m_annotation_group);
         m_symbol_width_edit->setObjectName(QStringLiteral("symbolWidth"));
         annotation_layout->addRow(QStringLiteral("Width"), m_symbol_width_edit);
@@ -60282,23 +60298,23 @@ private:
         annotation_layout->addRow(QStringLiteral("Depth"), m_symbol_depth_edit);
         m_symbol_colors_button=new QPushButton(QStringLiteral("Colors…"),m_annotation_group);
         m_symbol_colors_button->setObjectName(QStringLiteral("symbolColorsButton"));
-        annotation_layout->addRow(m_symbol_colors_button);
+        annotation_more_layout->addRow(m_symbol_colors_button);
         QObject::connect(m_symbol_colors_button,&QPushButton::clicked,owner,[this]{showSymbolColors();});
         m_symbol_flip_horizontal = new QCheckBox(QStringLiteral("Flip horizontally"), m_annotation_group);
         m_symbol_flip_horizontal->setObjectName(QStringLiteral("symbolFlipHorizontal"));
-        annotation_layout->addRow(m_symbol_flip_horizontal);
+        annotation_more_layout->addRow(m_symbol_flip_horizontal);
         m_symbol_flip_vertical = new QCheckBox(QStringLiteral("Flip vertically"), m_annotation_group);
         m_symbol_flip_vertical->setObjectName(QStringLiteral("symbolFlipVertical"));
-        annotation_layout->addRow(m_symbol_flip_vertical);
+        annotation_more_layout->addRow(m_symbol_flip_vertical);
         m_annotation_font_edit = new QLineEdit(m_annotation_group);
         m_annotation_font_edit->setObjectName(QStringLiteral("annotationFontFamily"));
         m_annotation_font_edit->setPlaceholderText(QStringLiteral("sans-serif"));
-        annotation_layout->addRow(QStringLiteral("Font family"), m_annotation_font_edit);
+        annotation_more_layout->addRow(QStringLiteral("Font"), m_annotation_font_edit);
         m_annotation_alignment_combo=new QComboBox(m_annotation_group);
         m_annotation_alignment_combo->setObjectName(QStringLiteral("annotationTextAlignment"));
         for (const auto* value:{"left","center","right"})
             m_annotation_alignment_combo->addItem(QString::fromLatin1(value).replace(0,1,QString::fromLatin1(value).left(1).toUpper()),QString::fromLatin1(value));
-        annotation_layout->addRow(QStringLiteral("Alignment"),m_annotation_alignment_combo);
+        annotation_more_layout->addRow(QStringLiteral("Alignment"),m_annotation_alignment_combo);
         m_annotation_text_height_edit = new QLineEdit(m_annotation_group);
         m_annotation_text_height_edit->setObjectName(QStringLiteral("annotationTextHeightMm"));
         m_annotation_text_height_edit->setToolTip(QStringLiteral("Paper text height in millimetres"));
@@ -60306,11 +60322,11 @@ private:
         m_annotation_stroke_color_edit = new QLineEdit(m_annotation_group);
         m_annotation_stroke_color_edit->setObjectName(QStringLiteral("annotationStrokeColor"));
         m_annotation_stroke_color_edit->setPlaceholderText(QStringLiteral("#RRGGBB"));
-        annotation_layout->addRow(QStringLiteral("Stroke color"), m_annotation_stroke_color_edit);
+        annotation_more_layout->addRow(QStringLiteral("Stroke color"), m_annotation_stroke_color_edit);
         m_annotation_fill_color_edit = new QLineEdit(m_annotation_group);
         m_annotation_fill_color_edit->setObjectName(QStringLiteral("annotationFillColor"));
         m_annotation_fill_color_edit->setPlaceholderText(QStringLiteral("#RRGGBB"));
-        annotation_layout->addRow(QStringLiteral("Fill color"), m_annotation_fill_color_edit);
+        annotation_more_layout->addRow(QStringLiteral("Fill color"), m_annotation_fill_color_edit);
         auto* annotation_style_flags = new QWidget(m_annotation_group);
         m_annotation_style_flags = annotation_style_flags;
         auto* annotation_style_flags_layout = new QHBoxLayout(annotation_style_flags);
@@ -60321,10 +60337,11 @@ private:
         m_annotation_italic_check->setObjectName(QStringLiteral("annotationItalic"));
         annotation_style_flags_layout->addWidget(m_annotation_bold_check);
         annotation_style_flags_layout->addWidget(m_annotation_italic_check);
-        annotation_layout->addRow(annotation_style_flags);
+        annotation_more_layout->addRow(annotation_style_flags);
         m_annotation_visible_check = new QCheckBox(QStringLiteral("Visible"), m_annotation_group);
         m_annotation_visible_check->setObjectName(QStringLiteral("annotationVisible"));
-        annotation_layout->addRow(m_annotation_visible_check);
+        annotation_more_layout->addRow(m_annotation_visible_check);
+        annotation_layout->addRow(m_annotation_more);
         m_symbol_migration_status = new QLabel(m_annotation_group);
         m_symbol_migration_status->setObjectName(QStringLiteral("symbolMigrationStatus"));
         m_symbol_migration_status->setWordWrap(true);
@@ -60337,14 +60354,28 @@ private:
         annotation_layout->addRow(m_migrate_symbol_button);
         QObject::connect(m_migrate_symbol_button, &QPushButton::clicked, owner,
                          [this] { (void)migrateSelectedSymbolArtwork(); });
-        m_apply_annotation_button = new QPushButton(QStringLiteral("Apply annotation"), m_annotation_group);
+        m_apply_annotation_button = new QPushButton(QStringLiteral("Apply"), m_annotation_group);
         m_apply_annotation_button->setObjectName(QStringLiteral("applyAnnotation"));
         annotation_layout->addRow(m_apply_annotation_button);
         m_annotation_group->setVisible(false);
         inspector_layout->addWidget(m_annotation_group);
         QObject::connect(m_apply_annotation_button, &QPushButton::clicked, owner, [this] {
+            // Positions show in project units; the edit command takes metres.
+            QString x_metres, y_metres;
+            try {
+                const auto metres = [this](QLineEdit* field, const QString& shown, double original) {
+                    const auto text = field->text().trimmed();
+                    return QString::number(text == shown ? original :
+                        parse_quantity(text.toStdString(), m_metric_units ? Unit::metre : Unit::foot).metres, 'g', 17);
+                };
+                x_metres = metres(m_annotation_x_edit, m_annotation_position_text.first, m_annotation_position.x);
+                y_metres = metres(m_annotation_y_edit, m_annotation_position_text.second, m_annotation_position.y);
+            } catch (const std::exception&) {
+                setError(QStringLiteral("Enter the position as a length, for example 3' 6\" or 1.2 m."));
+                return;
+            }
             (void)editAnnotation(m_selected_id, m_annotation_content_edit->text(),
-                                 m_annotation_x_edit->text(), m_annotation_y_edit->text(),
+                                 x_metres, y_metres,
                                  m_annotation_rotation_edit->text(), m_annotation_scale_edit->text(),
                                  m_annotation_visible_check->isChecked(),
                                  m_annotation_font_edit->text(),
@@ -60432,7 +60463,6 @@ private:
         geometry_actions_layout->addWidget(m_boundary_geometry_button);
         geometry_actions_layout->addWidget(m_edit_curve_button);
         geometry_actions_layout->addWidget(m_constraint_button);
-        inspector_layout->addWidget(m_geometry_actions);
         auto* form = new QFormLayout;
         m_geometry_form = form;
         form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
@@ -60479,24 +60509,26 @@ private:
         m_opening_host_combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
         m_opening_host_combo->setMinimumWidth(0);
         m_opening_host_combo->setToolTip(QStringLiteral("Move this door or window to another active wall on the same floor and base elevation"));
-        form->addRow(QStringLiteral("Host wall"), m_opening_host_combo);
-        form->setRowVisible(m_opening_host_combo, false);
+        m_inspector_more->form()->addRow(QStringLiteral("Host wall"), m_opening_host_combo);
+        m_inspector_more->form()->setRowVisible(m_opening_host_combo, false);
         m_elevation_edit = new QLineEdit(inspector_body);
         m_elevation_edit->setObjectName(QStringLiteral("inspectorElevation"));
         m_elevation_edit->setToolTip(QStringLiteral("Base elevation in the current input units"));
         m_elevation_edit->setMinimumWidth(0);
-        form->addRow(QStringLiteral("Base elevation"), m_elevation_edit);
+        m_inspector_more->form()->addRow(QStringLiteral("Base elevation"), m_elevation_edit);
         m_slope_rise_edit = new QLineEdit(inspector_body);
         m_slope_rise_edit->setObjectName(QStringLiteral("inspectorSlopeRise"));
         m_slope_rise_edit->setToolTip(QStringLiteral(
             "Signed change in top height from the wall start to its end. Curved walls use a planar top through these heights; zero clears the slope."));
         m_slope_rise_edit->setMinimumWidth(0);
-        form->addRow(QStringLiteral("Top rise"), m_slope_rise_edit);
+        m_inspector_more->form()->addRow(QStringLiteral("Top rise"), m_slope_rise_edit);
         m_thickness_edit = new QLineEdit(inspector_body);
         m_thickness_edit->setObjectName(QStringLiteral("inspectorThickness"));
         m_thickness_edit->setMinimumWidth(0);
         form->addRow(QStringLiteral("Thickness"), m_thickness_edit);
         inspector_layout->addLayout(form);
+        // Geometry editors follow the sizes they change.
+        inspector_layout->addWidget(m_geometry_actions);
 
         m_dimension_properties_group = new QGroupBox(QStringLiteral("Dimension"), inspector_body);
         m_dimension_properties_group->setObjectName(QStringLiteral("dimensionProperties"));
@@ -60531,7 +60563,7 @@ private:
         dimension_flag_layout->addWidget(m_dimension_italic_check);
         dimension_flag_layout->addWidget(m_dimension_visible_check);
         dimension_form->addRow(dimension_flags);
-        auto* apply_dimension = new QPushButton(QStringLiteral("Apply dimension"), m_dimension_properties_group);
+        auto* apply_dimension = new QPushButton(QStringLiteral("Apply"), m_dimension_properties_group);
         apply_dimension->setObjectName(QStringLiteral("applyBoundaryDimension"));
         apply_dimension->setMinimumHeight(28);
         dimension_form->addRow(apply_dimension);
@@ -60917,6 +60949,7 @@ private:
                          [this] { showAreaAttributesEditor(); });
         m_area_attributes_group->setVisible(false);
         inspector_layout->addWidget(m_area_attributes_group);
+        inspector_layout->addWidget(m_inspector_more);
         m_read_only_label = new QLabel(inspector_body);
         m_read_only_label->setWordWrap(true);
         m_read_only_label->setStyleSheet(QStringLiteral("color:#d59564;"));
@@ -68741,7 +68774,44 @@ private:
         }
     }
 
+    // Inspector rows live in the main form or in a collapsed More section;
+    // show or hide a row wherever it is.
+    void setInspectorRowVisible(QWidget* field, bool visible) {
+        for (auto* form : {m_geometry_form, m_annotation_layout, m_inspector_more->form(), m_annotation_more->form()}) {
+            int row = -1;
+            QFormLayout::ItemRole role{};
+            form->getWidgetPosition(field, &row, &role);
+            if (row >= 0) { form->setRowVisible(row, visible); return; }
+        }
+    }
+
+    // The heading names the object; the line below adds detail only when
+    // there is something to say beyond the object kind.
+    void setInspectorTitle(const QString& text) {
+        const auto split = text.indexOf(QLatin1Char('\n'));
+        if (m_inspector_heading) m_inspector_heading->setText(split < 0 ? text : text.left(split));
+        const auto detail = split < 0 ? QString{} : text.mid(split + 1);
+        m_inspector_context->setText(detail);
+        m_inspector_context->setVisible(!detail.isEmpty());
+    }
+
+    // Collapsed More shows only when it holds something for this selection.
+    void refreshInspectorMore() {
+        for (auto* section : {m_inspector_more, m_annotation_more}) {
+            auto* body = section->body();
+            const auto children = body->findChildren<QWidget*>(Qt::FindDirectChildrenOnly);
+            section->setVisible(std::any_of(children.begin(), children.end(), [&](QWidget* child) {
+                return !qobject_cast<QLabel*>(child) && child->isVisibleTo(body);
+            }));
+        }
+    }
+
     void refreshInspector() {
+        refreshInspectorContents();
+        refreshInspectorMore();
+    }
+
+    void refreshInspectorContents() {
         m_opening_property_context.reset();
         if (mixedSemanticSelection()) {
             m_dimension_edit_context.reset(); m_dimension_edit_source.reset();
@@ -68761,14 +68831,14 @@ private:
         }
         {
             QSignalBlocker blocker(m_opening_host_combo);
-            m_geometry_form->setRowVisible(m_opening_host_combo, false);
+            setInspectorRowVisible(m_opening_host_combo, false);
             m_opening_host_combo->setEnabled(false);
             m_opening_host_combo->clear();
             m_opening_host_combo->setToolTip(QStringLiteral("Move this door or window to another active wall on the same floor and base elevation"));
         }
         for (auto* field : {m_opening_offset_edit, m_opening_sill_edit}) {
             QSignalBlocker blocker(field);
-            m_geometry_form->setRowVisible(field, false);
+            setInspectorRowVisible(field, false);
             field->setEnabled(false);
             field->clear();
         }
@@ -68802,7 +68872,7 @@ private:
                     field->setText(format_length(value, m_metric_units));
                     field->setModified(false);
                     field->setEnabled(editable);
-                    m_geometry_form->setRowVisible(field, true);
+                    setInspectorRowVisible(field, true);
                 };
                 fill(m_opening_offset_edit, opening->offset);
                 fill(m_opening_sill_edit, opening->sill);
@@ -68856,10 +68926,12 @@ private:
                             const auto layer = inspector_snapshot.entities().find(target_context->layer_id);
                             const auto layer_name = layer == inspector_snapshot.entities().end() ? std::optional<std::string>{} :
                                 read_string(layer->second.properties, "name");
-                            auto label = name && !name->empty() ? QString::fromStdString(*name) :
-                                QStringLiteral("Wall %1").arg(id_from(id).right(8));
+                            auto label = name && !name->empty() ? QString::fromStdString(*name) : QStringLiteral("Wall");
                             label += QStringLiteral(" · %1").arg(format_length(segment_length(resolved.baseline), m_metric_units));
                             if (layer_name && !layer_name->empty()) label += QStringLiteral(" · %1").arg(QString::fromStdString(*layer_name));
+                            // Number look-alike walls instead of showing internal IDs.
+                            for (int repeat = 2; m_opening_host_combo->findText(label) >= 0; ++repeat)
+                                label = label.section(QStringLiteral(" (#"), 0, 0) + QStringLiteral(" (#%1)").arg(repeat);
                             m_opening_host_combo->addItem(label, id_from(id));
                         } catch (const std::exception&) {
                             // Unresolved candidate walls are not actionable host
@@ -68868,19 +68940,24 @@ private:
                     }
                     m_opening_host_combo->setCurrentIndex(m_opening_host_combo->findData(id_from(host_id)));
                     m_opening_host_combo->setEnabled(editable && m_opening_host_combo->count() > 1);
-                    m_geometry_form->setRowVisible(m_opening_host_combo, true);
+                    setInspectorRowVisible(m_opening_host_combo, true);
                 } catch (const std::exception& error) {
                     m_opening_host_combo->setToolTip(QString::fromUtf8(error.what()));
                 }
             }
         }
-        if (m_inspector_heading) m_inspector_heading->setText(QStringLiteral("Properties"));
         m_dimension_edit_context.reset();
         m_dimension_edit_source.reset();
         m_dimension_properties_group->hide();
         m_dimension_error->hide();
         const bool wall_measurement=entity && entity->type=="wall" && m_selected_ids.size()==1;
-        m_dimension_properties_group->setTitle(wall_measurement ? QStringLiteral("Wall measurement") : QStringLiteral("Dimension"));
+        m_dimension_properties_group->setTitle(wall_measurement ? QStringLiteral("Length label") : QStringLiteral("Dimension"));
+        if (wall_measurement && m_dimension_properties_group->parentWidget()!=m_inspector_more->body())
+            m_inspector_more->form()->addRow(m_dimension_properties_group);
+        else if (!wall_measurement && m_dimension_properties_group->parentWidget()==m_inspector_more->body()) {
+            m_inspector_more->form()->takeRow(m_dimension_properties_group);
+            m_inspector_layout->insertWidget(m_inspector_layout->indexOf(m_inspector_more), m_dimension_properties_group);
+        }
         if (auto* placement=owner->findChild<QWidget*>(QStringLiteral("wallMeasurementPlacement")))
             placement->setVisible(wall_measurement);
         if (wall_measurement) {
@@ -68958,7 +69035,7 @@ private:
                         [&](const auto& value) { return value.id == wanted; });
                     if (label != state.labels.end()) {
                         selected_annotation_label = *label;
-                        annotation_context = QStringLiteral("Label\n%1")
+                        annotation_context = QStringLiteral("Text\n%1")
                             .arg(QString::fromStdString(label->content));
                         break;
                     }
@@ -68969,8 +69046,7 @@ private:
                         selected_annotation_symbol = *symbol;
                         const auto& catalog = desktop_symbol_catalog();
                         const auto resolved = resolved_symbol_definition(*symbol, catalog);
-                        auto component_name = QString::fromStdString(
-                            resolved.name.empty() ? resolved.family : resolved.name);
+                        auto component_name = library_display_name(catalog_symbol_name(resolved, m_metric_units));
                         if (component_name.isEmpty()) {
                             component_name = QString::fromStdString(symbol->symbol_id);
                             component_name.remove(QRegularExpression(QStringLiteral("-w\\d+-d\\d+$")));
@@ -69005,6 +69081,7 @@ private:
         m_edit_curve_button->setEnabled((curved_wall || curve_boundary) && editable);
         const bool slab = entity.has_value() && entity->type == "slab";
         m_edit_layers_button->setVisible(wall || slab);
+        m_edit_layers_button->setText(slab ? QStringLiteral("Slab layers…") : QStringLiteral("Wall layers…"));
         m_edit_layers_button->setEnabled((wall || slab) && editable);
         const bool opening = entity.has_value() && entity->type == "opening";
         m_door_swing_button->setVisible(opening && entity->properties.value("opening_kind", std::string{}) == "door");
@@ -69131,7 +69208,8 @@ private:
                 placement.edit->setText(placement.original_text);
             }
         }
-        m_delete_annotation_button->setVisible(annotation_context.has_value());
+        // Delete lives on the Delete key and the context menu.
+        m_delete_annotation_button->setVisible(false);
         m_delete_annotation_button->setEnabled(editable && annotation_context.has_value());
         m_annotation_group->setVisible(annotation_context.has_value());
         m_annotation_group->setEnabled(editable && annotation_context.has_value());
@@ -69221,7 +69299,7 @@ private:
         if (reference_asset) {
             m_project_details_group->setVisible(false);
             m_area_attributes_group->setVisible(false);
-            m_inspector_context->setText(
+            setInspectorTitle(
                 QStringLiteral("Reference image\n%1")
                     .arg(QString::fromStdString(read_string(entity->properties, "source_path")
                                                     .value_or("embedded raster"))));
@@ -69258,12 +69336,12 @@ private:
                 QSignalBlocker blocker(m_reference_visible_check);
                 m_reference_visible_check->setChecked(boolean_property("visible", true));
             }
-            m_geometry_form->setRowVisible(m_length_edit, false);
-            m_geometry_form->setRowVisible(m_classification_combo, false);
-            m_geometry_form->setRowVisible(m_height_edit, false);
-            m_geometry_form->setRowVisible(m_elevation_edit, false);
-            m_geometry_form->setRowVisible(m_slope_rise_edit, false);
-            m_geometry_form->setRowVisible(m_thickness_edit, false);
+            setInspectorRowVisible(m_length_edit, false);
+            setInspectorRowVisible(m_classification_combo, false);
+            setInspectorRowVisible(m_height_edit, false);
+            setInspectorRowVisible(m_elevation_edit, false);
+            setInspectorRowVisible(m_slope_rise_edit, false);
+            setInspectorRowVisible(m_thickness_edit, false);
             m_length_edit->setEnabled(false);
             m_height_edit->setEnabled(false);
             m_elevation_edit->setEnabled(false);
@@ -69278,34 +69356,27 @@ private:
         if (annotation_context.has_value()) {
             m_project_details_group->setVisible(false);
             m_area_attributes_group->setVisible(false);
-            m_inspector_context->setText(*annotation_context);
+            setInspectorTitle(*annotation_context);
             const bool text_label = selected_annotation_label.has_value();
-            if (m_inspector_heading)
-                m_inspector_heading->setText(text_label ? QStringLiteral("Text")
-                                                        : QStringLiteral("Component"));
             m_delete_annotation_button->setText(text_label ? QStringLiteral("Delete text")
                                                             : QStringLiteral("Delete component"));
-            m_apply_annotation_button->setText(text_label ? QStringLiteral("Apply text")
-                                                           : QStringLiteral("Apply component"));
-            m_annotation_group->setTitle(text_label ? QStringLiteral("Text properties")
-                                                    : QStringLiteral("Component properties"));
             if (m_annotation_layout) {
-                m_annotation_layout->setRowVisible(m_annotation_scale_edit, text_label);
-                m_annotation_layout->setRowVisible(m_symbol_width_edit, !text_label);
-                m_annotation_layout->setRowVisible(m_symbol_depth_edit, !text_label);
+                setInspectorRowVisible(m_annotation_scale_edit, text_label);
+                setInspectorRowVisible(m_symbol_width_edit, !text_label);
+                setInspectorRowVisible(m_symbol_depth_edit, !text_label);
                 const bool svg_component=selected_annotation_symbol && selected_annotation_symbol->definition && selected_annotation_symbol->definition->svg_asset;
-                m_annotation_layout->setRowVisible(m_symbol_colors_button,svg_component);
+                setInspectorRowVisible(m_symbol_colors_button,svg_component);
                 m_symbol_colors_button->setEnabled(svg_component && m_document->is_editable());
-                m_annotation_layout->setRowVisible(m_symbol_flip_horizontal, !text_label);
-                m_annotation_layout->setRowVisible(m_symbol_flip_vertical, !text_label);
-                m_annotation_layout->setRowVisible(m_annotation_content_edit, text_label);
-                m_annotation_layout->setRowVisible(m_annotation_font_edit, text_label);
-                m_annotation_layout->setRowVisible(m_annotation_text_height_edit, text_label);
-                m_annotation_layout->setRowVisible(m_annotation_alignment_combo, text_label);
-                m_annotation_layout->setRowVisible(m_annotation_stroke_color_edit, text_label);
-                m_annotation_layout->setRowVisible(m_annotation_fill_color_edit, text_label);
+                setInspectorRowVisible(m_symbol_flip_horizontal, !text_label);
+                setInspectorRowVisible(m_symbol_flip_vertical, !text_label);
+                setInspectorRowVisible(m_annotation_content_edit, text_label);
+                setInspectorRowVisible(m_annotation_font_edit, text_label);
+                setInspectorRowVisible(m_annotation_text_height_edit, text_label);
+                setInspectorRowVisible(m_annotation_alignment_combo, text_label);
+                setInspectorRowVisible(m_annotation_stroke_color_edit, text_label);
+                setInspectorRowVisible(m_annotation_fill_color_edit, text_label);
                 if (m_annotation_style_flags)
-                    m_annotation_layout->setRowVisible(m_annotation_style_flags, text_label);
+                    setInspectorRowVisible(m_annotation_style_flags, text_label);
             }
             {
                 QSignalBlocker blocker(m_annotation_content_edit);
@@ -69314,18 +69385,15 @@ private:
                                                        : QString{});
             }
             {
-                QSignalBlocker blocker(m_annotation_x_edit);
-                const auto position = selected_annotation_label.has_value()
-                                          ? selected_annotation_label->placement.position
-                                          : selected_annotation_symbol->placement.position;
-                m_annotation_x_edit->setText(QString::number(position.x, 'g', 17));
-            }
-            {
-                QSignalBlocker blocker(m_annotation_y_edit);
-                const auto position = selected_annotation_label.has_value()
-                                          ? selected_annotation_label->placement.position
-                                          : selected_annotation_symbol->placement.position;
-                m_annotation_y_edit->setText(QString::number(position.y, 'g', 17));
+                QSignalBlocker x_blocker(m_annotation_x_edit);
+                QSignalBlocker y_blocker(m_annotation_y_edit);
+                m_annotation_position = selected_annotation_label.has_value()
+                                            ? selected_annotation_label->placement.position
+                                            : selected_annotation_symbol->placement.position;
+                m_annotation_position_text = {format_length(m_annotation_position.x, m_metric_units),
+                                              format_length(m_annotation_position.y, m_metric_units)};
+                m_annotation_x_edit->setText(m_annotation_position_text.first);
+                m_annotation_y_edit->setText(m_annotation_position_text.second);
             }
             {
                 QSignalBlocker blocker(m_annotation_rotation_edit);
@@ -69399,12 +69467,12 @@ private:
             m_annotation_bold_check->setEnabled(editable);
             m_annotation_alignment_combo->setEnabled(editable);
             m_annotation_italic_check->setEnabled(editable);
-            m_geometry_form->setRowVisible(m_length_edit, false);
-            m_geometry_form->setRowVisible(m_classification_combo, false);
-            m_geometry_form->setRowVisible(m_height_edit, false);
-            m_geometry_form->setRowVisible(m_elevation_edit, false);
-            m_geometry_form->setRowVisible(m_slope_rise_edit, false);
-            m_geometry_form->setRowVisible(m_thickness_edit, false);
+            setInspectorRowVisible(m_length_edit, false);
+            setInspectorRowVisible(m_classification_combo, false);
+            setInspectorRowVisible(m_height_edit, false);
+            setInspectorRowVisible(m_elevation_edit, false);
+            setInspectorRowVisible(m_slope_rise_edit, false);
+            setInspectorRowVisible(m_thickness_edit, false);
             m_length_edit->setEnabled(false);
             m_height_edit->setEnabled(false);
             m_elevation_edit->setEnabled(false);
@@ -69471,20 +69539,20 @@ private:
         } else {
             m_area_attributes_summary->setText(QStringLiteral("—"));
         }
-        m_geometry_form->setRowVisible(m_length_edit, editable_geometry);
-        m_geometry_form->setRowVisible(m_classification_combo, editable_geometry);
+        setInspectorRowVisible(m_length_edit, editable_geometry);
+        setInspectorRowVisible(m_classification_combo, editable_geometry);
         const bool room = entity.has_value() && entity->type == "room";
-        m_geometry_form->setRowVisible(m_height_edit, wall || opening || room);
-        m_geometry_form->setRowVisible(m_elevation_edit, wall || slab || room);
-        m_geometry_form->setRowVisible(m_slope_rise_edit, wall);
-        m_geometry_form->setRowVisible(m_thickness_edit, wall || slab);
+        setInspectorRowVisible(m_height_edit, wall || opening || room);
+        setInspectorRowVisible(m_elevation_edit, wall || slab || room);
+        setInspectorRowVisible(m_slope_rise_edit, wall);
+        setInspectorRowVisible(m_thickness_edit, wall || slab);
         if (auto* label = qobject_cast<QLabel*>(m_geometry_form->labelForField(m_length_edit))) {
             label->setText(opening ? QStringLiteral("Width") :
                 entity.has_value() && (slab || is_closed_boundary_entity(entity->type))
                     ? QStringLiteral("Perimeter") : QStringLiteral("Length"));
         }
         if (!entity.has_value()) {
-            m_inspector_context->setText(QStringLiteral("No selection\nUse Select or choose an object in the navigator."));
+            setInspectorTitle(QStringLiteral("No selection\nUse Select or choose an object in the navigator."));
             m_length_edit->clear();
             m_height_edit->clear();
             m_elevation_edit->clear();
@@ -69546,18 +69614,16 @@ private:
                                         : kind.has_value() && !kind->empty()
                                         ? QString::fromStdString(*kind).toLower()
                                         : QStringLiteral("door/window");
-            context = QStringLiteral("%1 opening\nHosted by wall %2")
-                          .arg(kind_label.left(1).toUpper() + kind_label.mid(1),
-                               wall_id.has_value() ? QString::fromStdString(*wall_id)
-                                                   : QStringLiteral("unknown"));
+            (void)wall_id;
+            context = kind_label == QStringLiteral("door/window") ? QStringLiteral("Opening")
+                                                                  : kind_label.left(1).toUpper() + kind_label.mid(1);
         } else if (entity->type == "slab") {
             try {
                 const auto kind = QString::fromStdString(
                     std::string(slab_element_kind_name(read_slab_element_kind(entity->properties))));
-                context = QStringLiteral("%1\nClosed profile")
-                              .arg(kind.left(1).toUpper() + kind.mid(1));
+                context = kind.left(1).toUpper() + kind.mid(1);
             } catch (const std::exception&) {
-                context = QStringLiteral("Slab\nClosed profile");
+                context = QStringLiteral("Slab");
             }
         } else if (entity->type == "roof") {
             const auto roof_label = sloped_roof_panel
@@ -69567,7 +69633,7 @@ private:
                     ? QStringLiteral("Hip roof") : QStringLiteral("Gable roof");
             context = QStringLiteral("Roof\n%1").arg(roof_label);
         }
-        m_inspector_context->setText(context);
+        setInspectorTitle(context);
         if (sloped_roof_panel || symmetric_roof_form) {
             m_roof_edit_source = inspector_snapshot;
             m_roof_edit_context = captureSourceEditAuthority(inspector_snapshot);
@@ -69638,7 +69704,7 @@ private:
                 m_classification_combo->setCurrentText(classification);
             }
             if (auto* label = qobject_cast<QLabel*>(m_geometry_form->labelForField(m_classification_combo)))
-                label->setText(entity->type == "opening" ? QStringLiteral("Type") : QStringLiteral("Classification"));
+                label->setText(entity->type == "opening" || entity->type == "wall" ? QStringLiteral("Type") : QStringLiteral("Classification"));
         }
         {
             QSignalBlocker blocker(m_height_edit);
@@ -81511,6 +81577,11 @@ private:
     std::optional<SourceEditAuthority> m_native_input_authority;
     QScrollArea* m_inspector{};
     QLabel* m_inspector_heading{};
+    QVBoxLayout* m_inspector_layout{};
+    AdvancedSection* m_inspector_more{};
+    AdvancedSection* m_annotation_more{};
+    Vec2 m_annotation_position{};
+    std::pair<QString, QString> m_annotation_position_text;
     QFormLayout* m_geometry_form{};
     QGroupBox* m_dimension_properties_group{};
     QLineEdit* m_dimension_x_edit{};
