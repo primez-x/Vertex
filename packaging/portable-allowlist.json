@@ -18954,6 +18954,60 @@
       "inventory_entry": "qtsvg",
       "path": ".deps/qt-notices/6.11.2/texts/qtsvg/0011.txt",
       "destination": "licenses/qt-notices/6.11.2/texts/qtsvg/0011.txt"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "boost-multiprecision",
+      "path": ".deps/native/x64-windows/share/boost-multiprecision/copyright",
+      "destination": "licenses/boost-multiprecision/copyright"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "libarchive",
+      "path": "third_party/notices/native/libarchive/3.8.8/archive_read_support_filter_compress-notice.txt",
+      "destination": "licenses/native/libarchive/3.8.8/archive_read_support_filter_compress-notice.txt"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "libarchive",
+      "path": "third_party/notices/native/libarchive/3.8.8/archive_write_add_filter_compress-notice.txt",
+      "destination": "licenses/native/libarchive/3.8.8/archive_write_add_filter_compress-notice.txt"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "libarchive",
+      "path": "third_party/notices/native/libarchive/3.8.8/BLAKE2-notice.txt",
+      "destination": "licenses/native/libarchive/3.8.8/BLAKE2-notice.txt"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "libarchive",
+      "path": "third_party/notices/native/libarchive/3.8.8/Apache-2.0.txt",
+      "destination": "licenses/native/libarchive/3.8.8/Apache-2.0.txt"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "liblzma",
+      "path": "third_party/notices/native/liblzma/5.8.3/COPYING.0BSD",
+      "destination": "licenses/native/liblzma/5.8.3/COPYING.0BSD"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "liblzma",
+      "path": "third_party/notices/native/liblzma/5.8.3/COPYING.LGPLv2.1",
+      "destination": "licenses/native/liblzma/5.8.3/COPYING.LGPLv2.1"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "liblzma",
+      "path": "third_party/notices/native/liblzma/5.8.3/COPYING.GPLv2",
+      "destination": "licenses/native/liblzma/5.8.3/COPYING.GPLv2"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "liblzma",
+      "path": "third_party/notices/native/liblzma/5.8.3/COPYING.GPLv3",
+      "destination": "licenses/native/liblzma/5.8.3/COPYING.GPLv3"
     }
   ]
 }

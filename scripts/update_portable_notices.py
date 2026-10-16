@@ -1,7 +1,8 @@
-"""Refresh explicit portable Qt notice entries from the reviewed component catalog.
+"""Refresh explicit portable notices from the reviewed component catalog.
 
-No SDK discovery or license selection is performed. Other allowlist entries are
-preserved; every owner/notice pair is included at a stable destination.
+No SDK discovery or license selection is performed. Asset/source entries and
+valid notice destinations are preserved. Every declared owner/notice pair is
+included at a stable destination; obsolete notice references are removed.
 """
 from __future__ import annotations
 
@@ -11,19 +12,22 @@ from pathlib import Path, PurePosixPath
 
 
 def refresh(catalog: dict, allowlist: dict) -> dict:
-    owners = {"qtbase", "qtpdf", "qtsvg"}
-    components = {row["id"]: row for row in catalog["components"] if row["id"] in owners}
-    if components.keys() != owners:
+    components = {row["id"]: row for row in catalog["components"]
+                  if row.get("distribution_status") != "excluded"}
+    if not {"qtbase", "qtpdf", "qtsvg"}.issubset(components):
         raise ValueError("component catalog must declare qtbase, qtpdf and qtsvg")
+    required = {(owner, path) for owner, row in components.items() for path in row.get("notice_paths", [])}
     entries = [row for row in allowlist["entries"]
-               if not (row["kind"] == "notice" and row["inventory_entry"] in owners)]
+               if row["kind"] != "notice" or (row["inventory_entry"], row["path"]) in required]
     destinations = {row["destination"].casefold() for row in entries}
-    sources = set()
-    for owner in sorted(owners):
-        for path in components[owner]["notice_paths"]:
+    covered = {(row["inventory_entry"], row["path"]) for row in entries if row["kind"] == "notice"}
+    for owner in sorted(components):
+        for path in components[owner].get("notice_paths", []):
             relative = PurePosixPath(path)
             if relative.is_absolute() or ".." in relative.parts or ":" in path or "\\" in path:
-                raise ValueError("Qt notice path must be a safe catalog-relative path")
+                raise ValueError("notice path must be a safe catalog-relative path")
+            if (owner, path) in covered:
+                continue
             if path.startswith(".deps/qt-notices/"):
                 destination = "licenses/qt-notices/" + path.removeprefix(".deps/qt-notices/")
             elif path.startswith(".deps/qt/") and "/sbom/" in path:
@@ -31,15 +35,15 @@ def refresh(catalog: dict, allowlist: dict) -> dict:
             elif path.startswith("third_party/notices/"):
                 destination = "licenses/" + path.removeprefix("third_party/notices/")
             else:
-                raise ValueError(f"unreviewed Qt notice path mapping: {path}")
+                destination = f"licenses/{owner}/{relative.name}"
             # Staging requires explicit notice coverage for each component,
             # including notices shared by multiple Qt modules.
-            if path in sources:
+            if destination.casefold() in destinations:
                 destination = f"licenses/{owner}/" + destination.removeprefix("licenses/")
-            sources.add(path)
             if destination.casefold() in destinations:
                 raise ValueError(f"duplicate package destination: {destination}")
             destinations.add(destination.casefold())
+            covered.add((owner, path))
             entries.append({"kind": "notice", "inventory_entry": owner,
                             "path": path, "destination": destination})
     return {**allowlist, "entries": entries}
@@ -56,10 +60,10 @@ def main() -> int:
     updated = refresh(catalog, current)
     if args.check:
         if current != updated:
-            parser.exit(1, "Portable Qt notice entries need refreshing.\n")
+            parser.exit(1, "Portable notice entries need refreshing.\n")
     else:
         target.write_text(json.dumps(updated, indent=2) + "\n", encoding="utf-8")
-    print(f"Portable allowlist: {len(updated['entries'])} entries; Qt notices match catalog")
+    print(f"Portable allowlist: {len(updated['entries'])} entries; notices match catalog")
     return 0
 
 

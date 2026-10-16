@@ -4883,7 +4883,7 @@
     },
     {
       "category": "source",
-      "path": "scripts/update_portable_qt_notices.py"
+      "path": "scripts/update_portable_notices.py"
     },
     {
       "category": "source",
@@ -7667,7 +7667,7 @@
     },
     {
       "category": "source",
-      "path": "tests/test_update_portable_qt_notices.py"
+      "path": "tests/test_update_portable_notices.py"
     },
     {
       "category": "source",

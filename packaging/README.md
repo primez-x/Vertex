@@ -16,12 +16,12 @@ Both staging commands remain fail-closed. A missing dependency, stale hash,
 or incomplete runtime inventory blocks package creation; these files do not
 claim installer, licensing, or clean-machine qualification by themselves.
 
-After changing the selected Qt SDK or its catalog notices, refresh the explicit
+After changing the selected dependencies or their catalog notices, refresh the explicit
 portable notice mappings from `third_party/distribution-components.json`:
 
 ```powershell
-python -B scripts/update_portable_qt_notices.py
-python -B scripts/update_portable_qt_notices.py --check
+python -B scripts/update_portable_notices.py
+python -B scripts/update_portable_notices.py --check
 ```
 
 This maps reviewed notice paths only; it does not discover dependencies or
