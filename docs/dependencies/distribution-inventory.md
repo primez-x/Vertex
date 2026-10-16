@@ -34,6 +34,15 @@ omit provenance, or bypass verification of any other checksum supplied by the
 SBOM. This is historical evidence for the prior Qt 6.8.3 selection; it does not
 establish the current Qt 6.11.2 runtime's checksum or qualification status.
 
+The portable alpha preparation also found twelve stale SHA-1 checksums in the
+selected Qt 6.11.2 SDK SBOMs. The current catalog records archive-backed
+`source.hash_overrides` for those files. Each selected installed DLL was compared
+byte-for-byte with its member in the matching SDK archive pinned by
+`third_party/qt-sdk.json`. Inventory generation independently rechecks the
+archive SHA-256, extracted member and installed digest; the original SBOM stays
+unchanged. These receipts establish that selected SDK bytes match, while the
+qualification and licensing boundaries below remain unchanged.
+
 The generator exits nonzero without writing an inventory when ownership is
 unknown, evidence is missing or malformed, a recorded hash is stale, a source
 or notice file is absent, an SPDX file does not contain the binary, or two

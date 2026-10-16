@@ -655,7 +655,99 @@
         "prefix_path": ".deps/qt/6.11.2/msvc2022_64",
         "package_id": "SPDXRef-Package-qtbase-9ce86868aeba",
         "module_version": "6.11.2",
-        "module_name": "Core"
+        "module_name": "Core",
+        "hash_overrides": {
+          "bin/Qt6Core.dll": {
+            "algorithm": "SHA1",
+            "value": "9d021629b0900d0f92599e734ef48377fbbb2307",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+            "archive_sha256": "fd984b7264361b4dd3fd2a417702ca1258e4086268f2ee6a69b9a393d9c3f6bb",
+            "archive_member": "bin/Qt6Core.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "Qt 6.11.2 SDK SBOM checksum differs from the pinned SDK archive member; installed and extracted bytes match."
+          },
+          "bin/Qt6Network.dll": {
+            "algorithm": "SHA1",
+            "value": "d6476688b9e89ee7832255d1efde89ba4332933d",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+            "archive_sha256": "fd984b7264361b4dd3fd2a417702ca1258e4086268f2ee6a69b9a393d9c3f6bb",
+            "archive_member": "bin/Qt6Network.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "Qt 6.11.2 SDK SBOM checksum differs from the pinned SDK archive member; installed and extracted bytes match."
+          },
+          "bin/Qt6Gui.dll": {
+            "algorithm": "SHA1",
+            "value": "516ab7baa3fb6fc478a963e842d75bd6d5303c81",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+            "archive_sha256": "fd984b7264361b4dd3fd2a417702ca1258e4086268f2ee6a69b9a393d9c3f6bb",
+            "archive_member": "bin/Qt6Gui.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "Qt 6.11.2 SDK SBOM checksum differs from the pinned SDK archive member; installed and extracted bytes match."
+          },
+          "bin/Qt6Widgets.dll": {
+            "algorithm": "SHA1",
+            "value": "4e7b7d053189db6f6c900f9079cd8594e2bd35e4",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+            "archive_sha256": "fd984b7264361b4dd3fd2a417702ca1258e4086268f2ee6a69b9a393d9c3f6bb",
+            "archive_member": "bin/Qt6Widgets.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "Qt 6.11.2 SDK SBOM checksum differs from the pinned SDK archive member; installed and extracted bytes match."
+          },
+          "bin/Qt6PrintSupport.dll": {
+            "algorithm": "SHA1",
+            "value": "0988a79a50a07cebf9025d594eeeaa39992c1aca",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+            "archive_sha256": "fd984b7264361b4dd3fd2a417702ca1258e4086268f2ee6a69b9a393d9c3f6bb",
+            "archive_member": "bin/Qt6PrintSupport.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "Qt 6.11.2 SDK SBOM checksum differs from the pinned SDK archive member; installed and extracted bytes match."
+          },
+          "plugins/platforms/qwindows.dll": {
+            "algorithm": "SHA1",
+            "value": "920e362fa4e1dc8e9faf5d7f238b0a39dd4a6648",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+            "archive_sha256": "fd984b7264361b4dd3fd2a417702ca1258e4086268f2ee6a69b9a393d9c3f6bb",
+            "archive_member": "plugins/platforms/qwindows.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "Qt 6.11.2 SDK SBOM checksum differs from the pinned SDK archive member; installed and extracted bytes match."
+          },
+          "plugins/imageformats/qico.dll": {
+            "algorithm": "SHA1",
+            "value": "0a27e1866c1766aac90481e554a59714a0ca50ca",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+            "archive_sha256": "fd984b7264361b4dd3fd2a417702ca1258e4086268f2ee6a69b9a393d9c3f6bb",
+            "archive_member": "plugins/imageformats/qico.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "Qt 6.11.2 SDK SBOM checksum differs from the pinned SDK archive member; installed and extracted bytes match."
+          },
+          "plugins/imageformats/qjpeg.dll": {
+            "algorithm": "SHA1",
+            "value": "918c4c567e1833205fee089ecc14741e0f1deb45",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+            "archive_sha256": "fd984b7264361b4dd3fd2a417702ca1258e4086268f2ee6a69b9a393d9c3f6bb",
+            "archive_member": "plugins/imageformats/qjpeg.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "Qt 6.11.2 SDK SBOM checksum differs from the pinned SDK archive member; installed and extracted bytes match."
+          },
+          "plugins/imageformats/qgif.dll": {
+            "algorithm": "SHA1",
+            "value": "15dc943d761ce46f978520e5bb9de2e1772d92f6",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+            "archive_sha256": "fd984b7264361b4dd3fd2a417702ca1258e4086268f2ee6a69b9a393d9c3f6bb",
+            "archive_member": "plugins/imageformats/qgif.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "Qt 6.11.2 SDK SBOM checksum differs from the pinned SDK archive member; installed and extracted bytes match."
+          },
+          "plugins/styles/qmodernwindowsstyle.dll": {
+            "algorithm": "SHA1",
+            "value": "e1ba22470c3af6a637be02cd34b589e41fe0c4f6",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+            "archive_sha256": "fd984b7264361b4dd3fd2a417702ca1258e4086268f2ee6a69b9a393d9c3f6bb",
+            "archive_member": "plugins/styles/qmodernwindowsstyle.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "Qt 6.11.2 SDK SBOM checksum differs from the pinned SDK archive member; installed and extracted bytes match."
+          }
+        }
       },
       "notice_paths": [
         ".deps/qt/6.11.2/msvc2022_64/sbom/qtbase-6.11.2.spdx",
@@ -1417,7 +1509,18 @@
         "prefix_path": ".deps/qt/6.11.2/msvc2022_64",
         "package_id": "SPDXRef-Package-qtpdf-b426ea8eeffe",
         "module_version": "6.11.2",
-        "module_name": "Pdf"
+        "module_name": "Pdf",
+        "hash_overrides": {
+          "bin/Qt6Pdf.dll": {
+            "algorithm": "SHA1",
+            "value": "d14d7dd8f05d2eca49064c4ebea14bf1dfff2563",
+            "archive_path": ".deps/downloads/qtpdf-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+            "archive_sha256": "83306fe90cdbb2a365bdea1188be9352772ad8f1aea94ef327758f1635c86908",
+            "archive_member": "bin/Qt6Pdf.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "Qt 6.11.2 SDK SBOM checksum differs from the pinned SDK archive member; installed and extracted bytes match."
+          }
+        }
       },
       "notice_paths": [
         ".deps/qt/6.11.2/msvc2022_64/sbom/qtpdf-6.11.2.spdx",
@@ -4514,7 +4617,18 @@
         "prefix_path": ".deps/qt/6.11.2/msvc2022_64",
         "package_id": "SPDXRef-Package-qtsvg-d09caeca8d6a",
         "module_version": "6.11.2",
-        "module_name": "Svg"
+        "module_name": "Svg",
+        "hash_overrides": {
+          "bin/Qt6Svg.dll": {
+            "algorithm": "SHA1",
+            "value": "f37cc002292f68f4bf69f2f85c6a32ba2fe9502b",
+            "archive_path": ".deps/downloads/qtsvg-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+            "archive_sha256": "417f44499c835b2303f3ff78043179bb23442f33d5d2816fbf7e8dbf275b1c89",
+            "archive_member": "bin/Qt6Svg.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "Qt 6.11.2 SDK SBOM checksum differs from the pinned SDK archive member; installed and extracted bytes match."
+          }
+        }
       },
       "notice_paths": [
         ".deps/qt/6.11.2/msvc2022_64/sbom/qtsvg-6.11.2.spdx",

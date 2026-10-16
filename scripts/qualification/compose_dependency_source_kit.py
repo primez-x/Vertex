@@ -38,7 +38,10 @@ require = closure.require
 MANIFEST = "dependency-source-kit-manifest.json"
 # Physical copied inputs and receipt replay have distinct bounded workloads.
 # Replay covers a full frozen bundle plus dependency inputs and metadata.
-MAX_PAYLOAD_FILES = 20_000
+# The selected Qt 6.11.2 notices plus the controlled IFC source cohort exceed
+# the former 20,000-file allowance. Keep copying finite and below the 32,768
+# bundle-file reader bound, with room for application/runtime bundle records.
+MAX_PAYLOAD_FILES = 24_000
 MAX_RECORDS = 65_536
 MAX_TOTAL = 16 * 1024 * 1024 * 1024
 MAX_INPUT_BYTES = 32 * 1024 * 1024 * 1024

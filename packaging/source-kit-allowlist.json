@@ -1563,6 +1563,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/alpha-testing.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/annotation-catalog.md"
     },
     {
@@ -4715,6 +4719,10 @@
     },
     {
       "category": "source",
+      "path": "scripts/package_alpha_release.py"
+    },
+    {
+      "category": "source",
       "path": "scripts/performance_benchmark.py"
     },
     {
@@ -4872,6 +4880,10 @@
     {
       "category": "source",
       "path": "scripts/test_installed_runtime.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/update_portable_qt_notices.py"
     },
     {
       "category": "source",
@@ -7571,6 +7583,10 @@
     },
     {
       "category": "source",
+      "path": "tests/test_package_alpha_release.py"
+    },
+    {
+      "category": "source",
       "path": "tests/test_performance_benchmark.py"
     },
     {
@@ -7648,6 +7664,10 @@
     {
       "category": "source",
       "path": "tests/test_symbol_catalog_manifest.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_update_portable_qt_notices.py"
     },
     {
       "category": "source",
