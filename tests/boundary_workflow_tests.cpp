@@ -3698,6 +3698,8 @@ void test_measure_wall_loop_creates_exterior_gla_area() {
                 area.properties.contains("appraisal_fact_defaults") &&
                 area.properties.contains("wall_measurement_source"),
             "the wall-derived area must become a Living area with recorded type facts and retain its wall sources");
+    require(area.properties.value("name", std::string{}) == "Living area",
+            "the wall-derived area must be named for its type on the plan and in Layers");
     const double thickness = closed.entities().at(walls.front()).properties.at("thickness_m").get<double>();
     const double measured = straight_polygon_area(sketch::decode_identified_boundary_entity(area));
     require(std::abs(measured - (width + thickness) * (depth + thickness)) < 1e-6 &&

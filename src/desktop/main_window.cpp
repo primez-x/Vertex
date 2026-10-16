@@ -73505,6 +73505,12 @@ private:
                 if (existing != command.entity_changes.end()) *existing = std::move(change);
                 else command.entity_changes.push_back(std::move(change));
             }
+            // The area reads as its type on the plan and in Layers, not as
+            // the generic wall-measurement name it was created with.
+            for (auto& change : command.entity_changes)
+                if (change.kind == EntityChangeKind::upsert && change.entity.id == measurement_id.toStdString() &&
+                    change.entity.properties.value("name", std::string{}) == "Exterior measurement")
+                    change.entity.properties["name"] = "Living area";
         } catch (const std::exception&) {}
     }
 
