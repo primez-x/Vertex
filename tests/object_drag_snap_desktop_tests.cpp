@@ -18,6 +18,7 @@
 #include <QMouseEvent>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QUuid>
 
 #include <algorithm>
@@ -67,6 +68,61 @@ void capture(sketch::desktop::MainWindow& window, const QString& name) {
     if (directory.isEmpty()) return;
     require(QDir().mkpath(directory) && window.grab().save(QDir(directory).filePath(name)),
             "full-window object snap capture failed");
+}
+
+void sustainedObjectPreview(bool design,bool wait_for_intermediate=true) {
+    using namespace sketch;
+    using namespace sketch::desktop;
+    MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen,true);
+    window.setWorkspace(design ? Workspace::architectural : Workspace::measurement);
+    window.resize(1200,900);window.show();QApplication::processEvents();
+    const auto id=window.createAnnotationSymbol(QStringLiteral("svg-v2-04_living-sofa-three-seat"),{0,0});
+    auto* canvas=dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>(design ? "architecturalPlanCanvas" : "measurementPlanCanvas"));
+    require(!id.isEmpty()&&canvas&&window.selectEntity(id),"sustained real-provider fixture must select its sofa");
+    canvas->setTool(CanvasTool::select);canvas->setGridEnabled(false);canvas->setSnapEnabled(false);canvas->fitView();
+    QApplication::processEvents();
+    QApplication::setActiveWindow(&window);canvas->setFocus();
+    const auto source=window.document().snapshot();const auto original=persisted(window,id);
+    const auto frame=canvas->selectionBounds();require(frame.has_value(),"sustained sofa needs a selection frame");
+    const auto start=frame->center();const auto scale=canvas->viewScale();
+    const auto mouse=[&](QEvent::Type type,QPointF point) {
+        QMouseEvent event(type,point,canvas->mapToGlobal(point.toPoint()),
+            type==QEvent::MouseMove?Qt::NoButton:Qt::LeftButton,
+            type==QEvent::MouseButtonRelease?Qt::NoButton:Qt::LeftButton,Qt::NoModifier);
+        QApplication::sendEvent(canvas,&event);
+    };
+    mouse(QEvent::MouseButtonPress,start);
+    QPointF end;
+    // No event-loop polling between samples: the first worker's serial is
+    // definitely superseded before its timer can deliver a completion.
+    for(int step=1;step<=80;++step) {
+        end=start+QPointF(12+step*.6,-10-step*.2);
+        mouse(QEvent::MouseMove,end);
+    }
+    require(canvas->entitiesMovePreviewPending(),"real-provider burst must leave the newest proposal pending");
+    if(wait_for_intermediate) {
+        QElapsedTimer timer;timer.start();
+        while(canvas->entitiesMovePreviewPending()&&canvas->entitiesMovePreview().empty()&&timer.elapsed()<5000) {
+            QApplication::processEvents(QEventLoop::AllEvents,1);
+            if(canvas->entitiesMovePreview().empty())QThread::msleep(1);
+        }
+        require(canvas->entitiesMovePreviewPending()&&!canvas->entitiesMovePreview().empty(),
+            "a superseded real worker must advance display before the latest request is admitted");
+    }
+    require(window.document().snapshot().entities()==source.entities(),"intermediate real previews must not edit the source");
+    const auto displayed=canvas->selectionBounds();
+    require(displayed&&std::hypot(displayed->center().x()-end.x(),displayed->center().y()-end.y())<2,
+        "real-provider selection frame must follow the newest pointer while old geometry is displayed");
+    mouse(QEvent::MouseButtonRelease,end);
+    await([&]{return window.document().revision()!=source.revision();},"sustained real-provider release must eventually commit");
+    const auto final=persisted(window,id);
+    require(close_enough(final.placement.position.x,original.placement.position.x+(end.x()-start.x())/scale)&&
+        close_enough(final.placement.position.y,original.placement.position.y-(end.y()-start.y())/scale)&&
+        window.document().snapshot().history().size()==source.history().size()+1,
+        "sustained release must commit only the final pointer in one history event");
+    require(window.undoCommand()&&window.document().snapshot().entities()==source.entities(),
+        "one Undo must restore the exact source after a sustained real-provider drag");
 }
 
 void existingObjectSnapsToWallFace(bool vertical, bool design = false) {
@@ -232,6 +288,7 @@ int main(int argc, char** argv) {
     QCoreApplication::setApplicationName(QStringLiteral("Vertex-object-snap-test-") +
         QUuid::createUuid().toString(QUuid::WithoutBraces));
     try {
+        sustainedObjectPreview(false);sustainedObjectPreview(true);sustainedObjectPreview(false,false);
         existingObjectSnapsToWallFace(false);
         existingObjectSnapsToWallFace(true);
         existingObjectSnapsToWallFace(false,true);

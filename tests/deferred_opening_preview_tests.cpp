@@ -2,6 +2,7 @@
 #include "support/noninteractive_errors.hpp"
 
 #include <QApplication>
+#include <QDir>
 #include <QFocusEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -49,6 +50,7 @@ int redPixels(const QImage& image) {
 CanvasEntity opening(double width=1) {
     CanvasEntity entity;
     entity.id="opening"; entity.type="opening"; entity.selected=true;
+    entity.filled=true;entity.fill_color=QColor(20,170,90);entity.fill_opacity=1;entity.hatch_pattern="solid";
     entity.segments={{{0,-.15},{width,-.15}},{{width,-.15},{width,.15}},
                      {{width,.15},{0,.15}},{{0,.15},{0,-.15}}};
     entity.opening_width_controls=CanvasOpeningWidthControls{{0,0},{width,0},width,2,7};
@@ -102,9 +104,8 @@ void pendingAndExactCompletion() {
     require(redPixels(render(f.canvas))==0,"pending preview must not paint false invalid feedback");
     require(render(f.canvas,true)==output && f.canvas.entities().front().opening_width_controls->width_metres==1,
             "pending proposal changed committed geometry or output");
-    const auto pending=render(f.canvas);
     require(f.canvas.completeOpeningWidthPreview(f.serial,f.exact()),"current exact completion was rejected");
-    require(render(f.canvas)!=pending,"exact completion did not apply the opening projection");
+    require(f.canvas.openingWidthPreviewEntities().size()==1,"exact completion did not retain the opening projection");
     require(redPixels(render(f.canvas))==0 && render(f.canvas,true)==output,
             "valid completion changed output or painted invalid feedback");
     require(!f.canvas.completeOpeningWidthPreview(f.serial,std::nullopt),"duplicate completion was accepted");
@@ -113,6 +114,123 @@ void pendingAndExactCompletion() {
             "same-position valid release must request one final native resize");
     require(!f.canvas.completeOpeningWidthPreview(f.serial,f.exact()),"ended gesture accepted a completion");
     require(render(f.canvas,true)==output,"rejected native command changed committed output");
+}
+
+void successorRetainsDisplay() {
+    Fixture f;const auto output=render(f.canvas,true);(void)render(f.canvas);f.begin();
+    require(f.canvas.completeOpeningWidthPreview(f.serial,f.exact()),"first opening result admitted");
+    const auto accepted=render(f.canvas);const auto old=f.serial;
+    require(accepted.pixelColor(416,247).green()>120&&accepted.pixelColor(416,247).red()<80,
+        "opening continuity sample must contain the accepted filled body");
+    mouse(f.canvas,QEvent::MouseMove,screen({1.75,0}));
+    require(f.requests==2 && f.serial>old,"successor opening request starts once");
+    const auto successor=render(f.canvas);
+    require(accepted.copy(411,246,15,3)==successor.copy(411,246,15,3),
+        "pending opening successor keeps the accepted body behind the current jamb");
+    // Accepted body ends at 1.5 m (x 440); the residual stretches it to the
+    // current 1.75 m jamb (x 460) instead of freezing at the accepted width.
+    const auto green=[](const QImage& image,int x,int y){const auto c=image.pixelColor(x,y);return c.green()>120&&c.red()<80;};
+    require(!green(accepted,450,235)&&green(successor,450,235),
+        "pending opening successor stretches the accepted body to the current width");
+    const auto directory=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if(!directory.isEmpty()) {
+        require(QDir().mkpath(directory),"opening capture directory exists");
+        require(accepted.save(QDir(directory).filePath("delayed-opening-accepted.png"))&&
+            render(f.canvas).save(QDir(directory).filePath("delayed-opening-successor.png")),"opening captures save");
+    }
+    mouse(f.canvas,QEvent::MouseMove,screen({1.75,0}));
+    require(f.requests==2,"identical effective opening width reuses request");
+    f.release(1.75);
+    require(f.commits==1 && std::abs(f.committed_scale-1.75)<1e-8 && render(f.canvas,true)==output,
+        "opening release must use current native admission parameters rather than displayed width");
+    require(!f.canvas.completeOpeningWidthPreview(old,f.exact()),"old opening display remains stale");
+    f.cancel();
+
+    Fixture snapped;snapped.canvas.setSnapEnabled(true);(void)render(snapped.canvas);snapped.begin();
+    const auto first=snapped.serial;
+    mouse(snapped.canvas,QEvent::MouseMove,screen({1.501,0}));
+    require(snapped.requests==1&&snapped.serial==first,"different pointers with identical snapped width share exact work");
+    snapped.cancel();
+}
+
+// An exact result whose body is taller than the source stretch, so it cannot be
+// confused with the local feedback painted from the committed opening.
+std::vector<CanvasEntity> tallExact(double width) {
+    auto entity=opening(width);
+    entity.segments={{{0,-.3},{width,-.3}},{{width,-.3},{width,.3}},{{width,.3},{0,.3}},{{0,.3},{0,-.3}}};
+    return {entity};
+}
+bool greenAt(const QImage& image,int x,int y) {
+    const auto c=image.pixelColor(x,y);return c.green()>120&&c.red()<80;
+}
+
+void retryAfterFailureAndInvalidRetirement() {
+    {
+        Fixture f;bool fail=true;
+        f.canvas.setOpeningWidthPreviewRequested([&](QString,double,bool,std::uint64_t)
+            ->std::optional<std::vector<CanvasEntity>> {
+            ++f.requests;f.serial=f.canvas.openingWidthPreviewSerial();
+            if(fail)throw std::runtime_error("opening provider failure");
+            require(f.canvas.markOpeningWidthPreviewPending(f.serial),"retry sample pending");return std::nullopt;});
+        f.begin();
+        require(f.requests==1,"failing opening sample requested once");
+        mouse(f.canvas,QEvent::MouseMove,screen({1.5,0}));
+        require(f.requests==2,"identical opening width after a failure requests again");
+        fail=false;mouse(f.canvas,QEvent::MouseMove,screen({1.5,0}));
+        require(f.requests==3,"identical opening width retries once the provider recovers");
+        mouse(f.canvas,QEvent::MouseMove,screen({1.5,0}));
+        require(f.requests==3,"identical pending opening width shares its request");
+        f.cancel();
+    }
+    {
+        Fixture f;bool invalid=false;
+        f.canvas.setOpeningWidthPreviewRequested([&](QString,double,bool,std::uint64_t)
+            ->std::optional<std::vector<CanvasEntity>> {
+            ++f.requests;f.serial=f.canvas.openingWidthPreviewSerial();
+            if(invalid)return std::vector<CanvasEntity>{};
+            require(f.canvas.markOpeningWidthPreviewPending(f.serial),"sample pending");return std::nullopt;});
+        f.begin();
+        require(f.canvas.completeOpeningWidthPreview(f.serial,tallExact(1.5)),"tall result accepted");
+        // The tall body covers y 216..264; the committed source covers only 228..252.
+        require(greenAt(render(f.canvas),400,220),"accepted tall result is displayed");
+        invalid=true;mouse(f.canvas,QEvent::MouseMove,screen({1.6,0}));
+        require(f.canvas.openingWidthPreviewEntities().empty(),"an invalid opening sample clears displayed entities");
+        invalid=false;mouse(f.canvas,QEvent::MouseMove,screen({1.75,0}));
+        require(f.requests==3&&!greenAt(render(f.canvas),400,220)&&greenAt(render(f.canvas),400,235),
+            "pending successor of an invalid sample must not resurrect the earlier tall result");
+        f.cancel();
+    }
+}
+
+void displayOnlyTicketFollowsPointer() {
+    Fixture f;CanvasPreviewDisplayState ticket;
+    f.canvas.setOpeningWidthPreviewRequested([&](QString,double scale,bool,std::uint64_t)
+        ->std::optional<std::vector<CanvasEntity>> {
+        ++f.requests;f.requested_scale=scale;f.serial=f.canvas.openingWidthPreviewSerial();
+        ticket=f.canvas.openingWidthPreviewDisplayState();
+        require(ticket.valid()&&ticket.serial()==f.serial,"opening ticket captured from the current proposal");
+        require(f.canvas.markOpeningWidthPreviewPending(f.serial),"ticket sample pending");return std::nullopt;});
+    const auto output=render(f.canvas,true);
+    f.begin();const auto first=ticket;const auto first_serial=f.serial;
+    mouse(f.canvas,QEvent::MouseMove,screen({1.75,0}));
+    require(f.requests==2&&f.serial>first_serial,"opening successor is current");
+    const auto current=f.serial;
+    require(!greenAt(render(f.canvas),400,220),"nothing tall before the older result arrives");
+    require(f.canvas.displayOpeningWidthPreview(first,tallExact(1.5)),"older opening result is displayed");
+    require(f.canvas.openingWidthPreviewSerial()==current&&f.canvas.openingWidthPreviewPending(),
+        "display never changes or completes the current opening serial");
+    const auto shown=render(f.canvas);
+    // The tall body (y 216..264) stretches by 1.75/1.5 about the fixed jamb.
+    require(greenAt(shown,400,220)&&greenAt(shown,450,220)&&!greenAt(shown,470,220),
+        "older result is carried to the current pointer");
+    require(render(f.canvas,true)==output&&f.canvas.entities().front().opening_width_controls->width_metres==1,
+        "display never edits source or output");
+    require(!f.canvas.displayOpeningWidthPreview(first,tallExact(1.5)),"no result newer than the displayed one is accepted twice");
+    require(!f.canvas.completeOpeningWidthPreview(first_serial,tallExact(1.5)),
+        "older serial cannot complete the current opening request");
+    f.cancel();
+    require(!f.canvas.displayOpeningWidthPreview(first,tallExact(1.5))&&!f.canvas.displayOpeningWidthPreview(ticket,tallExact(1.75)),
+        "cancellation retires every opening ticket");
 }
 
 // Serial identity must distinguish repeated parameters, both within one drag
@@ -239,6 +357,7 @@ int main(int argc,char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication app(argc,argv);
     try {
+        successorRetainsDisplay();retryAfterFailureAndInvalidRetirement();displayOnlyTicketFollowsPointer();
         pendingAndExactCompletion(); staleCompletions(); invalidAndPendingRelease();
         sceneAndFocusCancellation(); synchronousContract(); callbackFailureAndReplacement();
         std::cout << "deferred opening preview checks passed\n";

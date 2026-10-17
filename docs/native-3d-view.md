@@ -32,8 +32,9 @@ coordinates. The native test checks the actual framebuffer, picking and camera
 restoration at three display scales. Floor/layer controls are connected
 separately; this adapter alone is not the completed visibility workflow.
 
-Right-drag orbits, middle-drag or Ctrl+left-drag pans, the mouse wheel zooms at
-the cursor, and a left click selects the first AIS object under the pointer.
+Right-drag orbits, middle-drag or Alt+left-drag pans, and the mouse wheel zooms at
+the cursor. A left click selects the first AIS object under the pointer;
+Ctrl+left-click toggles selection and Ctrl+left-drag adds a directional marquee.
 The selected object is mapped back to the stable document entity ID and
 delivered through `onEntitySelected`. A click on empty space delivers an empty
 `QString`, which lets the inspector clear its selection.
@@ -255,8 +256,8 @@ After the desktop target has been wired to the control:
    aligned with the rendered model.
 5. Left-click a wall or slab and confirm the inspector receives its stable
    entity ID; click empty space and confirm the inspector clears selection.
-6. In the architectural workspace, Ctrl+left-drag a wall, slab, room, column,
-   or roof. Confirm
+6. In the architectural workspace, select a wall, slab, room, column, or roof,
+   choose Move, and left-drag it. Confirm
    the solid follows the pointer as a preview, release commits one semantic
    translation, and undo/redo restores the prior presentation.
 7. Add a hosted opening or edit a wall scalar. Confirm the wall presentation

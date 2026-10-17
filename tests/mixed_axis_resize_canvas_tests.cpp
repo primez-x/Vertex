@@ -203,6 +203,53 @@ void exact_completion_and_release() {
     }
 }
 
+void pending_successor_retains_cohort() {
+    Fixture f;const auto output=render(f.canvas,true);(void)render(f.canvas);f.drag();
+    const auto initial=render(f.canvas);
+    const auto initial_edge=320+(f.anchor.x+(2.0-f.anchor.x)*f.sx)*80;
+    const auto initial_color=initial.pixelColor(int(std::lround(initial_edge)),215);
+    require(initial_color.blue()>initial_color.red()+40,
+        "typed child mouths must follow the pointer before the first exact cohort result");
+    require(f.complete(),"first cohort admitted");
+    const auto accepted=render(f.canvas);const auto old=f.serial;
+    const auto old_sx=f.sx;
+    const auto mouth=f.manufactured().front().frame;
+    const auto mouth_edge=mouth.center.x+mouth.width_metres*.5;
+    const auto handle_before=f.canvas.selectionAxisHandlePositions().at(1);
+    mouse(f.canvas,QEvent::MouseMove,f.end+QPointF(24,0));
+    require(f.previews==2 && f.serial>old,"successor cohort requested");
+    const auto successor=render(f.canvas);
+    // The accepted result stays the base: bodies, mouths and frame follow the
+    // current pointer by the residual scale about the fixed anchor.
+    const auto red=[](const QImage& image,int x,int y){const auto c=image.pixelColor(x,y);return c.red()>180&&c.green()<100&&c.blue()<100;};
+    const auto blue_near=[](const QImage& image,double x,int y) {
+        for(int dx=-3;dx<=3;++dx){const auto c=image.pixelColor(int(std::lround(x))+dx,y);if(c.blue()>c.red()+40)return true;}
+        return false;
+    };
+    const auto ratio=f.sx/old_sx;
+    require(ratio>1.01,"successor widens the cohort");
+    const auto edge_after=320+(f.anchor.x+(mouth_edge-f.anchor.x)*ratio)*80;
+    // The first owner body ends at x -0.75 m (screen 260) when accepted.
+    const auto body_after=320+(f.anchor.x+(-0.75-f.anchor.x)*ratio)*80;
+    const auto directory=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (!directory.isEmpty()) {
+        require(accepted.save(directory+"/mixed-accepted.png")&&successor.save(directory+"/mixed-successor.png")&&
+            initial.save(directory+"/mixed-initial.png"),"mixed cohort captures must save");
+    }
+    // Sample inside the fill, beyond the blue selection stroke at its edge.
+    require(body_after>263 && red(successor,int(std::lround(body_after))-5,200) && !red(accepted,int(std::lround(body_after))-5,200),
+        "pending successor carries accepted owner bodies to the current pointer");
+    require(blue_near(accepted,320+mouth_edge*80,215) && !blue_near(accepted,edge_after,215) &&
+            blue_near(successor,edge_after,215) && !blue_near(successor,320+mouth_edge*80,215),
+        "pending successor carries the manufactured child mouth to the current pointer");
+    require(f.canvas.selectionAxisHandlePositions().at(1).x()>handle_before.x()+15,
+        "pending successor moves the cohort frame handles with the pointer");
+    mouse(f.canvas,QEvent::MouseMove,f.end+QPointF(24,0));
+    require(f.previews==2,"identical effective cohort reuses admission ticket");
+    mouse(f.canvas,QEvent::MouseButtonRelease,f.end+QPointF(24,0));
+    require(f.commits==0&&render(f.canvas,true)==output,"old cohort display cannot authorize release");
+}
+
 void refused_completion() {
     for (int defect=0; defect<15; ++defect) {
         Fixture f(true);
@@ -400,7 +447,7 @@ int main(int argc, char** argv) {
         const auto families=QFontDatabase::applicationFontFamilies(font_id);
         require(!families.isEmpty(), "bundled font exposes its family");
         app.setFont(QFont(families.front(),10));
-        exact_completion_and_release(); refused_completion(); stale_capture(); admission(); legacy_mixed_routes();
+        pending_successor_retains_cohort();exact_completion_and_release(); refused_completion(); stale_capture(); admission(); legacy_mixed_routes();
         std::cout << "Mixed axis resize canvas tests passed\n";
         return 0;
     } catch (const std::exception& error) {

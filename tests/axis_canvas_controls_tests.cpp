@@ -484,6 +484,403 @@ void exact_presentation_move_admission() {
             "completed presentation edit cannot be committed twice");
     }
 }
+
+void sustained_move_after_exact_preview() {
+    PlanCanvas canvas;setup(canvas);
+    auto body=entity();body.filled=true;body.fill_color=QColor(240,20,20);
+    body.fill_opacity=1;body.hatch_pattern="solid";canvas.setEntities({body});
+    std::uint64_t serial{};int commits{};
+    canvas.setEntitiesMovePreviewRequested([&](QStringList,Vec2,std::uint64_t value)
+        ->std::optional<std::vector<CanvasEntity>> {
+        serial=value;require(canvas.markEntitiesMovePreviewPending(value),"sustained move marks pending");return {};
+    });
+    canvas.setEntitiesMoveRequested([&](QStringList,Vec2){++commits;return false;});
+    const auto start=screen({0,0});
+    mouse(canvas,QEvent::MouseButtonPress,start);
+    mouse(canvas,QEvent::MouseMove,screen({1,0}));
+    auto admitted=body;
+    for(auto& segment:admitted.segments){segment.start.x+=1;segment.end.x+=1;}
+    admitted.resize_frame->center.x+=1;
+    require(canvas.completeEntitiesMovePreview(serial,std::vector<CanvasEntity>{admitted}),"first sustained result accepted");
+    mouse(canvas,QEvent::MouseMove,screen({1.5,.25}));
+    mouse(canvas,QEvent::MouseMove,screen({2,.5}));
+    const auto pending=render(canvas);
+    const auto red=[&](Vec2 point){const auto c=pending.pixelColor(screen(point).toPoint());return c.red()>180&&c.green()<100&&c.blue()<100;};
+    require(red({2.7,.5})&&!red({.3,0}),
+        "sustained movement must track the current pointer after an exact preview, without freezing at the accepted position");
+    const auto frame=canvas.selectionBounds();
+    require(frame&&std::abs(frame->center().x()-screen({2,.5}).x())<2,
+        "sustained movement selection frame must follow the displayed body");
+    mouse(canvas,QEvent::MouseButtonRelease,screen({2,.5}));
+    require(commits==0&&canvas.entitiesMovePreviewPending(),"sustained display cannot authorize the pending release");
+    QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);QApplication::sendEvent(&canvas,&escape);
+}
+
+void delayed_body_previews() {
+    for (int gesture=0; gesture<4; ++gesture) {
+        PlanCanvas canvas;setup(canvas);
+        CanvasEntity body;body.id="body";body.type="assembly_instance";body.selected=true;
+        body.segments={{{-1,-.5},{1,-.5}},{{1,-.5},{1,.5}},{{1,.5},{-1,.5}},{{-1,.5},{-1,-.5}}};
+        body.filled=true;body.fill_color=QColor(240,20,20);body.fill_opacity=1;body.hatch_pattern="solid";
+        body.resize_frame=CanvasSelectionFrame{{0,0},0,2,1};
+        canvas.setEntities({body});
+        std::uint64_t serial{};int requests{},commits{};
+        const auto pending=[&](std::uint64_t ticket) {
+            serial=ticket;++requests;
+            require(gesture==0?canvas.markEntitiesMovePreviewPending(ticket):canvas.markEntityTransformPreviewPending(ticket),
+                "delayed body provider owns current request");
+            return std::optional<std::vector<CanvasEntity>>{};
+        };
+        canvas.setEntitiesMovePreviewRequested([&](QStringList,Vec2,std::uint64_t ticket){return pending(ticket);});
+        canvas.setEntityTransformPreviewRequested([&](QString,double,double,Vec2,std::uint64_t ticket){return pending(ticket);});
+        canvas.setEntityAxisResizePreviewRequested([&](QString,double,double,Vec2,std::uint64_t ticket){return pending(ticket);});
+        canvas.setEntitiesMoveRequested([&](QStringList,Vec2){++commits;return false;});
+        canvas.setEntityTransformRequested([&](QString,double,double){++commits;return false;});
+        canvas.setEntityAxisResizeRequested([&](QString,double,double,Vec2){++commits;return false;});
+        const auto original=render(canvas),output=render(canvas,true);
+        QPointF start,end;
+        if(gesture==0){start={320,240};end=start+QPointF(80,-40);}
+        else if(gesture==1){start=*canvas.selectionRotationHandlePosition();end={320+(start.y()-240),240-(start.x()-320)};}
+        else if(gesture==2){start=canvas.selectionBounds()->bottomRight();end=start+QPointF(60,40);}
+        else {start=canvas.selectionAxisHandlePositions().at(1);end=start+QPointF(80,0);}
+        mouse(canvas,QEvent::MouseButtonPress,start);mouse(canvas,QEvent::MouseMove,end);
+        require(requests==1,"body gesture must request delayed projection");
+        const auto red=[](const QImage& image,int x,int y){const auto c=image.pixelColor(x,y);return c.red()>180&&c.green()<100&&c.blue()<100;};
+        int changed=0;const auto first=render(canvas);
+        for(int y=80;y<370;++y)for(int x=100;x<550;++x)changed+=red(original,x,y)!=red(first,x,y);
+        require(changed>500,"initial pending exact work must visibly move the filled body");
+        capture(canvas,QStringLiteral("delayed-body-%1-initial-pending.png").arg(gesture));
+        mouse(canvas,QEvent::MouseMove,end);
+        require(requests==1,"identical effective body proposal must retain its request");
+        auto exact=body;for(auto& segment:exact.segments){segment.start.x+=.4;segment.end.x+=.4;}
+        require(gesture==0?canvas.completeEntitiesMovePreview(serial,std::vector<CanvasEntity>{exact}):
+            canvas.completeEntityTransformPreview(serial,std::vector<CanvasEntity>{exact}),"first body result admitted");
+        const auto accepted=render(canvas);const auto old=serial;
+        require(red(accepted,420,230),"continuity sample must contain accepted fill beyond committed body");
+        capture(canvas,QStringLiteral("delayed-body-%1-accepted.png").arg(gesture));
+        mouse(canvas,QEvent::MouseMove,end+QPointF(24,-20));
+        require(requests==2&&serial>old,"successor body proposal owns a fresh request");
+        const auto successor=render(canvas);
+        // The accepted body stays the base (never restored to the committed
+        // source), but the selected body follows the current pointer.
+        int moved=0;
+        for(int y=80;y<370;++y)for(int x=100;x<550;++x)moved+=red(accepted,x,y)!=red(successor,x,y);
+        require(moved>50,"pending successor must move the selected body to the current pointer");
+        if(gesture==0) {
+            // Accepted body spans x 272..432, y 200..280; the residual is (+24,-20).
+            require(red(successor,445,230)&&!red(accepted,445,230),
+                "pending move successor must carry the accepted body by the residual");
+            require(!red(successor,280,270)&&red(accepted,280,270),
+                "pending move successor must not remain at the accepted position");
+        }
+        require(red(successor,300,215)||red(successor,330,230),
+            "pending successor must still contain the accepted body instead of the committed source");
+        require(render(canvas,true)==output&&canvas.entities().front().segments.front().start.x==-1&&commits==0,
+            "displayed body never changes source or output");
+        capture(canvas,QStringLiteral("delayed-body-%1.png").arg(gesture));
+        mouse(canvas,QEvent::MouseButtonRelease,end+QPointF(24,-20));
+        require(commits==0,"previous displayed body cannot admit pending successor release");
+        require(!(gesture==0?canvas.completeEntitiesMovePreview(old,std::vector<CanvasEntity>{exact}):
+            canvas.completeEntityTransformPreview(old,std::vector<CanvasEntity>{exact})),"old displayed result stays stale");
+        QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);QApplication::sendEvent(&canvas,&escape);
+        require(!(gesture==0?canvas.completeEntitiesMovePreview(serial,std::vector<CanvasEntity>{exact}):
+            canvas.completeEntityTransformPreview(serial,std::vector<CanvasEntity>{exact})),"cancel retires pending body result");
+    }
+}
+
+QPointF gesture_start(PlanCanvas& canvas,int gesture) {
+    if(gesture==0)return {320,240};
+    if(gesture==1)return *canvas.selectionRotationHandlePosition();
+    if(gesture==2)return canvas.selectionBounds()->bottomRight();
+    return canvas.selectionAxisHandlePositions().at(1);
+}
+QPointF gesture_end(QPointF start,int gesture) {
+    if(gesture==0)return start+QPointF(80,-40);
+    if(gesture==1)return {320+(start.y()-240),240-(start.x()-320)};
+    if(gesture==2)return start+QPointF(60,40);
+    return start+QPointF(80,0);
+}
+CanvasEntity filled_body() {
+    CanvasEntity body;body.id="body";body.type="assembly_instance";body.selected=true;
+    body.segments={{{-1,-.5},{1,-.5}},{{1,-.5},{1,.5}},{{1,.5},{-1,.5}},{{-1,.5},{-1,-.5}}};
+    body.filled=true;body.fill_color=QColor(240,20,20);body.fill_opacity=1;body.hatch_pattern="solid";
+    body.resize_frame=CanvasSelectionFrame{{0,0},0,2,1};
+    return body;
+}
+bool is_red(const QImage& image,int x,int y) {
+    const auto c=image.pixelColor(x,y);return c.red()>180&&c.green()<100&&c.blue()<100;
+}
+
+void retry_after_rejection_requests_again() {
+    for(int gesture=0;gesture<4;++gesture)for(int failure=0;failure<2;++failure) {
+        PlanCanvas canvas;setup(canvas);canvas.setEntities({filled_body()});
+        int requests{};
+        const auto provider=[&] {
+            ++requests;
+            // An exception, or an unmarked decline, ends the sample unserved.
+            if(failure==0)throw std::runtime_error("preview provider failed");
+        };
+        canvas.setEntitiesMovePreviewRequested([&](QStringList,Vec2,std::uint64_t)
+            ->std::optional<std::vector<CanvasEntity>> {provider();return std::nullopt;});
+        canvas.setEntityTransformPreviewRequested([&](QString,double,double,Vec2,std::uint64_t)
+            ->std::optional<std::vector<CanvasEntity>> {provider();return std::nullopt;});
+        canvas.setEntityAxisResizePreviewRequested([&](QString,double,double,Vec2,std::uint64_t)
+            ->std::optional<std::vector<CanvasEntity>> {provider();return std::nullopt;});
+        canvas.setEntitiesMoveRequested([](QStringList,Vec2){return false;});
+        canvas.setEntityTransformRequested([](QString,double,double){return false;});
+        canvas.setEntityAxisResizeRequested([](QString,double,double,Vec2){return false;});
+        const auto start=gesture_start(canvas,gesture),end=gesture_end(start,gesture);
+        mouse(canvas,QEvent::MouseButtonPress,start);mouse(canvas,QEvent::MouseMove,end);
+        require(requests==1,"rejected sample requested once");
+        mouse(canvas,QEvent::MouseMove,end);
+        require(requests==2,"identical sample after a rejection or failure must request again");
+        mouse(canvas,QEvent::MouseMove,end);
+        require(requests==3,"a still-unserved identical sample keeps retrying");
+        QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);QApplication::sendEvent(&canvas,&escape);
+    }
+}
+
+void invalid_sample_retires_displayed_result() {
+    for(const bool axis:{false,true}) {
+        PlanCanvas canvas;setup(canvas);
+        auto body=filled_body();canvas.setEntities({body});
+        std::uint64_t serial{};int requests{};bool invalid{};
+        const auto pending=[&](std::uint64_t ticket,bool is_move) {
+            serial=ticket;++requests;
+            if(invalid)return std::optional<std::vector<CanvasEntity>>{std::vector<CanvasEntity>{}};
+            require(is_move?canvas.markEntitiesMovePreviewPending(ticket):canvas.markEntityTransformPreviewPending(ticket),
+                "sample marked pending");
+            return std::optional<std::vector<CanvasEntity>>{};
+        };
+        canvas.setEntitiesMovePreviewRequested([&](QStringList,Vec2,std::uint64_t t){return pending(t,true);});
+        canvas.setEntityAxisResizePreviewRequested([&](QString,double,double,Vec2,std::uint64_t t){return pending(t,false);});
+        canvas.setEntitiesMoveRequested([](QStringList,Vec2){return false;});
+        canvas.setEntityAxisResizeRequested([](QString,double,double,Vec2){return false;});
+        const auto start=axis?canvas.selectionAxisHandlePositions().at(1):QPointF(320,240);
+        const auto step=[&](double dx){return start+QPointF(dx,0);};
+        mouse(canvas,QEvent::MouseButtonPress,start);
+        mouse(canvas,QEvent::MouseMove,step(40));
+        // The accepted body sits half a metre above where any local feedback would.
+        auto accepted=body;for(auto& s:accepted.segments){s.start.y+=1.0;s.end.y+=1.0;}
+        require(axis?canvas.completeEntityTransformPreview(serial,std::vector<CanvasEntity>{accepted})
+                    :canvas.completeEntitiesMovePreview(serial,std::vector<CanvasEntity>{accepted}),"accepted result");
+        require(is_red(render(canvas),320,240-80),"accepted result is displayed");
+        invalid=true;
+        mouse(canvas,QEvent::MouseMove,step(80));
+        invalid=false;
+        mouse(canvas,QEvent::MouseMove,step(120));
+        require(requests==3,"later sample requests after an invalid one");
+        const auto shown=render(canvas);
+        // Local feedback from the source covers y 200..280 at x 440; the retired
+        // accepted result (one metre higher) covered y 120..200 there instead.
+        require(is_red(shown,440,240)&&!is_red(shown,440,160),
+            "pending successor of an invalid sample must not resurrect the earlier accepted result");
+        QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);QApplication::sendEvent(&canvas,&escape);
+    }
+}
+
+void display_only_tickets_follow_pointer_without_authorizing() {
+    for(int gesture=0;gesture<4;++gesture) {
+        PlanCanvas canvas;setup(canvas);
+        const auto body=filled_body();canvas.setEntities({body});
+        std::uint64_t serial{};int requests{},commits{};
+        CanvasPreviewDisplayState ticket;
+        const auto pending=[&](std::uint64_t value) {
+            serial=value;++requests;
+            ticket=gesture==0?canvas.entitiesMovePreviewDisplayState():canvas.entityTransformPreviewDisplayState();
+            require(ticket.valid()&&ticket.serial()==value,"ticket captured from the current proposal");
+            require(gesture==0?canvas.markEntitiesMovePreviewPending(value):canvas.markEntityTransformPreviewPending(value),
+                "delayed provider owns the request");
+            return std::optional<std::vector<CanvasEntity>>{};
+        };
+        canvas.setEntitiesMovePreviewRequested([&](QStringList,Vec2,std::uint64_t t){return pending(t);});
+        canvas.setEntityTransformPreviewRequested([&](QString,double,double,Vec2,std::uint64_t t){return pending(t);});
+        canvas.setEntityAxisResizePreviewRequested([&](QString,double,double,Vec2,std::uint64_t t){return pending(t);});
+        canvas.setEntitiesMoveRequested([&](QStringList,Vec2){++commits;return false;});
+        canvas.setEntityTransformRequested([&](QString,double,double){++commits;return false;});
+        canvas.setEntityAxisResizeRequested([&](QString,double,double,Vec2){++commits;return false;});
+        const auto display=[&](const CanvasPreviewDisplayState& state,const CanvasEntity& result) {
+            return gesture==0?canvas.displayEntitiesMovePreview(state,{result}):canvas.displayEntityTransformPreview(state,{result});
+        };
+        const auto start=gesture_start(canvas,gesture),end=gesture_end(start,gesture);
+        mouse(canvas,QEvent::MouseButtonPress,start);mouse(canvas,QEvent::MouseMove,end);
+        const auto first=ticket;const auto first_serial=serial;
+        mouse(canvas,QEvent::MouseMove,end+QPointF(24,-20));
+        require(requests==2&&serial>first_serial,"successor request is the current serial");
+        const auto current=serial;
+        const auto before=render(canvas),output=render(canvas,true);
+        auto exact=body;for(auto& s:exact.segments){s.start.x+=.4;s.end.x+=.4;}
+        require(display(first,exact),"older same-gesture result is displayed while the successor is pending");
+        require(serial==current&&(gesture==0?canvas.entitiesMovePreviewSerial()==current:canvas.entityTransformPreviewSerial()==current),
+            "display never changes the current serial");
+        require(gesture==0?canvas.entitiesMovePreviewPending():canvas.entityTransformPreviewPending(),
+            "display never releases the pending current request");
+        require(render(canvas)!=before&&render(canvas,true)==output,"displayed result repaints, screen only");
+        require(canvas.entities().front().segments.front().start.x==-1&&commits==0,"display never changes source or commits");
+        require(!display(first,exact),"a result no newer than the displayed one is refused");
+        require(!(gesture==0?canvas.completeEntitiesMovePreview(first_serial,std::vector<CanvasEntity>{exact}):
+                  canvas.completeEntityTransformPreview(first_serial,std::vector<CanvasEntity>{exact})),
+            "an old serial still cannot complete the current request");
+        require(!display(CanvasPreviewDisplayState{},exact),"an invalid state is inert");
+        require(!canvas.previewReleasePending(),"the pointer still owns its pending preview");
+        mouse(canvas,QEvent::MouseButtonRelease,end+QPointF(24,-20));
+        QApplication::processEvents();
+        require(commits==0,"a displayed older result cannot authorize the pending release");
+        require(canvas.previewReleasePending(),"the scheduler sees a release waiting for the current result");
+        require(gesture==0?canvas.entitiesMovePreviewPending():canvas.entityTransformPreviewPending(),
+            "release still waits for the current serial");
+        QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);QApplication::sendEvent(&canvas,&escape);
+        require(!canvas.previewReleasePending(),"cancellation retires the pending release");
+        require(!display(first,exact)&&!display(ticket,exact),"cancellation retires every ticket");
+        // A new gesture rejects tickets from the previous one even with a newer serial.
+        mouse(canvas,QEvent::MouseButtonPress,start);mouse(canvas,QEvent::MouseMove,end);
+        require(!display(first,exact),"a ticket from a previous gesture is refused");
+        QApplication::sendEvent(&canvas,&escape);
+        mouse(canvas,QEvent::MouseButtonRelease,end);
+    }
+}
+
+void display_tickets_belong_to_their_canvas() {
+    PlanCanvas first,second;setup(first);setup(second);
+    const auto body=filled_body();first.setEntities({body});second.setEntities({body});
+    CanvasPreviewDisplayState first_ticket,second_ticket;
+    const auto configure=[&](PlanCanvas& canvas,CanvasPreviewDisplayState& ticket) {
+        canvas.setEntitiesMovePreviewRequested([&canvas,&ticket](QStringList,Vec2,std::uint64_t serial)
+            ->std::optional<std::vector<CanvasEntity>> {
+            require(canvas.markEntitiesMovePreviewPending(serial),"cross-canvas fixture owns its request");
+            ticket=canvas.entitiesMovePreviewDisplayState();return {};
+        });
+        mouse(canvas,QEvent::MouseButtonPress,{320,240});mouse(canvas,QEvent::MouseMove,{360,220});
+    };
+    configure(first,first_ticket);configure(second,second_ticket);
+    require(first_ticket.serial()==second_ticket.serial(),"independent canvases may share serial counters");
+    const auto older_second=second_ticket;
+    mouse(second,QEvent::MouseMove,{400,200});
+    require(!second.displayEntitiesMovePreview(first_ticket,{body}),"another canvas cannot supply a display ticket");
+    require(second.displayEntitiesMovePreview(older_second,{body}),"the same canvas still accepts its older display ticket");
+}
+
+// Sliding a hosted opening along a curved wall is a rigid turn about the arc
+// centre; a straight translation of its artwork would leave the wall.
+void curved_hosted_opening_local_feedback() {
+    constexpr double pi=std::numbers::pi,half=.3;
+    PlanCanvas canvas;setup(canvas);
+    const Segment host{{1,0},{0,-1},3*pi/2};
+    const auto on_arc=[](double s){return Vec2{std::cos(s),std::sin(s)};};
+    const auto station=pi/4;
+    const auto centre=on_arc(station);
+    const Vec2 tangent{-std::sin(station),std::cos(station)},normal{std::cos(station),std::sin(station)};
+    const auto corner=[&](double along,double across) {
+        return Vec2{centre.x+tangent.x*along+normal.x*across,centre.y+tangent.y*along+normal.y*across};
+    };
+    CanvasEntity opening;opening.id="opening";opening.type="opening";opening.selected=true;
+    opening.filled=true;opening.fill_color=QColor(240,20,20);opening.fill_opacity=1;opening.hatch_pattern="solid";
+    const auto a=corner(-half,-.05),b=corner(half,-.05),c=corner(half,.05),d=corner(-half,.05);
+    opening.segments={{a,b,0},{b,c,0},{c,d,0},{d,a,0}};
+    opening.opening_width_controls=CanvasOpeningWidthControls{on_arc(station-half),on_arc(station+half),2*half,2,7,host,station-half};
+    canvas.setEntities({opening});
+    canvas.setEntitiesMovePreviewRequested([&](QStringList,Vec2,std::uint64_t ticket)
+        ->std::optional<std::vector<CanvasEntity>> {
+        require(canvas.markEntitiesMovePreviewPending(ticket),"hosted move pending");return std::nullopt;});
+    canvas.setEntitiesMoveRequested([](QStringList,Vec2){return false;});
+    const auto start=screen(centre),end=screen(on_arc(pi/2));
+    mouse(canvas,QEvent::MouseButtonPress,start);mouse(canvas,QEvent::MouseMove,end);
+    const auto shown=render(canvas);
+    // At 90 degrees the body lies along x; the unrotated translation would still
+    // lie along the 45-degree tangent and miss this point 0.25 m from its centre.
+    require(is_red(shown,int(std::lround(screen({-.25,1}).x())),int(std::lround(screen({-.25,1}).y()))),
+        "a hosted opening on a curved wall turns about the arc centre while sliding");
+    // Where an unturned (translated) body would still lie along its old tangent.
+    require(!is_red(shown,int(std::lround(screen({-.1768,1.1768}).x())),int(std::lround(screen({-.1768,1.1768}).y()))),
+        "a hosted opening on a curved wall is not carried by a straight translation");
+    QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);QApplication::sendEvent(&canvas,&escape);
+}
+
+void delayed_roof_opening_successors() {
+    for(const bool group:{false,true}) {
+        PlanCanvas canvas;setup(canvas);canvas.setEntities({});canvas.setMetricUnits(true);canvas.setSnapEnabled(true);
+        std::vector<CanvasRoofOpeningControls> source{
+            {{"roof","a",7},{{-.8,0},{1,0},{0,1},1,1,0,1,1},"roof"}};
+        if(group)source.push_back({{"roof","b",7},{{.8,0},{1,0},{0,1},1,1,0,1,1},"roof"});
+        canvas.setRoofOpeningControls(source);
+        std::vector<CanvasRoofOpeningTarget> targets;for(const auto& control:source)targets.push_back(control.target);
+        canvas.setSelectedRoofOpenings(targets);
+        int requests{},commits{};std::uint64_t serial{};
+        canvas.setRoofOpeningPreviewRequested([&](CanvasRoofOpeningEdit,std::uint64_t ticket)->std::optional<Boundary>{
+            ++requests;serial=ticket;require(canvas.markRoofOpeningPreviewPending(ticket),"single roof request pending");return {};});
+        canvas.setRoofOpeningGroupPreviewRequested([&](CanvasRoofOpeningGroupEdit,std::uint64_t ticket)->std::optional<Boundary>{
+            ++requests;serial=ticket;require(canvas.markRoofOpeningGroupPreviewPending(ticket),"roof cohort pending");return {};});
+        canvas.setRoofOpeningEditRequested([&](CanvasRoofOpeningEdit,std::uint64_t){++commits;return false;});
+        canvas.setRoofOpeningGroupEditRequested([&](CanvasRoofOpeningGroupEdit,std::uint64_t){++commits;return false;});
+        const auto output=render(canvas,true),original=render(canvas);
+        const auto start=screen({-.8,0}),end=start+QPointF(40,-24);
+        mouse(canvas,QEvent::MouseButtonPress,start);mouse(canvas,QEvent::MouseMove,end);
+        require(requests==1,"roof drag requests one exact projection");
+        require(original.copy(212,210,10,14)!=render(canvas).copy(212,210,10,14),
+            "initial pending roof edit must move projected mouth strokes");
+        capture(canvas,group?"delayed-roof-group-initial.png":"delayed-roof-single-initial.png");
+        // Away from every mouth outline so only the manufactured ink is sampled.
+        const Boundary ink{{{.4,-1.5},{.8,-1.5}},{{.8,-1.5},{.8,-1.3}},{{.8,-1.3},{.4,-1.3}},{{.4,-1.3},{.4,-1.5}}};
+        auto admitted=source;for(auto& control:admitted)control.frame.center.x+=.5;
+        require(group?canvas.completeRoofOpeningGroupPreview(serial,admitted,ink,true):canvas.completeRoofOpeningPreview(serial,ink),
+            "roof projection admitted");
+        const auto accepted=render(canvas);const auto old=serial;
+        mouse(canvas,QEvent::MouseMove,end+QPointF(24,0));
+        require(requests==2&&serial>old,"roof successor requested");
+        require(group?canvas.roofOpeningGroupPreviewBoundary().has_value():canvas.roofOpeningPreviewBoundary().has_value(),
+            "pending roof successor retains manufactured strokes");
+        const auto successor=render(canvas);
+        const auto ink_at=[](const QImage& image,int x,int y) {
+            for(int dy=-2;dy<=2;++dy){const auto c=image.pixelColor(x,y+dy);if(c.blue()>180&&c.red()<120)return true;}
+            return false;
+        };
+        // Accepted ink spans x 352..384 at y 360; the residual carries it +24 px
+        // toward the current pointer instead of freezing or discarding it.
+        require(ink_at(accepted,360,360)&&!ink_at(accepted,400,360),"accepted roof ink is displayed");
+        require(!ink_at(successor,360,360)&&ink_at(successor,400,360),
+            "pending roof successor carries the manufactured ink to the current pointer");
+        capture(canvas,group?"delayed-roof-group-successor.png":"delayed-roof-single-successor.png");
+        mouse(canvas,QEvent::MouseMove,end+QPointF(24.01,0));
+        require(requests==2,"same snapped roof proposal retains current serial");
+        mouse(canvas,QEvent::MouseButtonRelease,end+QPointF(24.01,0));
+        require(commits==0&&render(canvas,true)==output,"displayed roof projection cannot authorize successor release");
+        require(!(group?canvas.completeRoofOpeningGroupPreview(old,admitted,ink,true):canvas.completeRoofOpeningPreview(old,ink)),
+            "old roof result rejected");
+        QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);QApplication::sendEvent(&canvas,&escape);
+    }
+}
+
+void snapped_proposals_share_requests() {
+    for(int gesture=0;gesture<4;++gesture) {
+        PlanCanvas canvas;setup(canvas);canvas.setMetricUnits(true);canvas.setSnapEnabled(true);
+        std::uint64_t serial{};int requests{};
+        const auto pending=[&](std::uint64_t ticket) {
+            ++requests;serial=ticket;
+            require(gesture==0?canvas.markEntitiesMovePreviewPending(ticket):canvas.markEntityTransformPreviewPending(ticket),
+                "snapped proposal can await projection");return std::optional<std::vector<CanvasEntity>>{};
+        };
+        canvas.setEntitiesMoveRequested([](QStringList,Vec2){return false;});
+        canvas.setEntityTransformRequested([](QString,double,double){return false;});
+        canvas.setEntityAxisResizeRequested([](QString,double,double,Vec2){return false;});
+        canvas.setEntitiesMovePreviewRequested([&](QStringList,Vec2,std::uint64_t ticket){return pending(ticket);});
+        canvas.setEntityTransformPreviewRequested([&](QString,double,double,Vec2,std::uint64_t ticket){return pending(ticket);});
+        canvas.setEntityAxisResizePreviewRequested([&](QString,double,double,Vec2,std::uint64_t ticket){return pending(ticket);});
+        (void)render(canvas);QPointF start,end;
+        if(gesture==0){start={320,240};end=start+QPointF(80,-32);}
+        else if(gesture==1){start=*canvas.selectionRotationHandlePosition();end={320+(start.y()-240),240-(start.x()-320)};}
+        else if(gesture==2){start=canvas.selectionBounds()->bottomRight();end=start+QPointF(60,40);}
+        else{start=canvas.selectionAxisHandlePositions().at(1);end=start+QPointF(80,0);}
+        mouse(canvas,QEvent::MouseButtonPress,start);mouse(canvas,QEvent::MouseMove,end);
+        require(requests==1,"snapped body proposal starts one request");const auto first=serial;
+        mouse(canvas,QEvent::MouseMove,end+QPointF(.001,.001));
+        const char* messages[]{"snapped move samples share exact work","snapped rotation samples share exact work",
+            "snapped uniform resize samples share exact work","snapped axis resize samples share exact work"};
+        require(requests==1&&serial==first,messages[gesture]);
+        mouse(canvas,QEvent::MouseMove,end+QPointF(.05,.05),Qt::ShiftModifier);
+        require(requests==2&&serial>first,"fine-input modifier still publishes changed effective proposal");
+        QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);QApplication::sendEvent(&canvas,&escape);
+    }
+}
 }
 int main(int argc,char**argv) {
     sketch::testing::noninteractive_errors();QApplication app(argc,argv);
@@ -493,7 +890,11 @@ int main(int argc,char**argv) {
         const auto families=QFontDatabase::applicationFontFamilies(font_id);
         require(!families.isEmpty(),"bundled canvas font must expose its family");
         app.setFont(QFont(families.front(),10));
-        compound_presentation_previews();axis_gestures();rotated_symbol_and_rotation();vector_frame_survives_projection_refresh();
+        sustained_move_after_exact_preview();retry_after_rejection_requests_again();
+        invalid_sample_retires_displayed_result();display_only_tickets_follow_pointer_without_authorizing();
+        display_tickets_belong_to_their_canvas();
+        curved_hosted_opening_local_feedback();
+        delayed_body_previews();delayed_roof_opening_successors();snapped_proposals_share_requests();compound_presentation_previews();axis_gestures();rotated_symbol_and_rotation();vector_frame_survives_projection_refresh();
         common_angle_snapping_and_cancelled_rotation();preference_angle_snap_step();
         dimensions_are_physical_and_screen_only();label_and_reference_rotation_preview();exact_presentation_move_admission();
         std::cout<<"Axis canvas controls tests passed\n";return 0;

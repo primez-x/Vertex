@@ -3354,10 +3354,10 @@ void test_compound_rotation_exact_preview_protocol() {
         "pointer rotation waits for authoritative projection without committing");
     require(images_equal(output,render(canvas,true)),"pending rotation must not alter exported geometry");
     const auto superseded=serial;
-    mouse(QEvent::MouseMove,frame->center()+QPointF(95,35));
+    mouse(QEvent::MouseMove,frame->center()+QPointF(0,100));
     require(serial>superseded && !canvas.completeEntityTransformPreview(superseded,std::vector<CanvasEntity>{owner,dependency}),
         "a superseded rotation projection cannot be admitted");
-    mouse(QEvent::MouseButtonRelease,frame->center()+QPointF(95,35));
+    mouse(QEvent::MouseButtonRelease,frame->center()+QPointF(0,100));
     require(canvas.entityTransformPreviewPending() && commits==0,"early release waits for the final pending projection");
     auto proposed_owner=owner;
     proposed_owner.segments=Boundary{{{-.5,-1},{.5,-1},0},{{.5,-1},{.5,1},0},{{.5,1},{-.5,1},0},{{-.5,1},{-.5,-1},0}};
@@ -3577,9 +3577,9 @@ void test_boundary_vertex_exact_preview_protocol() {
             "vertex drag must request an exact projection after the drag threshold");
     const auto pending = render(f.canvas, false);
     // The lower edges are far from pointer/handle/readout overlays.
-    require(differing_pixels(initial, pending, QRect(394,260,22,45)) == 0 &&
+    require(differing_pixels(initial, pending, QRect(394,260,22,45)) > 0 &&
             differing_pixels(initial, pending, QRect(474,260,12,45)) == 0,
-            "pending vertex proposal must not fabricate owner or neighbor movement");
+            "pending vertex proposal must move its local body while keeping unprojected neighbors stable");
     require(vertex_preview_red_pixels(pending) == 0 && !images_equal(initial,pending),
             "pending vertex proposal must show feedback without false invalidity");
     require(f.canvas.completeBoundaryVertexPreview(f.serial, f.exact()),
@@ -3616,6 +3616,157 @@ void test_boundary_vertex_exact_preview_protocol() {
     sync.begin(); sync.release();
     require(sync.requests == 1 && sync.commits == 1,
             "synchronous exact vertex preview must share the deferred release contract");
+}
+
+void test_vertex_successor_keeps_dependent_projection() {
+    VertexPreviewFixture f;const auto output=render(f.canvas,true);(void)render(f.canvas,false);f.begin();
+    require(f.canvas.completeBoundaryVertexPreview(f.serial,f.exact()),"first vertex projection admitted");
+    const auto accepted=render(f.canvas,false);const auto old=f.serial;
+    f.mouse(QEvent::MouseMove,{1.75,.5});
+    require(f.requests==2 && f.serial>old,"vertex successor requested");
+    require(differing_pixels(accepted,render(f.canvas,false),QRect(470,250,65,65))==0,
+        "pending vertex successor retains accepted dependent wall");
+    f.mouse(QEvent::MouseMove,{1.75,.5});
+    require(f.requests==2,"identical effective vertex proposal retains request");
+    f.release({1.75,.5});
+    require(f.commits==0&&images_equal(output,render(f.canvas,true)),"old vertex display cannot admit successor release");
+    require(!f.canvas.completeBoundaryVertexPreview(old,f.exact()),"old vertex completion stays stale");
+    f.cancel();
+
+    VertexPreviewFixture snapped;snapped.canvas.setSnapEnabled(true);(void)render(snapped.canvas,false);snapped.begin();
+    const auto first=snapped.serial;
+    snapped.mouse(QEvent::MouseMove,{1.501,.801});
+    require(snapped.requests==1&&snapped.serial==first,"different pointers with identical snapped vertex share exact work");
+    snapped.cancel();
+}
+
+void test_pending_wall_endpoint_moves_filled_body() {
+    VertexPreviewFixture f;
+    f.boundary.type="wall";f.boundary.filled=true;f.boundary.fill_color=QColor(230,40,30);
+    f.boundary.fill_opacity=1;f.boundary.hatch_pattern="solid";
+    f.boundary.segments={{{-1,-.2},{1,-.2}},{{1,-.2},{1,.2}},{{1,.2},{-1,.2}},{{-1,.2},{-1,-.2}}};
+    f.boundary.endpoint_baseline=Segment{{-1,0},{1,0}};
+    f.boundary.vertex_handles={{"wall:end",{1,0},41}};
+    f.canvas.setEntities({f.boundary});
+    f.canvas.setBoundaryVertexPreviewRequested([&](QString,QString,Vec2,std::uint64_t)->std::optional<std::vector<CanvasEntity>> {
+        ++f.requests;f.serial=f.canvas.boundaryVertexPreviewSerial();
+        require(f.canvas.markBoundaryVertexPreviewPending(f.serial),"wall endpoint projection pending");return {};});
+    const auto original=render(f.canvas,false),output=render(f.canvas,true);
+    f.mouse(QEvent::MouseButtonPress,{1,0});f.mouse(QEvent::MouseMove,{2,0});
+    const auto pending=render(f.canvas,false);
+    save_capture(qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR"),QStringLiteral("delayed-wall-endpoint-original.png"),original);
+    save_capture(qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR"),QStringLiteral("delayed-wall-endpoint-body.png"),pending);
+    int moved_fill=0;
+    for(int y=229;y<235;++y)for(int x=430;x<455;++x) {
+        const auto color=pending.pixelColor(x,y);
+        moved_fill+=color.red()>170&&color.green()<80&&color.blue()<80;
+    }
+    require(f.requests==1&&moved_fill>100,
+        "initial pending wall endpoint must move filled body beyond its old end");
+    require(images_equal(output,render(f.canvas,true))&&f.canvas.entities().front().segments.front().end.x==1,
+        "local wall endpoint body feedback leaves source and output committed");
+    f.cancel();
+}
+
+// Same parameters are requested again after a failed or rejected sample, and an
+// invalid sample retires every earlier displayed result.
+void test_vertex_retry_and_invalid_retirement() {
+    {
+        VertexPreviewFixture f;bool fail=true;
+        f.canvas.setBoundaryVertexPreviewRequested([&](QString,QString,Vec2,std::uint64_t)
+            ->std::optional<std::vector<CanvasEntity>> {
+            ++f.requests;f.serial=f.canvas.boundaryVertexPreviewSerial();
+            if(fail)throw std::runtime_error("vertex provider failure");
+            require(f.canvas.markBoundaryVertexPreviewPending(f.serial),"vertex retry pending");return {};});
+        (void)render(f.canvas,false);f.begin();
+        require(f.requests==1,"failing vertex sample requested once");
+        f.mouse(QEvent::MouseMove,{1.5,.8});
+        require(f.requests==2,"identical vertex target after a provider failure requests again");
+        fail=false;f.mouse(QEvent::MouseMove,{1.5,.8});
+        require(f.requests==3,"identical vertex target retries once the provider recovers");
+        f.mouse(QEvent::MouseMove,{1.5,.8});
+        require(f.requests==3,"identical pending vertex target shares its request");
+        f.cancel();
+    }
+    {
+        VertexPreviewFixture f;bool invalid=false;
+        f.canvas.setBoundaryVertexPreviewRequested([&](QString,QString,Vec2,std::uint64_t)
+            ->std::optional<std::vector<CanvasEntity>> {
+            ++f.requests;f.serial=f.canvas.boundaryVertexPreviewSerial();
+            if(invalid)return std::vector<CanvasEntity>{};
+            require(f.canvas.markBoundaryVertexPreviewPending(f.serial),"vertex sample pending");return {};});
+        const auto initial=render(f.canvas,false);f.begin();
+        require(f.canvas.completeBoundaryVertexPreview(f.serial,f.exact()),"accepted vertex result");
+        // The accepted dependent wall is drawn at x 2.5 m (screen 520).
+        const QRect dependent(512,265,16,45);
+        require(differing_pixels(initial,render(f.canvas,false),dependent)>0,"accepted dependent wall is displayed");
+        invalid=true;f.mouse(QEvent::MouseMove,{1.7,.6});
+        require(f.canvas.boundaryVertexPreviewEntities().empty(),"an invalid sample clears displayed entities");
+        invalid=false;f.mouse(QEvent::MouseMove,{1.75,.5});
+        require(f.requests==3&&differing_pixels(initial,render(f.canvas,false),dependent)==0,
+            "pending successor of an invalid sample must not resurrect the earlier accepted dependent wall");
+        f.cancel();
+    }
+}
+
+// A display-only ticket repaints dependents from an older result, moves the
+// selected body to the current pointer and never completes the current request.
+void test_vertex_display_only_ticket() {
+    VertexPreviewFixture f;sketch::desktop::CanvasPreviewDisplayState ticket;
+    f.canvas.setBoundaryVertexPreviewRequested([&](QString,QString,Vec2,std::uint64_t)
+        ->std::optional<std::vector<CanvasEntity>> {
+        ++f.requests;f.serial=f.canvas.boundaryVertexPreviewSerial();
+        ticket=f.canvas.boundaryVertexPreviewDisplayState();
+        require(ticket.valid()&&ticket.serial()==f.serial,"vertex ticket captured from the current proposal");
+        require(f.canvas.markBoundaryVertexPreviewPending(f.serial),"vertex ticket sample pending");return {};});
+    const auto output=render(f.canvas,true);const auto initial=render(f.canvas,false);
+    f.begin();const auto first=ticket;const auto first_serial=f.serial;
+    f.mouse(QEvent::MouseMove,{1.75,.5});
+    require(f.requests==2&&f.serial>first_serial,"vertex successor is current");
+    const auto current=f.serial;const QRect dependent(512,265,16,45);
+    require(differing_pixels(initial,render(f.canvas,false),dependent)==0,"nothing displayed before the older result arrives");
+    require(f.canvas.displayBoundaryVertexPreview(first,f.exact()),"older vertex result is displayed");
+    require(f.canvas.boundaryVertexPreviewSerial()==current&&f.canvas.boundaryVertexPreviewPending(),
+        "display never changes or completes the current vertex serial");
+    require(differing_pixels(initial,render(f.canvas,false),dependent)>0,"older dependent projection is painted");
+    require(!f.canvas.displayBoundaryVertexPreview(first,f.exact()),"no result newer than the displayed one is accepted twice");
+    require(!f.canvas.completeBoundaryVertexPreview(first_serial,f.exact()),"older serial cannot complete the current request");
+    f.release({1.75,.5});
+    require(f.commits==0&&f.canvas.boundaryVertexPreviewPending()&&images_equal(output,render(f.canvas,true)),
+        "displayed older result cannot authorize the pending release");
+    f.cancel();
+    require(!f.canvas.displayBoundaryVertexPreview(first,f.exact())&&!f.canvas.displayBoundaryVertexPreview(ticket,f.exact()),
+        "cancellation retires every vertex ticket");
+}
+
+void test_wall_endpoint_residual_follows_pointer() {
+    VertexPreviewFixture f;
+    f.boundary.type="wall";f.boundary.filled=true;f.boundary.fill_color=QColor(230,40,30);
+    f.boundary.fill_opacity=1;f.boundary.hatch_pattern="solid";
+    f.boundary.segments={{{-1,-.2},{1,-.2}},{{1,-.2},{1,.2}},{{1,.2},{-1,.2}},{{-1,.2},{-1,-.2}}};
+    f.boundary.endpoint_baseline=Segment{{-1,0},{1,0}};
+    f.boundary.vertex_handles={{"wall:end",{1,0},41}};
+    f.canvas.setEntities({f.boundary});
+    f.canvas.setBoundaryVertexPreviewRequested([&](QString,QString,Vec2,std::uint64_t)->std::optional<std::vector<CanvasEntity>> {
+        ++f.requests;f.serial=f.canvas.boundaryVertexPreviewSerial();
+        require(f.canvas.markBoundaryVertexPreviewPending(f.serial),"wall endpoint projection pending");return {};});
+    (void)render(f.canvas,false);
+    f.mouse(QEvent::MouseButtonPress,{1,0});f.mouse(QEvent::MouseMove,{1.5,0});
+    auto accepted_wall=f.boundary;
+    accepted_wall.segments={{{-1,-.2},{1.5,-.2}},{{1.5,-.2},{1.5,.2}},{{1.5,.2},{-1,.2}},{{-1,.2},{-1,-.2}}};
+    accepted_wall.endpoint_baseline=Segment{{-1,0},{1.5,0}};
+    accepted_wall.vertex_handles={{"wall:end",{1.5,0},41}};
+    require(f.canvas.completeBoundaryVertexPreview(f.serial,std::vector<CanvasEntity>{accepted_wall}),"accepted wall result");
+    const auto accepted=render(f.canvas,false);
+    f.mouse(QEvent::MouseMove,{2,0});
+    require(f.requests==2,"wall endpoint successor requested");
+    const auto successor=render(f.canvas,false);
+    const auto red=[](const QImage& image,int x,int y){const auto c=image.pixelColor(x,y);return c.red()>170&&c.green()<80&&c.blue()<80;};
+    // Accepted body ends at 1.5 m (x 440); the successor stretches it to 2 m (x 480).
+    require(red(accepted,432,232)&&!red(accepted,470,232),"accepted wall body ends at the accepted endpoint");
+    require(red(successor,470,232),"pending successor carries the accepted wall body to the current endpoint");
+    require(f.canvas.entities().front().segments.front().end.x==1,"residual paint never edits the source");
+    f.cancel();
 }
 
 void test_boundary_vertex_annotation_preview() {
@@ -3718,10 +3869,10 @@ void test_boundary_vertex_annotation_invalidation() {
     require(f.canvas.completeBoundaryVertexPreview(old,f.exact(),{projected},metrics),
             "first annotation candidate must complete");
     f.mouse(QEvent::MouseMove,{1.75,.5});
-    require(f.canvas.boundaryVertexPreviewLabels().empty() &&
-            !f.canvas.boundaryVertexPreviewMetrics() &&
+    require(!f.canvas.boundaryVertexPreviewLabels().empty() &&
+            f.canvas.boundaryVertexPreviewMetrics().has_value() &&
             !f.canvas.completeBoundaryVertexPreview(old,f.exact(),{projected},metrics),
-            "new proposal must clear annotations and reject earlier exact metrics");
+            "pending successor retains displayed annotations and metrics while rejecting stale admission");
     require(f.canvas.completeBoundaryVertexPreview(f.serial,f.exact({1.75,.5}),{projected},metrics),
             "latest candidate must complete");
     const auto replaced = f.serial;
@@ -4513,6 +4664,11 @@ int main(int argc, char** argv) {
         test_selected_boundary_is_the_move_hit_target();
         test_single_selection_transform_handles();
         test_boundary_vertex_handles_preview_and_commit_once();
+        test_pending_wall_endpoint_moves_filled_body();
+        test_vertex_successor_keeps_dependent_projection();
+        test_vertex_retry_and_invalid_retirement();
+        test_vertex_display_only_ticket();
+        test_wall_endpoint_residual_follows_pointer();
         test_boundary_vertex_exact_preview_protocol();
         test_boundary_vertex_annotation_preview();
         test_boundary_vertex_annotation_invalidation();

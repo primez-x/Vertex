@@ -175,6 +175,56 @@ void mouse(sketch::visualization::NativeModelView& view,QEvent::Type type,QPoint
     QApplication::sendEvent(&view,&event);
 }
 
+void check_live_move_frames(sketch::visualization::NativeModelView& view, const QString& id) {
+    const auto silhouette_difference = [](const QImage& left, const QImage& right) {
+        check(!left.isNull() && left.size() == right.size(), "Live native framebuffer must be readable without export");
+        const auto background = left.pixelColor(0, 0);
+        const auto foreground = [&](const QColor& color) {
+            return std::abs(color.red()-background.red()) + std::abs(color.green()-background.green()) +
+                std::abs(color.blue()-background.blue()) > 60;
+        };
+        int changed = 0;
+        for (int y=0; y<left.height(); ++y) for (int x=0; x<left.width(); ++x)
+            changed += foreground(left.pixelColor(x,y)) != foreground(right.pixelColor(x,y));
+        return changed;
+    };
+    view.setSelectedEntity(id);
+    check(view.beginMove(id), "Live-frame fixture must arm explicit Move");
+    const auto original = view.nativeRenderedImage();
+    check(!original.isNull(), "Live-frame reader must support the native window buffer");
+    const auto background=original.pixelColor(0,0);
+    int foreground=0;
+    for(int y=0;y<original.height();++y)for(int x=0;x<original.width();++x) {
+        const auto color=original.pixelColor(x,y);
+        foreground+=std::abs(color.red()-background.red())+std::abs(color.green()-background.green())+
+            std::abs(color.blue()-background.blue())>60;
+    }
+    check(foreground>1000, "Live-frame reader must contain settled model pixels before testing motion");
+    const QPointF start(300,230), first(340,250), second(380,260);
+    mouse(view,QEvent::MouseButtonPress,start,Qt::LeftButton,Qt::LeftButton);
+    mouse(view,QEvent::MouseMove,first,Qt::NoButton,Qt::LeftButton);
+    const auto first_frame = view.nativeRenderedImage();
+    mouse(view,QEvent::MouseMove,second,Qt::NoButton,Qt::LeftButton);
+    const auto second_frame = view.nativeRenderedImage();
+    const auto directory = qEnvironmentVariable("SKETCH_TEST_ARTIFACT_DIR");
+    if (!directory.isEmpty()) {
+        check(QDir().mkpath(directory), "Live-frame capture directory must exist");
+        check(original.save(QDir(directory).filePath("live-move-before.png")) &&
+            first_frame.save(QDir(directory).filePath("live-move-first.png")) &&
+            second_frame.save(QDir(directory).filePath("live-move-second.png")), "Live-frame captures must save");
+    }
+    check(silhouette_difference(original, first_frame)>200,
+        "Move must redraw model pixels immediately, before export or incidental paint events");
+    check(silhouette_difference(first_frame, second_frame)>200,
+        "Successive Move samples must redraw new model pixels without returning to the committed frame");
+    view.cancelInteraction();
+    mouse(view,QEvent::MouseButtonRelease,second,Qt::LeftButton,Qt::NoButton);
+    check(view.beginMove(id), "Cancelled live Move must rearm");
+    check(silhouette_difference(original, view.nativeRenderedImage())==0,
+        "Cancelling live Move must restore the original model pixels and picking frame");
+    view.cancelInteraction();
+}
+
 using NativeTransform = std::array<double, 12>;
 constexpr NativeTransform identity_transform{1,0,0,0, 0,1,0,0, 0,0,1,0};
 bool near_transform(const NativeTransform& a, const NativeTransform& b) {
@@ -196,6 +246,271 @@ QPointF find_control(sketch::visualization::NativeModelView& view,
         for (int x = 2; x < view.width(); x += 3)
             if (view.transformControlAt(QPointF(x, y)) == mode) return QPointF(x, y);
     throw std::runtime_error("Actual OCCT transform handle was not pickable");
+}
+
+void check_drag_across_another_handle(sketch::visualization::NativeModelView& view, const QString& id) {
+    using Control = sketch::visualization::NativeModelView::TransformControl;
+    view.setSelectedEntity(id);
+    const auto scale = find_control(view,Control::scale);
+    const auto rotation = find_control(view,Control::rotation);
+    // Uniform scaling leaves the manipulator's position/orientation fixed, so
+    // this crosses a real second handle while the first operation is captured.
+    mouse(view,QEvent::MouseButtonPress,scale,Qt::LeftButton,Qt::LeftButton);
+    mouse(view,QEvent::MouseMove,rotation,Qt::NoButton,Qt::LeftButton);
+    const auto crossing = view.nativePresentationTransform(id);
+    const auto end = rotation + QPointF(23,17);
+    mouse(view,QEvent::MouseMove,end,Qt::NoButton,Qt::LeftButton);
+    check(crossing && view.nativePresentationTransform(id) != crossing,
+          "Crossing another handle must not deactivate the captured scale operation");
+    view.cancelInteraction();
+    mouse(view,QEvent::MouseButtonRelease,end,Qt::LeftButton,Qt::NoButton);
+}
+
+void check_drag_depth_extent(sketch::visualization::NativeModelView& view,QTemporaryDir& temporary) {
+    using namespace sketch;
+    auto box=encode_building_entity(RectangularColumn{"depth-box",{0,0,0},1,1,1,0});
+    auto document=Document::create({box});
+    view.setSelectedEntity({});
+    view.setSnapshot(document.snapshot());
+    check(ready_settled(view),"Depth fixture must publish");
+    view.fitAll();
+    const QPointF centre(view.width()/2.0,view.height()/2.0);
+    QWheelEvent zoom(centre,view.mapToGlobal(centre.toPoint()),{},QPoint(0,-960),
+        Qt::NoButton,Qt::NoModifier,Qt::NoScrollPhase,false);
+    QApplication::sendEvent(&view,&zoom);
+    view.setSelectedEntity(QString::fromStdString(box.id));
+    const auto control=find_control(view,visualization::NativeModelView::TransformControl::translation);
+    const auto end=control+QPointF(140,-120);
+    mouse(view,QEvent::MouseButtonPress,control,Qt::LeftButton,Qt::LeftButton);
+    mouse(view,QEvent::MouseMove,end,Qt::NoButton,Qt::LeftButton);
+    view.update();QApplication::processEvents();
+    const auto transform=presentation_transform(view,box.id);
+    check(std::hypot(transform[3],transform[7],transform[11])>1.0,
+        "Depth fixture must move farther than the source box's depth");
+    const auto live=view.nativeRenderedImage();
+    const auto reference=capture(view,temporary.filePath("depth-drag-reference.png")).image;
+    const auto foreground=[](const QImage& image) {
+        check(!image.isNull(),"Depth fixture must expose its native framebuffer");
+        const auto background=image.pixelColor(0,0);
+        std::size_t count=0;
+        for(int y=0;y<image.height();++y)for(int x=0;x<image.width();++x) {
+            const auto color=image.pixelColor(x,y);
+            count+=std::abs(color.red()-background.red())+std::abs(color.green()-background.green())+
+                std::abs(color.blue()-background.blue())>60;
+        }
+        return count;
+    };
+    const auto directory=qEnvironmentVariable("SKETCH_TEST_ARTIFACT_DIR");
+    if(!directory.isEmpty())check(live.save(QDir(directory).filePath("depth-drag-live.png")),
+        "Depth drag framebuffer must save");
+    const auto actual=foreground(live),expected=foreground(reference);
+    if(actual<expected*.95)std::cerr<<"Depth drag pixels: live="<<actual<<"; refitted="<<expected<<'\n';
+    check(actual>=expected*.95,
+        "Dragging beyond the source depth must keep the complete visible solid inside the clipping range");
+    view.cancelInteraction();
+    mouse(view,QEvent::MouseButtonRelease,end,Qt::LeftButton,Qt::NoButton);
+    view.setSelectedEntity({});
+}
+
+void check_roof_pointer_feedback(sketch::visualization::NativeModelView& view,QTemporaryDir& temporary) {
+    using namespace sketch;
+    using Control=visualization::NativeModelView::TransformControl;
+    GableRoof roof{"pointer-roof",{0,0,0},0,8,6,1.5,std::atan(.5),.25,.15,
+        {{"pointer-skylight",-1,-2,1,.6,RoofSkylight{}}}};
+    auto document=Document::create({encode_building_entity(roof)});
+    const auto source=document.snapshot();view.setSnapshot(source);
+    check(ready_settled(view),"Roof pointer fixture must prepare native skylight geometry");view.fitAll();
+    std::uint64_t serial{};int commits{};visualization::NativeRoofOpeningTransform proposal;
+    view.onRoofOpeningTransformStarted=[](auto){};
+    view.onRoofOpeningTransformPreviewRequested=[&](auto value,std::uint64_t next){proposal=value;serial=next;};
+    view.onRoofOpeningTransformRequested=[&](auto,std::uint64_t){++commits;return false;};
+    view.setSelectedEntity({});
+    view.setSelectedRoofOpenings({{"pointer-roof","pointer-skylight"}});
+    QApplication::setActiveWindow(&view);view.setFocus();QApplication::processEvents();
+    check(view.hasFocus(),"Roof pointer fixture must own its hidden Qt input focus");
+    check(view.transformControlsVisible(),"Roof pointer fixture must expose its typed skylight controls");
+    const auto source_frame=capture(view,temporary.filePath("live-roof-source.png"));
+    const auto start=find_control(view,Control::translation);
+    const auto outline=[](const QImage& image) {
+        double x=0,y=0;int count=0;
+        for(int row=0;row<image.height();++row)for(int column=0;column<image.width();++column) {
+            const auto color=image.pixelColor(column,row);
+            if(color.red()>=75&&color.red()<=185&&color.green()>color.red()+35&&color.green()<235&&color.blue()>245) {
+                x+=column;y+=row;++count;
+            }
+        }
+        return std::pair{count,count?QPointF(x/count,y/count):QPointF{}};
+    };
+    const auto before=outline(view.nativeRenderedImage());
+    mouse(view,QEvent::MouseButtonPress,start,Qt::LeftButton,Qt::LeftButton);
+    auto end=start+QPointF(26,14);
+    mouse(view,QEvent::MouseMove,end,Qt::NoButton,Qt::LeftButton);
+    check(serial&&view.roofOpeningTransformPreviewCurrent(serial),"Roof pointer sample must remain pending exact manufacture");
+    const auto first=view.nativeRenderedImage();const auto first_outline=outline(first);
+    check(first_outline.first>before.first+20,"Pending roof transformation must draw the captured component outline before exact manufacture");
+    const auto first_serial=serial;end+=QPointF(30,18);
+    mouse(view,QEvent::MouseMove,end,Qt::NoButton,Qt::LeftButton);
+    const auto second=view.nativeRenderedImage();const auto second_outline=outline(second);
+    check(serial>first_serial&&second_outline.first>20&&
+        std::hypot(second_outline.second.x()-first_outline.second.x(),second_outline.second.y()-first_outline.second.y())>2,
+        "Pending roof body outline must follow successive pointer samples");
+    check(capture(view,temporary.filePath("live-roof-pending-export.png")).image==source_frame.image,
+        "The provisional roof outline must stay out of native image output");
+    auto candidate=Document::fork(source);
+    auto moved_roof=roof;
+    moved_roof.openings.front().x+=proposal.translation_world_m[0];
+    moved_roof.openings.front().y+=proposal.translation_world_m[1];
+    candidate.apply(ApplyEntityChanges{candidate.revision(),
+        {EntityChange::upsert(encode_building_entity(moved_roof))},{},"Roof pointer preview fixture"});
+    const auto candidate_accepted=view.completeRoofOpeningTransformPreview(serial,candidate.snapshot(),proposal.targets,{"pointer-roof"});
+    if (!candidate_accepted) std::cerr << "Roof candidate refusal: focus=" << view.hasFocus()
+        << "; current=" << view.roofOpeningTransformPreviewCurrent(serial)
+        << "; editable=" << candidate.is_editable() << "; error=" << view.lastError().toStdString() << '\n';
+    check(candidate_accepted,
+        "The current roof proposal must accept its exact candidate for native preparation");
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    while(!view.roofOpeningTransformPreviewPresented(serial)&&view.roofOpeningTransformPreviewCurrent(serial)&&
+          std::chrono::steady_clock::now()<deadline) {
+        QApplication::processEvents();QThread::msleep(1);
+    }
+    check(view.roofOpeningTransformPreviewPresented(serial),"Exact native roof preparation must survive queued paint events");
+    check(outline(view.nativeRenderedImage()).first<=before.first+10,
+        "An exact roof candidate must replace the provisional outline");
+    const auto exact_frame=capture(view,temporary.filePath("live-roof-exact.png"));
+    check(exact_frame.image!=source_frame.image,"The exact native candidate must move actual roof geometry");
+    const auto exact_serial=serial;end+=QPointF(28,16);
+    mouse(view,QEvent::MouseMove,end,Qt::NoButton,Qt::LeftButton);
+    const auto successor_frame=view.nativeRenderedImage();
+    const auto successor_outline=outline(successor_frame);
+    if (!(serial>exact_serial&&successor_outline.first<=before.first+10)) {
+        std::cerr << "Roof successor: serial " << exact_serial << " -> " << serial
+            << "; outline before=" << before.first << "; successor=" << successor_outline.first
+            << "; current=" << view.roofOpeningTransformPreviewCurrent(serial) << '\n';
+        const auto directory=qEnvironmentVariable("SKETCH_TEST_ARTIFACT_DIR");
+        if (!directory.isEmpty()) successor_frame.save(QDir(directory).filePath("live-roof-successor-frame.png"));
+    }
+    check(serial>exact_serial&&successor_outline.first<=before.first+10,
+        "A successor of an exact roof candidate must not redisplay a blinking provisional outline");
+    check(capture(view,temporary.filePath("live-roof-residual.png")).image!=exact_frame.image,
+        "Selected candidate geometry must follow the successor before its exact result arrives");
+    check(view.roofOpeningTransformPreviewCurrent(serial),"Exporting a pending successor must preserve its captured camera");
+    mouse(view,QEvent::MouseButtonRelease,end,Qt::LeftButton,Qt::NoButton);
+    check(commits==0&&document.snapshot().entities()==source.entities(),
+        "A provisional roof outline cannot authorize a pending release");
+    view.cancelInteraction();
+    check(outline(view.nativeRenderedImage()).first<=before.first+10,
+        "Cancelling a pending roof gesture must remove its provisional outline");
+
+    // Exercise the other translation axis too: moving uphill changes the
+    // manufactured surface height, so a flat residual can disappear in its host.
+    const auto controls=view.nativeRenderedImage();
+    std::optional<QPointF> uphill_control;
+    for(int y=0;y<controls.height()&&!uphill_control;y+=2)for(int x=0;x<controls.width();x+=2) {
+        const auto color=controls.pixelColor(x,y);
+        const QPointF logical(x/view.devicePixelRatioF(),y/view.devicePixelRatioF());
+        if(color.green()>180&&color.red()<100&&color.blue()<100&&view.transformControlAt(logical)==Control::translation) {
+            uphill_control=logical;break;
+        }
+    }
+    check(uphill_control.has_value(),"The actual roof Y translation handle must be pickable");
+    const auto uphill_start=*uphill_control;
+    auto offset=QPointF(30,20);
+    mouse(view,QEvent::MouseButtonPress,uphill_start,Qt::LeftButton,Qt::LeftButton);
+    mouse(view,QEvent::MouseMove,uphill_start+offset,Qt::NoButton,Qt::LeftButton);
+    check(std::abs(proposal.translation_world_m[1])>1e-6&&std::abs(proposal.translation_world_m[0])<1e-6,
+        "The uphill fixture must move along the sloped roof's Y axis");
+    offset*=.35/proposal.translation_world_m[1];
+    mouse(view,QEvent::MouseMove,uphill_start+offset,Qt::NoButton,Qt::LeftButton);
+    auto uphill=Document::fork(source);auto uphill_roof=roof;
+    uphill_roof.openings.front().y+=proposal.translation_world_m[1];
+    uphill.apply(ApplyEntityChanges{uphill.revision(),
+        {EntityChange::upsert(encode_building_entity(uphill_roof))},{},"Uphill roof preview fixture"});
+    check(view.completeRoofOpeningTransformPreview(serial,uphill.snapshot(),proposal.targets,{"pointer-roof"}),
+        "The uphill exact candidate must enter native preparation");
+    const auto uphill_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    while(!view.roofOpeningTransformPreviewPresented(serial)&&view.roofOpeningTransformPreviewCurrent(serial)&&
+          std::chrono::steady_clock::now()<uphill_deadline) {
+        QApplication::processEvents();QThread::msleep(1);
+    }
+    check(view.roofOpeningTransformPreviewPresented(serial),"The uphill exact candidate must display");
+    const auto uphill_exact=capture(view,temporary.filePath("live-roof-uphill-exact.png")).image;
+    offset*=1.0/proposal.translation_world_m[1];
+    mouse(view,QEvent::MouseMove,uphill_start+offset,Qt::NoButton,Qt::LeftButton);
+    const auto uphill_live=view.nativeRenderedImage();
+    const auto uphill_pending=capture(view,temporary.filePath("live-roof-uphill-pending.png")).image;
+    const auto glazing=[](const QImage& image) {
+        int count=0;double x=0,y=0;
+        for(int row=0;row<image.height();++row)for(int column=0;column<image.width();++column) {
+            const auto color=image.pixelColor(column,row);
+            if(color.red()>235&&color.green()>235&&color.blue()>235) {++count;x+=column;y+=row;}
+        }
+        return std::pair{count,count?QPointF(x/count,y/count):QPointF{}};
+    };
+    const auto uphill_before=glazing(uphill_exact),uphill_after=glazing(uphill_pending);
+    if(uphill_after.first<uphill_before.first*.9)std::cerr<<"Uphill glazing: exact="<<uphill_before.first
+        <<"; pending="<<uphill_after.first<<'\n';
+    check(uphill_before.first>100&&glazing(uphill_live).first>=uphill_before.first*.9&&
+        uphill_after.first>=uphill_before.first*.9&&
+        std::hypot(uphill_after.second.x()-uphill_before.second.x(),uphill_after.second.y()-uphill_before.second.y())>3,
+        "An uphill successor must keep the selected skylight visible while exact geometry is pending");
+    view.cancelInteraction();
+    mouse(view,QEvent::MouseButtonRelease,uphill_start+offset,Qt::LeftButton,Qt::NoButton);
+    view.setSelectedRoofOpenings({});
+
+    auto group_roof=roof;
+    group_roof.openings.push_back({"pointer-second",1,-2,1,.6,RoofSkylight{}});
+    auto group=Document::create({encode_building_entity(group_roof)});
+    view.setSnapshot(group.snapshot());check(ready_settled(view),"Directional roof fixture must publish");view.fitAll();
+    view.setRoofOpeningDirectionalResizeEnabled(true);
+    view.setSelectedRoofOpenings({{"pointer-roof","pointer-skylight"},{"pointer-roof","pointer-second"}});
+    QApplication::setActiveWindow(&view);view.setFocus();QApplication::processEvents();
+    const auto group_source=capture(view,temporary.filePath("live-roof-axis-source.png"));
+    const auto group_before=outline(view.nativeRenderedImage());
+    const auto axis_start=find_control(view,Control::axis_resize_x);
+    mouse(view,QEvent::MouseButtonPress,axis_start,Qt::LeftButton,Qt::LeftButton);
+    auto axis_end=axis_start+QPointF(28,16);
+    mouse(view,QEvent::MouseMove,axis_end,Qt::NoButton,Qt::LeftButton);
+    check(proposal.axis_scale[0]!=1.0&&proposal.axis_scale[1]==1.0&&view.roofOpeningTransformPreviewCurrent(serial),
+        "Directional roof drag must request the actual X factor");
+    const auto axis_first_frame=view.nativeRenderedImage();
+    const auto axis_first=outline(axis_first_frame);
+    check(axis_first.first>group_before.first+20,
+        "Directional roof resize must show its proposed extent before exact manufacture");
+    const auto axis_directory=qEnvironmentVariable("SKETCH_TEST_ARTIFACT_DIR");
+    if(!axis_directory.isEmpty())check(axis_first_frame.save(QDir(axis_directory).filePath("live-roof-axis-extent.png")),
+        "The live directional extent must save");
+    check(capture(view,temporary.filePath("live-roof-axis-pending-export.png")).image==group_source.image,
+        "Directional extent feedback must stay out of image output before exact manufacture");
+    auto group_candidate=Document::fork(group.snapshot());auto resized_group=group_roof;
+    for(auto& opening:resized_group.openings) {
+        opening.x=proposal.pivot_world_m[0]+(opening.x-proposal.pivot_world_m[0])*proposal.axis_scale[0];
+        opening.width*=proposal.axis_scale[0];
+    }
+    group_candidate.apply(ApplyEntityChanges{group_candidate.revision(),
+        {EntityChange::upsert(encode_building_entity(resized_group))},{},"Directional roof preview fixture"});
+    check(view.completeRoofOpeningTransformPreview(serial,group_candidate.snapshot(),proposal.targets,{"pointer-roof"}),
+        "The directional exact candidate must enter native preparation");
+    const auto axis_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    while(!view.roofOpeningTransformPreviewPresented(serial)&&view.roofOpeningTransformPreviewCurrent(serial)&&
+          std::chrono::steady_clock::now()<axis_deadline) {
+        QApplication::processEvents();QThread::msleep(1);
+    }
+    check(view.roofOpeningTransformPreviewPresented(serial)&&outline(view.nativeRenderedImage()).first>group_before.first+20,
+        "The directional extent must stay visible across exact candidate replacement");
+    const auto axis_exact=capture(view,temporary.filePath("live-roof-axis-exact.png")).image;
+    axis_end+=QPointF(25,15);
+    mouse(view,QEvent::MouseMove,axis_end,Qt::NoButton,Qt::LeftButton);
+    const auto axis_second=outline(view.nativeRenderedImage());
+    check(std::abs(axis_second.first-axis_first.first)>10,
+        "Directional roof extent feedback must follow successive samples");
+    check(capture(view,temporary.filePath("live-roof-axis-successor-export.png")).image==axis_exact,
+        "Directional successor feedback must retain exact facets and stay out of image output");
+    view.cancelInteraction();
+    mouse(view,QEvent::MouseButtonRelease,axis_end,Qt::LeftButton,Qt::NoButton);
+    check(outline(view.nativeRenderedImage()).first<=group_before.first+10&&commits==0,
+        "Cancelling directional feedback must remove it without a document command");
+    view.setRoofOpeningDirectionalResizeEnabled(false);view.setSelectedRoofOpenings({});
+    view.onRoofOpeningTransformStarted={};view.onRoofOpeningTransformPreviewRequested={};view.onRoofOpeningTransformRequested={};
 }
 
 sketch::Document hosted_gesture_document(bool stairs) {
@@ -343,7 +658,15 @@ void check_hosted_gesture_lifecycle(sketch::visualization::NativeModelView& view
                 if (!mode) check(view.beginMove(selected), "Move retry must rearm the host");
             }
             check(previewed, "Actual handle drag must produce a nonidentity preview");
+            const auto first_preview = presentation_transform(view,host_id);
+            end = start + (end-start)*1.75 + QPointF(7,-11);
+            mouse(view,QEvent::MouseMove,end,Qt::NoButton,Qt::LeftButton);
+            check(!near_transform(presentation_transform(view,host_id),first_preview),
+                  "A captured drag must keep updating its original operation across successive pointer samples");
             const auto preview = check_group();
+            // Status/overlay updates queue real paint events during a gesture.
+            // They must preserve its captured screen-to-world mapping.
+            view.update();QApplication::processEvents();
             const auto preview_frame = capture(view, temporary.filePath(name+"-preview.png"));
             check(preview_frame.image != baseline.image &&
                   near_transform(presentation_transform(view,host_id),preview),
@@ -420,6 +743,7 @@ void check_native_resize(const sketch::DocumentSnapshot& snapshot, QTemporaryDir
     view->setSnapshot(snapshot);
     view->hide();
     check(!view->nativeRenderSizePixels(), "An uninitialized view has no native render extent");
+    check(view->nativeRenderedImage().isNull(), "Reading an uninitialized framebuffer must not initialize the view");
     splitter.resize(1200, 760);
     splitter.show();
     QApplication::processEvents();
@@ -511,6 +835,9 @@ void check_gestures(sketch::visualization::NativeModelView& view, const QString&
     mouse(view, QEvent::MouseButtonDblClick, edit_point, Qt::LeftButton, Qt::LeftButton);
     check(edits == 0, "Edit must wait for a stationary release");
     mouse(view, QEvent::MouseButtonRelease, edit_point, Qt::LeftButton, Qt::NoButton);
+    if (!(edits == 1 && selections == 1 && translations == 0))
+        std::cerr << "Stationary edit: edits=" << edits << "; selections=" << selections
+            << "; moves=" << translations << "; error=" << view.lastError().toStdString() << '\n';
     check(edits == 1 && selections == 1 && translations == 0,
           "Stationary double click must select and request one entity edit");
     mouse(view, QEvent::MouseButtonRelease, edit_point, Qt::LeftButton, Qt::NoButton);
@@ -552,15 +879,16 @@ void check_gestures(sketch::visualization::NativeModelView& view, const QString&
     check(edits == 2 && selections == 2 && translations == 0,
           "Qt double click sequence must select once and edit once without translation");
     selections = 0;
-    mouse(view, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
-    mouse(view, QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton, Qt::ControlModifier);
+    mouse(view, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton, Qt::AltModifier);
+    mouse(view, QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton, Qt::AltModifier);
     mouse(view, QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
-    const auto panned = capture(view, temporary.filePath("ctrl-pan.png"));
+    const auto panned = capture(view, temporary.filePath("alt-pan.png"));
     check(panned.centre.x() > before.centre.x() + 5 && panned.centre.y() > before.centre.y() + 5 &&
-          selections == 0 && translations == 0, "Ctrl drag must pan without selection or document callbacks");
+          selections == 0 && translations == 0, "Alt drag must pan without selection or document callbacks");
     mouse(view, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
     mouse(view, QEvent::MouseButtonRelease, start, Qt::LeftButton, Qt::NoButton);
-    check(selections == 0 && translations == 0, "Ctrl click must not select or edit");
+    check(selections == 1 && translations == 0, "Ctrl click must toggle selection without translating");
+    view.setSelectedEntity({});selections=0;
 
     check(view.beginMove(id), "Visible entity must support explicit Move");
     mouse(view, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
@@ -592,11 +920,16 @@ void check_gestures(sketch::visualization::NativeModelView& view, const QString&
     mouse(view, QEvent::MouseMove, {2, 2}, Qt::NoButton, Qt::NoButton);
     check(capture(view, temporary.filePath("cancelled-move.png")).image == panned.image,
           "Cancelled Move must restore the original presentation");
+    view.setSelectedEntity({});
     mouse(view, QEvent::MouseButtonPress, start, Qt::RightButton, Qt::RightButton);
     mouse(view, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::RightButton | Qt::LeftButton);
     mouse(view, QEvent::MouseButtonRelease, start, Qt::LeftButton, Qt::RightButton);
     check(menus == 0 && selections == 0, "Extra left button must not steal right gesture");
     mouse(view, QEvent::MouseButtonRelease, start, Qt::RightButton, Qt::NoButton);
+    if (!(menus == 1 && menu_position == view.mapToGlobal(start.toPoint())))
+        std::cerr << "Stationary context: menus=" << menus << "; selections=" << selections
+            << "; position=" << menu_position.x() << ',' << menu_position.y()
+            << "; error=" << view.lastError().toStdString() << '\n';
     check(menus == 1 && menu_position == view.mapToGlobal(start.toPoint()), "Right click must expose global context position");
     check(selections == 1, "Stationary context click must publish the hit selection");
     selections = 0;
@@ -608,7 +941,9 @@ void check_gestures(sketch::visualization::NativeModelView& view, const QString&
     mouse(view, QEvent::MouseButtonRelease, end, Qt::RightButton, Qt::NoButton);
     check(menus == 1 && capture(view, temporary.filePath("orbit.png")).image != panned.image,
           "Right drag must orbit without opening a menu");
+    view.setSelectedEntity({});
     mouse(view, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+    view.update();QApplication::processEvents();
     mouse(view, QEvent::MouseButtonRelease, start, Qt::LeftButton, Qt::NoButton);
     mouse(view, QEvent::MouseButtonDblClick, start, Qt::LeftButton, Qt::LeftButton);
     mouse(view, QEvent::MouseButtonRelease, start, Qt::LeftButton, Qt::NoButton);
@@ -892,11 +1227,16 @@ void check_desktop_hosted_gestures(QTemporaryDir& temporary) {
               "Local shell save/reopen must retain the exact stair, hosted rails, history and quantities");
         check(capture(*view,temporary.filePath(QString("shell-gesture-%1-reopened.png").arg(stage))).image == saved_frame.image,
               "Reopened hosted native geometry must reproduce the saved frame");
-        check(window.undoCommand() && ready_settled(*view) &&
-              window.document().snapshot().entities() == source.entities() &&
-              window.redoCommand() && ready_settled(*view) &&
-              window.document().snapshot().entities() == saved.entities(),
-              "Reopened shell must retain one-command undo and redo for the native gesture");
+        check(!window.undoCommand() && window.document().snapshot().entities() == saved.entities(),
+              "Fresh Open must preserve history behind the application's empty Undo session");
+        // Stored history remains replayable independently of that UI fence.
+        auto replay=Document::fork(window.document().snapshot());
+        replay.undo(replay.revision());
+        check(replay.snapshot().entities() == source.entities(),
+              "Stored native gesture history must undo to the captured entities");
+        replay.redo(replay.revision());
+        check(replay.snapshot().entities() == saved.entities(),
+              "Stored native gesture history must redo to the saved entities");
     }
     window.hide();
 }
@@ -1108,8 +1448,8 @@ int main(int argc,char** argv) {
     }
     const int scenario_index = arguments.indexOf(QStringLiteral("--scenario"));
     const QString scenario = scenario_index < 0 ? QStringLiteral("all") : arguments.value(scenario_index + 1);
-    if (scenario != "all" && scenario != "geometry" && scenario != "forms" && scenario != "publication" && scenario != "gestures" && scenario != "resize" && scenario != "export-path") {
-        std::cerr << "Native scenario must be all, geometry, forms, publication, gestures, resize or export-path\n";
+    if (scenario != "all" && scenario != "geometry" && scenario != "forms" && scenario != "publication" && scenario != "gestures" && scenario != "live-drag" && scenario != "resize" && scenario != "export-path") {
+        std::cerr << "Native scenario must be all, geometry, forms, publication, gestures, live-drag, resize or export-path\n";
         return 1;
     }
     QTemporaryDir temporary;
@@ -1137,6 +1477,20 @@ int main(int argc,char** argv) {
                 return;
             }
             check(ready_settled(view),"Native viewport must be ready");
+            if (scenario == "live-drag") {
+                check_drag_depth_extent(view,temporary);
+                view.setSnapshot(document.snapshot());
+                check(ready_settled(view),"Live drag fixture must restore after depth test");
+                view.fitAll();
+                check_live_move_frames(view,wall_id);
+                check_drag_across_another_handle(view,wall_id);
+                check_hosted_gesture_lifecycle(view,temporary,false);
+                check_hosted_gesture_lifecycle(view,temporary,true);
+                check_roof_pointer_feedback(view,temporary);
+                std::cout << "Native live drag checks passed at DPR " << ratio << '\n';
+                application.exit(0);
+                return;
+            }
             if (scenario == "all" || scenario == "export-path") {
                 check_export_paths(view, temporary, wall_id);
                 if (scenario == "export-path") {
@@ -1154,6 +1508,7 @@ int main(int argc,char** argv) {
                 }
             }
             view.setSelectedEntity(wall_id);
+            if (scenario == "all" || scenario == "gestures") check_live_move_frames(view, wall_id);
             check(view.transformControlsVisible(),
                   "A selected transformable solid must expose native transform controls");
             const auto selected_export = capture(
@@ -1242,11 +1597,13 @@ int main(int argc,char** argv) {
                     };
                 const auto wall_drag_start = first.centre / view.devicePixelRatioF();
                 const auto wall_drag_end = wall_drag_start + QPointF(16.0, 10.0);
+                view.setSelectedEntity({});selected.clear();
                 mouse(view, QEvent::MouseButtonPress, wall_drag_start, Qt::LeftButton,
                       Qt::LeftButton, Qt::ControlModifier);
                 mouse(view, QEvent::MouseButtonRelease, wall_drag_start, Qt::LeftButton,
                       Qt::NoButton, Qt::ControlModifier);
-                check(selected.isEmpty(), "Ctrl+click must not select an object");
+                check(selected==wall_id, "Ctrl+click must toggle the visible object into selection");
+                view.setSelectedEntity({});selected.clear();
                 check(view.beginMove(wall_id), "Wall must support explicit Move");
                 mouse(view, QEvent::MouseButtonPress, wall_drag_start, Qt::LeftButton,
                       Qt::LeftButton);

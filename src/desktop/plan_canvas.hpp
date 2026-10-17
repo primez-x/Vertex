@@ -26,6 +26,7 @@
 #include <functional>
 #include <limits>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <numbers>
 #include <optional>
@@ -447,6 +448,33 @@ struct CanvasSketchContentRecording {
     double pixels_per_mm{};
 };
 
+// Opaque value captured from the canvas's CURRENT exact-preview proposal (see
+// PlanCanvas::*PreviewDisplayState). It names one lane, one gesture, one serial
+// and the paint intent of that proposal. A host stores it with its pending work
+// and later passes it back to the matching PlanCanvas::display*Preview. Hosts
+// never interpret or construct its contents. An invalid state is inert.
+class CanvasPreviewDisplayState {
+public:
+    [[nodiscard]] bool valid() const noexcept { return m_lane != Lane::none && !m_canvas.isNull(); }
+    // The proposal serial this state was captured from (diagnostics only).
+    [[nodiscard]] std::uint64_t serial() const noexcept { return m_serial; }
+
+private:
+    friend class PlanCanvas;
+    enum class Lane : unsigned char { none, move, transform, boundary_vertex, opening_width };
+    QPointer<const QWidget> m_canvas;
+    Lane m_lane{Lane::none};
+    std::uint64_t m_gesture{};
+    std::uint64_t m_serial{};
+    // Move: translation and relative rotation. Transform: uniform scale and
+    // rotation, axis scales. Vertex: target. Opening width: scale.
+    Vec2 m_delta{};
+    double m_rotation{};
+    double m_scale{1.0};
+    double m_axis_x{1.0};
+    double m_axis_y{1.0};
+};
+
 class PlanCanvas final : public QWidget {
 public:
     explicit PlanCanvas(QWidget* parent = nullptr);
@@ -739,6 +767,11 @@ public:
         QStringList, Vec2, std::uint64_t)> callback);
     [[nodiscard]] std::uint64_t entitiesMovePreviewSerial() const noexcept { return m_move_preview_serial; }
     [[nodiscard]] bool entitiesMovePreviewPending() const noexcept { return m_move_preview_pending || m_move_release_pending; }
+    // The scheduler can cancel superseded work once the pointer is released.
+    [[nodiscard]] bool previewReleasePending() const noexcept {
+        return m_move_release_pending || m_transform_release_pending || m_vertex_release_pending ||
+            m_roof_opening_release_pending || m_roof_opening_group_release_pending;
+    }
     [[nodiscard]] std::vector<CanvasEntity> entitiesMovePreview() const { return m_move_entities_preview; }
     // Read/copy during the move-preview callback. Reset/release clears this;
     // the host retains the admitted command for the eventual move commit.
@@ -748,6 +781,27 @@ public:
     bool markEntitiesMovePreviewPending(std::uint64_t serial);
     bool completeEntitiesMovePreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {},
+        std::optional<std::vector<CanvasRoofOpeningControls>> child_controls = std::nullopt);
+    // Display-only protocol (all four lanes: move, transform, vertex, opening
+    // width). Capture the state from the CURRENT proposal inside its preview
+    // callback (or while it is pending) and keep it with the host's work. If a
+    // newer proposal has since superseded that serial, a verified successful
+    // result of the older work may still be shown through the matching display
+    // method. It repaints dependent bodies from the older result and moves the
+    // selected bodies/frames by the residual from the older intent to the
+    // current pointer. It is paint-only: it never changes the current serial,
+    // pending/valid/release state, never calls a host callback and never
+    // authorizes a finish/commit; the current serial still ends only through the
+    // complete* methods. Returns false, changing nothing, unless the state is
+    // valid, belongs to this lane and still-active gesture, its serial is
+    // newer than any displayed result and older than the current serial, and
+    // the current request is still pending; or the result fails the same
+    // identity/geometry validation as complete*. Cancellation, focus loss, scene
+    // replacement, an invalid current result and gesture end reject all states.
+    [[nodiscard]] CanvasPreviewDisplayState entitiesMovePreviewDisplayState() const;
+    bool displayEntitiesMovePreview(const CanvasPreviewDisplayState& state,
+        std::vector<CanvasEntity> result, std::vector<CanvasLabel> labels = {},
+        std::vector<CanvasReference> references = {},
         std::optional<std::vector<CanvasRoofOpeningControls>> child_controls = std::nullopt);
     // Commits a single-selection transform after the interactive preview.
     // Scale is relative and uniform; rotation is a relative radian delta.
@@ -804,6 +858,14 @@ public:
         std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {},
         std::optional<std::vector<CanvasRoofOpeningControls>> child_controls = std::nullopt,
         std::optional<CanvasSelectionFrame> cohort_frame = std::nullopt);
+    // Display-only twin of completeEntityTransformPreview for uniform resize,
+    // rotation, axis resize and cohort/group transforms (see the move lane).
+    [[nodiscard]] CanvasPreviewDisplayState entityTransformPreviewDisplayState() const;
+    bool displayEntityTransformPreview(const CanvasPreviewDisplayState& state,
+        std::vector<CanvasEntity> result, std::vector<CanvasLabel> labels = {},
+        std::vector<CanvasReference> references = {},
+        std::optional<std::vector<CanvasRoofOpeningControls>> child_controls = std::nullopt,
+        std::optional<CanvasSelectionFrame> cohort_frame = std::nullopt);
     void setEntitiesAxisResizeStarted(std::function<void(QStringList)> callback);
     void setEntitiesAxisResizePreviewRequested(std::function<std::optional<std::vector<CanvasEntity>>(
         QStringList, double, double, Vec2, std::uint64_t)> callback);
@@ -825,8 +887,11 @@ public:
     // UI-thread deferred preview protocol. Capture the serial inside the
     // callback, mark it pending, and complete with exact proposal geometry
     // and associated labels. Empty label text clears its retained presentation.
-    // Cancellation, scene replacement, and each new proposal invalidate old
-    // serials, even when their parameters match. Completion never persists.
+    // Changed effective proposals, cancellation, and scene replacement retire
+    // old serials. Identical consecutive proposals share work only while that
+    // work is running, pending or valid; after a rejection or failure the same
+    // parameters are requested again. A/B/A still retires the first A.
+    // Completion never persists.
     [[nodiscard]] std::uint64_t openingWidthPreviewSerial() const noexcept {
         return m_opening_width_preview_serial;
     }
@@ -842,6 +907,11 @@ public:
     bool markOpeningWidthPreviewPending(std::uint64_t serial);
     bool completeOpeningWidthPreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {});
+    // Display-only twin of completeOpeningWidthPreview, also for corner-window
+    // legs (see the move lane).
+    [[nodiscard]] CanvasPreviewDisplayState openingWidthPreviewDisplayState() const;
+    bool displayOpeningWidthPreview(const CanvasPreviewDisplayState& state,
+        std::vector<CanvasEntity> result, std::vector<CanvasLabel> labels = {});
     void setOpeningWidthResizeRequested(
         std::function<bool(QString, double, bool, std::uint64_t)> callback);
     // Same deferred serial protocol as ordinary opening widths. Leg is 0 or 1;
@@ -947,6 +1017,11 @@ public:
     bool completeBoundaryVertexPreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result,
         std::vector<CanvasLabel> labels = {},
+        std::optional<CanvasBoundaryPreviewMetrics> metrics = std::nullopt);
+    // Display-only twin of completeBoundaryVertexPreview (see the move lane).
+    [[nodiscard]] CanvasPreviewDisplayState boundaryVertexPreviewDisplayState() const;
+    bool displayBoundaryVertexPreview(const CanvasPreviewDisplayState& state,
+        std::vector<CanvasEntity> result, std::vector<CanvasLabel> labels = {},
         std::optional<CanvasBoundaryPreviewMetrics> metrics = std::nullopt);
     // Read-only exact interactive overrides; committed/exported entities stay separate.
     [[nodiscard]] const std::vector<CanvasEntity>& boundaryVertexPreviewEntities() const noexcept {
@@ -1142,7 +1217,8 @@ private:
     bool applyBoundaryVertexPreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result,
         std::vector<CanvasLabel> labels = {},
-        std::optional<CanvasBoundaryPreviewMetrics> metrics = std::nullopt);
+        std::optional<CanvasBoundaryPreviewMetrics> metrics = std::nullopt,
+        const CanvasPreviewDisplayState* display = nullptr);
     void drawVertexHandles(QPainter& painter, const QRectF& viewport) const;
     struct OpeningWidthHandleHit {
         QString entity_id;
@@ -1154,6 +1230,76 @@ private:
     [[nodiscard]] std::optional<OpeningWidthHandleHit> openingWidthHandleAt(
         QPointF point, const QRectF& viewport) const;
     [[nodiscard]] const CanvasEntity& interactiveEntity(const CanvasEntity& entity) const;
+    // A displayed result is the last verified exact projection of this gesture
+    // (current or superseded). It is paint state only: current admission stays
+    // with the *_preview_valid/pending flags. Cleared whenever a current
+    // proposal is invalid, unserved or failed, so it can never be revived.
+    [[nodiscard]] bool movePreviewDisplayed() const { return m_move_display.has_value(); }
+    [[nodiscard]] bool transformPreviewDisplayed() const { return m_transform_display.has_value(); }
+    [[nodiscard]] bool vertexPreviewDisplayed() const { return m_boundary_vertex_display.has_value(); }
+    [[nodiscard]] bool openingWidthPreviewDisplayed() const { return m_opening_width_display.has_value(); }
+    // Local feedback is painted for the current pointer while exact work is
+    // absent or pending: from the source, or as a residual on a displayed result.
+    [[nodiscard]] bool localMovePreview() const {
+        return !m_move_preview_exact || m_move_preview_pending;
+    }
+    [[nodiscard]] bool localTransformPreview() const {
+        if (!m_transform_preview_exact) return true;
+        if (!m_transform_preview_pending) return false;
+        return !m_transform_display ||
+            (m_transform_display->m_scale > 0.0 && m_transform_display->m_axis_x > 0.0 &&
+             m_transform_display->m_axis_y > 0.0 && std::isfinite(m_transform_display->m_scale) &&
+             std::isfinite(m_transform_display->m_axis_x) && std::isfinite(m_transform_display->m_axis_y));
+    }
+    // Paint-only motion from the displayed result (or the source) to the
+    // current proposal. Never used for admission, hit testing or snapping.
+    struct MoveMotion {
+        Vec2 delta{};
+        double rotation{};
+        Vec2 pivot{};
+        [[nodiscard]] Vec2 map(Vec2 point) const {
+            if (rotation == 0.0) return {point.x + delta.x, point.y + delta.y};
+            const auto c = std::cos(rotation), s = std::sin(rotation);
+            const auto x = point.x - pivot.x, y = point.y - pivot.y;
+            return {pivot.x + c*x - s*y + delta.x, pivot.y + s*x + c*y + delta.y};
+        }
+        [[nodiscard]] QTransform transform() const {
+            QTransform result;
+            result.translate(delta.x, delta.y);
+            if (rotation != 0.0) {
+                result.translate(pivot.x, pivot.y);
+                result.rotate(rotation * 180.0 / std::numbers::pi);
+                result.translate(-pivot.x, -pivot.y);
+            }
+            return result;
+        }
+    };
+    struct TransformMotion {
+        double scale{1.0};
+        double rotation{};
+        double axis_x{1.0};
+        double axis_y{1.0};
+    };
+    // substituted: the painted body comes from the displayed result.
+    [[nodiscard]] std::optional<MoveMotion> localMoveMotion(bool substituted = true) const;
+    [[nodiscard]] TransformMotion localTransformMotion(bool substituted = true) const;
+    // True when the selected body is painted from a displayed exact result
+    // (so its frame derives from that result, not from the source).
+    [[nodiscard]] bool selectionDisplayed() const;
+    [[nodiscard]] CanvasPreviewDisplayState moveDisplayState() const;
+    [[nodiscard]] CanvasPreviewDisplayState transformDisplayState() const;
+    [[nodiscard]] CanvasPreviewDisplayState vertexDisplayState() const;
+    [[nodiscard]] CanvasPreviewDisplayState openingWidthDisplayState() const;
+    // A display-only ticket is admitted for superseded, still-pending work of
+    // the same active gesture; it is newer than the displayed result.
+    [[nodiscard]] bool displayTicketAdmitted(const CanvasPreviewDisplayState& state,
+        CanvasPreviewDisplayState::Lane lane, const std::optional<CanvasPreviewDisplayState>& displayed,
+        std::uint64_t floor, std::uint64_t current, bool pending) const;
+    // Drop every displayed result of a lane. The floor retires older tickets.
+    void clearMoveDisplay();
+    void clearTransformDisplay();
+    void clearVertexDisplay();
+    void clearOpeningWidthDisplay();
     using EntityPresentationIndex = QHash<QString, QHash<QString, std::size_t>>;
     static void rebuildEntityPresentationIndex(EntityPresentationIndex& index,
         const std::vector<CanvasEntity>& entities);
@@ -1161,16 +1307,20 @@ private:
         const CanvasEntity& entity, const std::vector<CanvasEntity>& previews,
         const EntityPresentationIndex& index);
     [[nodiscard]] const CanvasReference& interactiveReference(const CanvasReference& reference) const;
+    // display != nullptr: display-only completion of a superseded ticket. It
+    // validates against that ticket and changes no admission/release state.
     bool applyEntitiesMovePreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {},
-        std::optional<std::vector<CanvasRoofOpeningControls>> child_controls = std::nullopt);
+        std::optional<std::vector<CanvasRoofOpeningControls>> child_controls = std::nullopt,
+        const CanvasPreviewDisplayState* display = nullptr);
     void captureOpeningMove(QPointF point);
     void updateEntitiesMovePreview(QPointF point, Qt::KeyboardModifiers modifiers);
     void updateEntityTransformPreview();
     bool applyEntityTransformPreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {}, std::vector<CanvasReference> references = {},
         std::optional<std::vector<CanvasRoofOpeningControls>> child_controls = std::nullopt,
-        std::optional<CanvasSelectionFrame> cohort_frame = std::nullopt);
+        std::optional<CanvasSelectionFrame> cohort_frame = std::nullopt,
+        const CanvasPreviewDisplayState* display = nullptr);
     [[nodiscard]] bool axisResizeCohortEnabled() const;
     [[nodiscard]] bool axisResizeCohortChildrenQualified() const;
     [[nodiscard]] bool axisResizeCohortCaptureCurrent() const;
@@ -1180,7 +1330,8 @@ private:
     void finishBoundaryVertexPreview(std::uint64_t serial);
     void updateOpeningWidthPreview(QPointF point, Qt::KeyboardModifiers modifiers);
     bool applyOpeningWidthPreview(std::uint64_t serial,
-        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {});
+        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {},
+        const CanvasPreviewDisplayState* display = nullptr);
     void drawOpeningWidthHandles(QPainter& painter, const QRectF& viewport) const;
     [[nodiscard]] bool hasMixedSemanticSelection() const noexcept {
         return !m_selected_ids.isEmpty() && !m_selected_roof_openings.empty();
@@ -1226,6 +1377,8 @@ private:
     [[nodiscard]] std::optional<Vec2> roofOpeningGroupHandleAt(QPointF point) const;
     [[nodiscard]] bool roofOpeningGroupContains(QPointF point) const;
     [[nodiscard]] bool roofOpeningGroupCaptureCurrent() const;
+    // Paint-only: carries the displayed (or source) mouths to the current edit.
+    [[nodiscard]] std::optional<QTransform> roofOpeningGroupResidual() const;
     void updateRoofOpeningGroupPreview(QPointF point, Qt::KeyboardModifiers modifiers);
     void finishRoofOpeningGroupPreview(std::uint64_t serial);
     void drawRoofOpeningGroupControls(QPainter& painter, const QRectF& viewport) const;
@@ -1533,6 +1686,7 @@ private:
     bool m_roof_opening_preview_request_in_progress{};
     bool m_roof_opening_release_pending{};
     std::uint64_t m_roof_opening_preview_serial{};
+    std::optional<std::array<double, 5>> m_roof_opening_effective_proposal;
     std::vector<CanvasRoofOpeningControls> m_roof_opening_group_capture;
     std::optional<CanvasRoofOpeningFrame> m_roof_opening_group_frame;
     std::vector<CanvasRoofOpeningControls> m_roof_opening_group_preview_controls;
@@ -1551,6 +1705,7 @@ private:
     std::uint64_t m_roof_opening_group_controls_generation{};
     std::uint64_t m_roof_opening_group_navigation_generation{};
     std::uint64_t m_roof_opening_group_serial{};
+    std::optional<std::array<double, 9>> m_roof_opening_group_effective_proposal;
     bool m_roof_opening_group_fine{};
     bool m_roof_opening_group_started{};
     bool m_roof_opening_group_valid{};
@@ -1590,6 +1745,23 @@ private:
     EntityPresentationIndex m_move_entities_preview_index;
     std::vector<CanvasLabel> m_move_labels_preview;
     std::uint64_t m_move_preview_serial{};
+    std::optional<std::array<double, 3>> m_move_effective_proposal;
+    // Per-gesture identity; every ended gesture bumps it and retires tickets.
+    std::uint64_t m_preview_gesture_generation{};
+    // Displayed verified result per lane (its intent and serial), plus the
+    // serial at or below which tickets are refused after an invalid sample.
+    std::optional<CanvasPreviewDisplayState> m_move_display;
+    std::optional<CanvasPreviewDisplayState> m_transform_display;
+    std::optional<CanvasPreviewDisplayState> m_boundary_vertex_display;
+    std::optional<CanvasPreviewDisplayState> m_opening_width_display;
+    std::uint64_t m_move_display_floor{};
+    std::uint64_t m_transform_display_floor{};
+    std::uint64_t m_boundary_vertex_display_floor{};
+    std::uint64_t m_opening_width_display_floor{};
+    std::optional<Vec2> m_move_rotation_pivot;
+    // Roof mouths: intent of the displayed manufactured ink.
+    std::optional<CanvasRoofOpeningFrame> m_roof_opening_display_frame;
+    std::optional<CanvasRoofOpeningGroupEdit> m_roof_opening_group_display_edit;
     bool m_move_preview_exact{};
     bool m_move_preview_valid{};
     bool m_move_preview_pending{};
@@ -1647,6 +1819,7 @@ private:
     EntityPresentationIndex m_transform_entities_preview_index;
     std::vector<CanvasLabel> m_transform_labels_preview;
     std::uint64_t m_transform_preview_serial{};
+    std::optional<std::array<double, 8>> m_transform_effective_proposal;
     bool m_transform_preview_exact{};
     bool m_transform_preview_valid{};
     bool m_transform_preview_pending{};

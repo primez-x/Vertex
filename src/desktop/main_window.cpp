@@ -6675,6 +6675,7 @@ class MainWindow::Impl {
         std::shared_ptr<const CanvasEditSourceCapture> edit_source;
         std::shared_ptr<PreparedCanvasEdit> prepared;
         std::shared_ptr<const std::vector<CanvasLabel>> retained_labels;
+        CanvasPreviewDisplayState display_state;
     };
     struct VertexPreviewProjection {
         std::vector<CanvasEntity> entities;
@@ -6766,6 +6767,7 @@ class MainWindow::Impl {
         // display only. Only a separately reviewed release can publish it.
         std::shared_ptr<std::optional<PhaseAssemblyInstancePropertyEditAuthoring>> component_axis_authoring;
         std::shared_ptr<const ComponentAxisResizeRelease> component_axis_release;
+        CanvasPreviewDisplayState display_state;
     };
 
 public:
@@ -30585,6 +30587,23 @@ public:
         return augmentAuthoredCommandForRegistry(command,source);
     }
 
+    void queueVertexPreviewJob(PendingVertexPreview request) {
+        // Let bounded in-flight work finish; keep only the newest successor.
+        // Cancelling on every pointer sample starves exact previews while dragging.
+        if (request.canvas && !request.component_axis_release) {
+            request.display_state=request.entity_transform_preview ? request.canvas->entityTransformPreviewDisplayState()
+                : request.wall_geometry_move || request.entities_move_candidate || request.site_wall_move || request.plan_move
+                ? request.canvas->entitiesMovePreviewDisplayState() : request.canvas->boundaryVertexPreviewDisplayState();
+            if (request.display_state.serial()!=request.serial) request.display_state={};
+        }
+        if (m_running_vertex_preview) {
+            if (!m_running_vertex_preview->display_state.valid())
+                (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
+            m_pending_vertex_preview=std::move(request);
+        }
+        else startVertexPreviewJob(std::move(request));
+    }
+
     void startVertexPreviewJob(PendingVertexPreview request) {
         const auto source=request.source;
         const auto retained=request.retained;
@@ -32052,10 +32071,7 @@ public:
                 request.model_edit_source=m_entity_transform_edit_source;
                 request.model_edit_prepared=std::make_shared<PreparedCanvasEdit>();
                 request.entity_transform_canvas_point=canvas_anchor;
-                if (m_running_vertex_preview) {
-                    (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
-                    m_pending_vertex_preview=std::move(request);
-                } else startVertexPreviewJob(std::move(request));
+                queueVertexPreviewJob(std::move(request));
                 return std::nullopt;
             }
             captureConstraintGeometryPreview(canvas,m_entity_transform_source->revision());
@@ -32082,10 +32098,7 @@ public:
             request.model_edit_source=m_entity_transform_edit_source;
             request.model_edit_prepared=std::make_shared<PreparedCanvasEdit>();
             request.entity_transform_canvas_point=canvas_anchor;
-            if (m_running_vertex_preview) {
-                (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
-                m_pending_vertex_preview=std::move(request);
-            } else startVertexPreviewJob(std::move(request));
+            queueVertexPreviewJob(std::move(request));
             return std::nullopt;
         } catch (const Standard_Failure& error) {
             const auto* message=error.GetMessageString();
@@ -32140,10 +32153,7 @@ public:
             request.result=std::make_shared<std::optional<VertexPreviewProjection>>();
             m_presentation_transform_intent=intent;
             clearError();
-            if (m_running_vertex_preview) {
-                (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
-                m_pending_vertex_preview=std::move(request);
-            } else startVertexPreviewJob(std::move(request));
+            queueVertexPreviewJob(std::move(request));
             return std::nullopt;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Transform: %1").arg(QString::fromUtf8(error.what())));
@@ -32240,10 +32250,7 @@ public:
             m_entity_transform_scale=scale; m_entity_transform_radians=radians;
             m_entity_transform_pivot=canvas_pivot;
             clearError();
-            if (m_running_vertex_preview) {
-                (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
-                m_pending_vertex_preview=std::move(request);
-            } else startVertexPreviewJob(std::move(request));
+            queueVertexPreviewJob(std::move(request));
             return std::nullopt;
         } catch (const Standard_Failure& error) {
             const auto* message=error.GetMessageString();
@@ -32329,10 +32336,7 @@ public:
             request.model_edit_source=m_entity_transform_edit_source;
             request.model_edit_prepared=std::make_shared<PreparedCanvasEdit>();
             clearError();
-            if (m_running_vertex_preview) {
-                (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
-                m_pending_vertex_preview=std::move(request);
-            } else startVertexPreviewJob(std::move(request));
+            queueVertexPreviewJob(std::move(request));
             return std::nullopt;
         } catch (const Standard_Failure& error) {
             const auto* message=error.GetMessageString();
@@ -32707,10 +32711,7 @@ public:
             request.model_edit_source=m_model_move_edit_source;
             request.model_edit_prepared=std::make_shared<PreparedCanvasEdit>();
             clearError();
-            if (m_running_vertex_preview) {
-                (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
-                m_pending_vertex_preview=std::move(request);
-            } else startVertexPreviewJob(std::move(request));
+            queueVertexPreviewJob(std::move(request));
             return std::nullopt;
         }
         if (siteCanvas(canvas) && m_wall_move_site_capture) {
@@ -32737,10 +32738,7 @@ public:
             request.model_edit_source=m_model_move_edit_source;
             request.model_edit_prepared=std::make_shared<PreparedCanvasEdit>();
             clearError();
-            if (m_running_vertex_preview) {
-                (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
-                m_pending_vertex_preview=std::move(request);
-            } else startVertexPreviewJob(std::move(request));
+            queueVertexPreviewJob(std::move(request));
             return std::nullopt;
         }
         if (siteCanvas(canvas)) return std::vector<CanvasEntity>{};
@@ -32824,10 +32822,7 @@ public:
         clearError();
         request.authority=m_vertex_preview_authority;
         request.label_font=canvas->font();
-        if (m_running_vertex_preview) {
-            (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
-            m_pending_vertex_preview=std::move(request);
-        } else startVertexPreviewJob(std::move(request));
+        queueVertexPreviewJob(std::move(request));
         return std::nullopt;
     }
 
@@ -32859,10 +32854,7 @@ public:
                 request.plan_endpoint_command = std::make_shared<std::optional<Command>>();
                 request.model_edit_source = endpoint_capture->edit_source;
                 if (request.model_edit_source) request.model_edit_prepared = std::make_shared<PreparedCanvasEdit>();
-                if (m_running_vertex_preview) {
-                    (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
-                    m_pending_vertex_preview = std::move(request);
-                } else startVertexPreviewJob(std::move(request));
+                queueVertexPreviewJob(std::move(request));
                 return std::nullopt;
             } catch (const std::exception& error) {
                 setError(QStringLiteral("Site Plan endpoint: %1").arg(QString::fromUtf8(error.what())));
@@ -32886,10 +32878,7 @@ public:
         request.plan_endpoint_command = std::make_shared<std::optional<Command>>();
         request.model_edit_source = endpoint_capture->edit_source;
         if (request.model_edit_source) request.model_edit_prepared = std::make_shared<PreparedCanvasEdit>();
-        if (m_running_vertex_preview) {
-            (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
-            m_pending_vertex_preview=std::move(request);
-        } else startVertexPreviewJob(std::move(request));
+        queueVertexPreviewJob(std::move(request));
         return std::nullopt;
     }
 
@@ -32969,7 +32958,7 @@ public:
                 (void)request.canvas->completeEntitiesMovePreview(request.serial,std::nullopt);
             else (void)request.canvas->completeBoundaryVertexPreview(request.serial,std::nullopt);
         };
-        const auto current=[&](const PendingVertexPreview& request) noexcept {
+        const auto current=[&](const PendingVertexPreview& request,bool require_latest=true) noexcept {
             try {
                 if (request.component_axis_release)
                     return componentAxisResizeReleaseCurrent(request.component_axis_release) &&
@@ -33016,10 +33005,10 @@ public:
                         request.canvas->logicalDpiX()!=capture->dpi_x || request.canvas->logicalDpiY()!=capture->dpi_y) return false;
                     const auto& intent=*request.ordinary_transform_intent;
                     const auto& latest=*m_ordinary_transform_intent;
-                    if (intent.scale!=latest.scale || intent.radians!=latest.radians || intent.source_radians!=latest.source_radians ||
+                    if (m_entity_transform_axis_resize || m_entity_transform_physical_rotation ||
+                        (require_latest && (intent.scale!=latest.scale || intent.radians!=latest.radians || intent.source_radians!=latest.source_radians ||
                         intent.canvas_pivot.x!=latest.canvas_pivot.x || intent.canvas_pivot.y!=latest.canvas_pivot.y ||
-                        intent.source_pivot.x!=latest.source_pivot.x || intent.source_pivot.y!=latest.source_pivot.y ||
-                        m_entity_transform_axis_resize || m_entity_transform_physical_rotation) return false;
+                        intent.source_pivot.x!=latest.source_pivot.x || intent.source_pivot.y!=latest.source_pivot.y))) return false;
                 } else if (request.presentation_capture) {
                     if (request.presentation_capture!=m_presentation_transform_capture || !request.presentation_intent ||
                         !m_presentation_transform_intent || request.source!=m_entity_transform_source ||
@@ -33031,12 +33020,19 @@ public:
                         request.canvas->logicalDpiY()!=request.presentation_capture->dpi_y) return false;
                     const auto& intent=*request.presentation_intent;
                     const auto& latest=*m_presentation_transform_intent;
-                    if (intent.scale!=latest.scale || intent.radians!=latest.radians || intent.axes!=latest.axes ||
+                    if (require_latest && (intent.scale!=latest.scale || intent.radians!=latest.radians || intent.axes!=latest.axes ||
                         intent.canvas_point.x!=latest.canvas_point.x || intent.canvas_point.y!=latest.canvas_point.y ||
                         intent.source_anchor.x!=latest.source_anchor.x || intent.source_anchor.y!=latest.source_anchor.y ||
-                        intent.source_radians!=latest.source_radians) return false;
+                        intent.source_radians!=latest.source_radians)) return false;
                 } else if (request.source != m_vertex_preview_source || request.canvas != m_vertex_preview_canvas) return false;
-                if (request.entity_transform_preview)
+                if (request.entity_transform_preview) {
+                    if (!require_latest)
+                        return m_entity_transform_canvas==request.canvas && entityTransformContextUnchanged() &&
+                            (!(request.physical_rotation_command || request.axis_resize_scales) ||
+                             (request.model_edit_source && request.model_edit_source==m_entity_transform_edit_source &&
+                              request.entity_id==m_entity_transform_id && request.axis_resize_cohort==m_component_axis_cohort &&
+                              fullSnapshotDigest(*request.source)==fullSnapshotDigest(*m_entity_transform_source) &&
+                              (request.physical_rotation_command ? m_entity_transform_physical_rotation : m_entity_transform_axis_resize)));
                     return request.serial==m_entity_transform_serial &&
                         request.canvas->entityTransformPreviewSerial()==request.serial &&
                         m_entity_transform_canvas==request.canvas && entityTransformContextUnchanged() &&
@@ -33055,15 +33051,44 @@ public:
                              request.axis_resize_scales->second==m_entity_axis_scale_y &&
                              request.entity_transform_canvas_point.x==m_entity_axis_anchor.x &&
                              request.entity_transform_canvas_point.y==m_entity_axis_anchor.y)));
-                return (request.wall_geometry_move || request.entities_move_candidate || request.site_wall_move || request.plan_move
+                }
+                return !require_latest || (request.wall_geometry_move || request.entities_move_candidate || request.site_wall_move || request.plan_move
                     ? request.canvas->entitiesMovePreviewSerial() : request.canvas->boundaryVertexPreviewSerial())==request.serial;
             } catch (...) { return false; }
         };
+        if (m_running_vertex_preview && m_pending_vertex_preview &&
+            m_running_vertex_preview->canvas && m_running_vertex_preview->canvas->previewReleasePending() &&
+            m_running_vertex_preview->serial<m_pending_vertex_preview->serial && current(*m_pending_vertex_preview))
+            (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
         for (auto& completion : m_vertex_preview_queue.take_completed()) {
             if (!m_running_vertex_preview || completion.sequence!=m_vertex_preview_sequence) continue;
             auto request=std::move(*m_running_vertex_preview);
             m_running_vertex_preview.reset();
             const bool request_current=current(request);
+            const bool move_preview=request.wall_geometry_move || request.entities_move_candidate || request.site_wall_move || request.plan_move;
+            const auto latest_serial=!request.canvas ? 0 : request.entity_transform_preview
+                ? request.canvas->entityTransformPreviewSerial() : move_preview
+                ? request.canvas->entitiesMovePreviewSerial() : request.canvas->boundaryVertexPreviewSerial();
+            if (!request_current && request.serial<latest_serial && request.display_state.valid() &&
+                current(request,false) && completion.succeeded() &&
+                completion.receipt->source_revision==request.source->revision() && *request.result) {
+                // Old successes may advance screen feedback, never admission,
+                // commit commands, prepared edits, or the current request flags.
+                auto projection=std::move(**request.result);
+                if (request.entity_transform_preview) {
+                    const auto cohort_frame=request.axis_resize_cohort_frame ? *request.axis_resize_cohort_frame : std::nullopt;
+                    if (request.axis_resize_cohort && !cohort_frame) continue;
+                    const auto children=request.axis_resize_cohort && !request.axis_resize_cohort->children.empty()
+                        ? std::optional{std::move(projection.child_controls)} : std::nullopt;
+                    (void)request.canvas->displayEntityTransformPreview(request.display_state,std::move(projection.entities),
+                        std::move(projection.labels),{},children,cohort_frame);
+                } else if (request.wall_geometry_move || request.entities_move_candidate || request.site_wall_move || request.plan_move)
+                    (void)request.canvas->displayEntitiesMovePreview(request.display_state,std::move(projection.entities),
+                        std::move(projection.labels),std::move(projection.references));
+                else (void)request.canvas->displayBoundaryVertexPreview(request.display_state,std::move(projection.entities),
+                    std::move(projection.labels),projection.metrics);
+                continue;
+            }
             if (!request_current || !completion.succeeded() ||
                 completion.receipt->source_revision != request.source->revision() || !*request.result) {
                 if (request_current && (request.plan_endpoint_capture || request.ordinary_transform_capture || request.presentation_capture || request.axis_resize_scales || request.site_wall_move || request.plan_move || request.physical_rotation_command) &&
@@ -33271,6 +33296,18 @@ public:
             m_vertex_preview_timer->stop();
     }
 
+    void queueOpeningPreviewJob(PendingOpeningPreview request) {
+        if (request.canvas) request.display_state=request.move_offset ? request.canvas->entitiesMovePreviewDisplayState()
+            : request.canvas->openingWidthPreviewDisplayState();
+        if (request.display_state.serial()!=request.serial) request.display_state={};
+        if (m_running_opening_preview) {
+            if (!m_running_opening_preview->display_state.valid())
+                (void)m_opening_preview_queue.cancel(m_opening_preview_sequence);
+            m_pending_opening_preview=std::move(request);
+        }
+        else startOpeningPreviewJob(std::move(request));
+    }
+
     void startOpeningPreviewJob(PendingOpeningPreview request) {
         auto result = request.result;
         const auto source = request.source;
@@ -33379,11 +33416,7 @@ public:
         m_opening_preview_prepared.reset();
         m_opening_preview_latest_serial=serial;m_opening_preview_id=requested_id;
         m_opening_preview_scale=scale;m_opening_preview_keep_start=keep_start_jamb;
-        if (m_running_opening_preview) {
-            (void)m_opening_preview_queue.cancel(m_opening_preview_sequence);
-            // Keep just the most recent proposal while native work completes.
-            m_pending_opening_preview=std::move(request);
-        } else startOpeningPreviewJob(std::move(request));
+        queueOpeningPreviewJob(std::move(request));
         return std::nullopt;
     }
 
@@ -33432,10 +33465,7 @@ public:
         m_opening_preview_latest_serial=serial;
         m_opening_preview_move_offset=offset;
         m_opening_preview_move_delta=delta;
-        if (m_running_opening_preview) {
-            (void)m_opening_preview_queue.cancel(m_opening_preview_sequence);
-            m_pending_opening_preview=std::move(request);
-        } else startOpeningPreviewJob(std::move(request));
+        queueOpeningPreviewJob(std::move(request));
         return std::nullopt;
     }
 
@@ -33560,10 +33590,27 @@ public:
                 clearOpeningWidthCapture();
             }
         };
+        if (m_running_opening_preview && m_pending_opening_preview &&
+            (m_opening_preview_release_pending || (m_running_opening_preview->canvas &&
+                m_running_opening_preview->canvas->previewReleasePending())) &&
+            m_running_opening_preview->serial<m_pending_opening_preview->serial && current(*m_pending_opening_preview))
+            (void)m_opening_preview_queue.cancel(m_opening_preview_sequence);
         for(auto& completion:m_opening_preview_queue.take_completed()) {
             if(!m_running_opening_preview || completion.sequence!=m_opening_preview_sequence) continue;
             auto request=std::move(*m_running_opening_preview);m_running_opening_preview.reset();
             const bool request_current=current(request);
+            if (!request_current && request.canvas && request.display_state.valid() &&
+                request.serial<(request.move_offset ? request.canvas->entitiesMovePreviewSerial() : request.canvas->openingWidthPreviewSerial()) &&
+                capture_current(request) && completion.succeeded() && completion.receipt->source_revision==request.source->revision() &&
+                *request.result && request.command && *request.command && request.labels && request.prepared &&
+                (request.prepared->alternative_wall || request.prepared->document ||
+                 (request.prepared->workspace && request.prepared->mirror))) {
+                if (request.move_offset) (void)request.canvas->displayEntitiesMovePreview(request.display_state,
+                    std::move(**request.result),std::move(*request.labels));
+                else (void)request.canvas->displayOpeningWidthPreview(request.display_state,
+                    std::move(**request.result),std::move(*request.labels));
+                continue;
+            }
             if(!completion.succeeded() || !request_current || completion.receipt->source_revision!=request.source->revision() ||
                 !*request.result || !request.command || !*request.command || !request.labels || !request.prepared ||
                 (!request.prepared->alternative_wall && !request.prepared->document &&
@@ -62353,6 +62400,7 @@ private:
         double radians{};
         std::shared_ptr<MixedPlanTransformResult> result;
         double scale{1.0};
+        CanvasPreviewDisplayState display_state;
     };
     struct AssemblyPreview {
         std::string child_id;
@@ -71758,13 +71806,16 @@ private:
     void queueRoofOpeningCanvasPreview(PendingRoofOpeningCanvasPreview request) {
         m_ready_roof_opening_preview.reset();
         if (m_running_roof_opening_preview) {
-            (void)m_roof_opening_preview_queue.cancel(m_roof_opening_preview_sequence);
             m_pending_roof_opening_preview=std::move(request);
         } else startRoofOpeningCanvasPreview(std::move(request));
     }
 
     void pollRoofOpeningCanvasPreview() {
-        if (m_running_roof_opening_preview && !roofOpeningRequestCurrent(*m_running_roof_opening_preview)) {
+        if (m_running_roof_opening_preview && m_running_roof_opening_preview->capture->canvas &&
+            m_running_roof_opening_preview->capture->canvas->previewReleasePending() &&
+            !roofOpeningRequestCurrent(*m_running_roof_opening_preview))
+            (void)m_roof_opening_preview_queue.cancel(m_roof_opening_preview_sequence);
+        if (m_running_roof_opening_preview && !roofOpeningCaptureCurrent(m_running_roof_opening_preview->capture)) {
             (void)m_roof_opening_preview_queue.cancel(m_roof_opening_preview_sequence);
             const auto capture=m_running_roof_opening_preview->capture;
             if (capture==m_roof_opening_capture && !roofOpeningCaptureCurrent(capture)) {
@@ -75492,13 +75543,15 @@ private:
         m_ready_native_roof_opening_preview.reset();
         if (m_running_native_roof_opening_preview) {
             m_pending_native_roof_opening_preview=std::move(request);
-            (void)m_native_roof_opening_preview_queue.cancel(m_native_roof_opening_preview_sequence);
             m_native_roof_opening_preview_timer->start();
         } else startNativeRoofOpeningPreview(std::move(request));
     }
 
     void pollNativeRoofOpeningPreview() {
-        if (m_running_native_roof_opening_preview && !nativeRoofOpeningRequestCurrent(*m_running_native_roof_opening_preview))
+        if (m_running_native_roof_opening_preview &&
+            (!nativeRoofOpeningCaptureCurrent(m_running_native_roof_opening_preview->capture) ||
+             (m_running_native_roof_opening_preview->capture->view->roofOpeningTransformReleasePending() &&
+              !nativeRoofOpeningRequestCurrent(*m_running_native_roof_opening_preview))))
             (void)m_native_roof_opening_preview_queue.cancel(m_native_roof_opening_preview_sequence);
         for (auto& completion:m_native_roof_opening_preview_queue.take_completed()) {
             if (!m_running_native_roof_opening_preview || completion.sequence!=m_native_roof_opening_preview_sequence) continue;
@@ -78049,24 +78102,39 @@ public:
         if (!pending) return std::nullopt;
         PendingMixedPlanTransform request{capture,serial,delta,radians,std::make_shared<MixedPlanTransformResult>()};
         request.scale=scale;
+        request.display_state=capture->rotation ? canvas->entityTransformPreviewDisplayState() : canvas->entitiesMovePreviewDisplayState();
+        if (request.display_state.serial()!=serial) request.display_state={};
         m_ready_mixed_plan_transform.reset();
         if (m_running_mixed_plan_transform) {
-            (void)m_mixed_plan_transform_queue.cancel(m_mixed_plan_transform_sequence);
+            if (!m_running_mixed_plan_transform->display_state.valid())
+                (void)m_mixed_plan_transform_queue.cancel(m_mixed_plan_transform_sequence);
             m_pending_mixed_plan_transform=std::move(request);
         } else startMixedPlanTransformPreview(std::move(request));
         return std::nullopt;
     }
 
     void pollMixedPlanTransformPreview() {
-        if (m_running_mixed_plan_transform && !mixedPlanTransformRequestCurrent(*m_running_mixed_plan_transform))
+        if (m_running_mixed_plan_transform &&
+            (!mixedPlanTransformCaptureCurrent(m_running_mixed_plan_transform->capture) ||
+             (m_running_mixed_plan_transform->capture->viewport.canvas->previewReleasePending() &&
+              !mixedPlanTransformRequestCurrent(*m_running_mixed_plan_transform))))
             (void)m_mixed_plan_transform_queue.cancel(m_mixed_plan_transform_sequence);
         for (auto& completion:m_mixed_plan_transform_queue.take_completed()) {
             if (!m_running_mixed_plan_transform || completion.sequence!=m_mixed_plan_transform_sequence) continue;
             auto request=std::move(*m_running_mixed_plan_transform);m_running_mixed_plan_transform.reset();
-            if (!mixedPlanTransformRequestCurrent(request)) continue;
             const bool admitted=completion.succeeded() && completion.receipt->source_revision==request.capture->source->revision() &&
                 request.result->preparation && request.result->controls.size()==request.capture->controls.size();
             auto* canvas=request.capture->viewport.canvas.data();
+            if (!mixedPlanTransformRequestCurrent(request)) {
+                if (admitted && request.display_state.valid() && mixedPlanTransformCaptureCurrent(request.capture)) {
+                    const auto children=std::optional{request.result->controls};
+                    if (request.capture->rotation) (void)canvas->displayEntityTransformPreview(request.display_state,
+                        std::move(request.result->geometry),std::move(request.result->labels),std::move(request.result->references),children);
+                    else (void)canvas->displayEntitiesMovePreview(request.display_state,
+                        std::move(request.result->geometry),std::move(request.result->labels),std::move(request.result->references),children);
+                }
+                continue;
+            }
             // Completion may synchronously finish a release waiting for this
             // exact serial. Retain the sealed proposal before entering it.
             if (admitted) m_ready_mixed_plan_transform=request;

@@ -20,6 +20,7 @@
 
 QT_BEGIN_NAMESPACE
 class QContextMenuEvent;
+class QImage;
 class QSinglePointEvent;
 class QTouchEvent;
 QT_END_NAMESPACE
@@ -137,6 +138,11 @@ public:
     std::function<bool(NativeRoofOpeningTransform, std::uint64_t)> onRoofOpeningTransformRequested;
     std::function<void()> onRoofOpeningTransformCanceled;
     [[nodiscard]] bool roofOpeningTransformPreviewCurrent(std::uint64_t serial) const noexcept;
+    // Exact native geometry for this still-current proposal has been displayed.
+    // This is renderer status, independent of document edit admission.
+    [[nodiscard]] bool roofOpeningTransformPreviewPresented(std::uint64_t serial) const noexcept;
+    // Lets the preparation scheduler retire obsolete work after pointer release.
+    [[nodiscard]] bool roofOpeningTransformReleasePending() const noexcept;
     // Completion admits a candidate for separate asynchronous native geometry
     // manufacture. It does not publish it as the authoritative scene snapshot.
     // Coordinated completion accepts the shell's sealed read-only drawing candidate;
@@ -211,6 +217,11 @@ public:
     // diagnostic does not resize, redraw, or export the view; a widget size or
     // exported image alone cannot detect a stale native OpenGL viewport.
     [[nodiscard]] std::optional<QSize> nativeRenderSizePixels() const noexcept;
+
+    // Read the pixels already presented by OCCT without rendering a new frame.
+    // Unlike exportViewImage, this can diagnose stale live interaction output.
+    // Returns an empty image if no native framebuffer is available.
+    [[nodiscard]] QImage nativeRenderedImage() const;
 
     enum class TransformControl { translation, rotation, scale, axis_resize_x, axis_resize_y };
     // Native picker diagnostic in Qt logical pixels; changes only hover state.

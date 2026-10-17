@@ -149,8 +149,13 @@ std::array<QImage, 3> exports(sketch::desktop::MainWindow& window,
     const auto pdf_path = directory.filePath(stem + QStringLiteral(".pdf"));
     const auto svg_path = directory.filePath(stem + QStringLiteral(".svg"));
     const auto png_path = directory.filePath(stem + QStringLiteral(".png"));
-    require(window.exportDraftPdf(pdf_path) && window.exportDraftSvg(svg_path) &&
-                window.exportDraftImage(png_path), "transformed component failed PDF/SVG/PNG export");
+    const auto exported=[&](bool result,const char* format) {
+        if(!result)throw std::runtime_error(std::string("transformed component failed ")+format+
+            " export: "+window.lastError().toStdString());
+    };
+    exported(window.exportDraftPdf(pdf_path),"PDF");
+    exported(window.exportDraftSvg(svg_path),"SVG");
+    exported(window.exportDraftImage(png_path),"PNG");
     QPdfDocument pdf;
     require(pdf.load(pdf_path) == QPdfDocument::Error::None && pdf.pageCount() == 1,
             "transformed component PDF cannot be decoded");

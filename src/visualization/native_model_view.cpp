@@ -21,8 +21,11 @@
 #include <AIS_ManipulatorOwner.hxx>
 #include <AIS_SelectionScheme.hxx>
 #include <Graphic3d_Camera.hxx>
+#include <Graphic3d_StructureManager.hxx>
+#include <Graphic3d_ZLayerId.hxx>
 #include <StdSelect_ViewerSelector3d.hxx>
 #include <SelectMgr_EntityOwner.hxx>
+#include <SelectMgr_SelectionManager.hxx>
 #include <AIS_Shape.hxx>
 #include <AIS_ColoredShape.hxx>
 #include <AIS_TextLabel.hxx>
@@ -40,6 +43,7 @@
 #include <Aspect_DisplayConnection.hxx>
 #include <Aspect_Handle.hxx>
 #include <OpenGl_GraphicDriver.hxx>
+#include <OpenGl_Context.hxx>
 #include <OpenGl_View.hxx>
 #include <OpenGl_Window.hxx>
 #include <PrsMgr_PresentationManager.hxx>
@@ -696,6 +700,11 @@ public:
     std::vector<NativeRoofOpeningTarget> roof_candidate_targets;
     QStringList roof_candidate_selection;
     std::vector<occ::handle<AIS_Shape>> roof_preview_presentations;
+    std::vector<occ::handle<AIS_Shape>> roof_selected_preview_presentations;
+    std::optional<NativeRoofOpeningTransform> roof_presented_proposal;
+    bool roof_proxy_displayed{};
+    occ::handle<AIS_Shape> roof_pointer_frame;
+    std::array<double,2> roof_pointer_frame_scale{1.0,1.0};
     std::vector<std::pair<occ::handle<AIS_Shape>,bool>> roof_original_visibility;
     bool roof_release_pending{};
     bool roof_committing{};
@@ -1584,7 +1593,15 @@ public:
         return result;
     }
 
+    void clear_roof_pointer_frame() noexcept {
+        if (!roof_pointer_frame.IsNull() && !context.IsNull()) {
+            try { context->Remove(roof_pointer_frame,false); } catch (...) {}
+        }
+        roof_pointer_frame.Nullify();
+    }
+
     void detach_manipulator() noexcept {
+        clear_roof_pointer_frame();
         manipulation_transform.reset();
         component_rotation_capture.reset();
         try { refresh_status_label(); } catch (...) {}
@@ -1593,6 +1610,11 @@ public:
             try {
                 if (manipulator->HasActiveTransformation())
                     manipulator->StopTransform(false);
+                if (!context.IsNull() && manipulator->IsAttached()) {
+                    const auto objects=manipulator->Objects();
+                    for (int index=1;index<=objects->Length();++index)
+                        context->SelectionManager()->Update(objects->Value(index),false);
+                }
                 manipulator->DeactivateCurrentMode();
                 if (manipulator->IsAttached()) manipulator->Detach();
             } catch (...) {
@@ -1603,6 +1625,7 @@ public:
             try { context->Remove(roof_transform_proxy,false); } catch (...) {}
         }
         roof_transform_proxy.Nullify();
+        roof_proxy_displayed=false;
     }
 
     void attach_manipulator() {
@@ -1700,9 +1723,9 @@ public:
                     manipulator->SetPart(axis,AIS_MM_Scaling,
                         std::isfinite(roof_transform_axis_lengths[axis]) && roof_transform_axis_lengths[axis]>1.0e-9);
             }
-            // This undisplayed proxy is the only affine-transformed object.
-            // Actual selected solids, hosts and fills wait for a manufactured
-            // complete candidate; the proxy carries no document authority.
+            // This captured compound carries the manipulator and supplies a
+            // provisional outline until a complete manufactured candidate is
+            // displayed. It carries no document authority.
             roof_transform_proxy = new AIS_Shape(compound);
             context->Load(roof_transform_proxy,-1);
             group->Append(roof_transform_proxy);
@@ -1722,7 +1745,7 @@ public:
         if (cohort) context->Display(manipulator,false);
         if (!cohort) manipulator_entity_id = selected_entity_id;
         restore_selection_highlights();
-        viewer->Redraw();
+        redraw_interaction_scene();
     }
 
     std::optional<double> component_source_yaw(const std::string& id,
@@ -1774,6 +1797,7 @@ public:
                 if (axis<0 || axis>2) return false;
                 if (axis<2) roof_transform_resize_axis=axis;
             }
+            if (!prepare_pointer_camera(true)) return false;
             component_rotation_capture.reset();
             if (!coordinated && selected_roof_openings.empty() && manipulator_entity_id &&
                 manipulator->ActiveMode()==AIS_MM_Rotation) {
@@ -1799,6 +1823,41 @@ public:
             show_operation_error(QStringLiteral("3D transform could not start: unknown failure"));
         }
         return false;
+    }
+
+    bool prepare_pointer_camera(bool reserve_transform_depth) {
+        // Only this synchronous, pre-capture camera preparation may advance a
+        // touch proof. All its source, selection and viewport fields stay fixed.
+        const bool owned_touch=touch && touch_dispatch_depth && !touch_dispatch_retired &&
+            selection_current(touch->context);
+        if (touch && !owned_touch) return false;
+        if (reserve_transform_depth) {
+            view->ZFitAll(8.0);
+            const auto camera=view->Camera();
+            if (camera->IsOrthographic()) {
+                // Keep a viewport-sized volume on either side of the scene.
+                // A tight source fit clips depth-axis motion or enlarged solids;
+                // refitting after press would invalidate screen-to-world mapping.
+                const double margin=4.0*camera->Scale()*std::max(1.0,camera->Aspect());
+                if (!std::isfinite(margin) || margin<=0.0) return false;
+                camera->SetZRange(camera->ZNear()-margin,camera->ZFar()+margin);
+            }
+        } else view->Redraw();
+        if (owned_touch) touch->context.camera=view->Camera()->WorldViewProjState();
+        return true;
+    }
+
+    void redraw_interaction_scene() {
+        if (view.IsNull()) return;
+        if (!viewer.IsNull() && viewer->StructureManager()->IsDeviceLost()) {
+            view->Redraw();
+            return;
+        }
+        // Redraw persistent geometry without V3d_View::Redraw's AutoZFit:
+        // changing the camera's depth range changes screen-to-world conversion
+        // between the captured press, preview and release at the same pointer.
+        view->Invalidate();
+        view->RedrawImmediate();
     }
 
     void preview_manipulation(const NativeInputPoint point, Qt::KeyboardModifiers modifiers = {}) {
@@ -1863,7 +1922,9 @@ public:
             } else manipulation_transform = manipulator->Transform(point.x, point.y, view);
             if (roof_transform_capture) request_roof_preview(modifiers);
             if (!guard) return;
-            if (!viewer.IsNull()) viewer->RedrawImmediate();
+            // Attached solids belong to the persistent scene, not the hover
+            // layer. Immediate redraw would composite their old cached pixels.
+            redraw_interaction_scene();
         } catch (const Standard_Failure& error) {
             fail(QStringLiteral("3D transform preview failed: ") + exception_text(error));
         } catch (const std::exception& error) {
@@ -1899,12 +1960,12 @@ public:
             const auto found = solids.find(id);
             if (found != solids.end() && !found->second.presentation.IsNull()) {
                 found->second.presentation->ResetTransformation();
-                if (native_ready && !context.IsNull()) {
-                    context->Redisplay(found->second.presentation, false);
-                }
+                if (native_ready && !context.IsNull())
+                    context->SelectionManager()->Update(found->second.presentation,false);
                 for (const auto& child : found->second.roof_openings) {
                     child.presentation->ResetTransformation();
-                    if (native_ready && !context.IsNull()) context->Redisplay(child.presentation,false);
+                    if (native_ready && !context.IsNull())
+                        context->SelectionManager()->Update(child.presentation,false);
                 }
             }
         }
@@ -1931,16 +1992,14 @@ public:
             const auto member = solids.find(id);
             if (member == solids.end() || member->second.presentation.IsNull()) continue;
             member->second.presentation->SetLocalTransformation(transform);
-            if (native_ready && !context.IsNull()) {
-                context->Redisplay(member->second.presentation, false);
-            }
             for (const auto& child : member->second.roof_openings) {
                 child.presentation->SetLocalTransformation(transform);
-                if (native_ready && !context.IsNull()) context->Redisplay(child.presentation,false);
             }
         }
-        if (native_ready && !viewer.IsNull()) {
-            viewer->RedrawImmediate();
+        if (native_ready && !view.IsNull()) {
+            // Retain geometry during the gesture. Picking is suspended, and
+            // selection is synchronized once when this preview is reset.
+            redraw_interaction_scene();
         }
     }
 
@@ -2029,13 +2088,97 @@ public:
             selection_current(*roof_transform_capture);
     }
 
-    bool restore_roof_preview() noexcept {
-        if (roof_preview_presentations.empty() && roof_original_visibility.empty()) {
+    static std::optional<gp_Trsf> roof_similarity_operator(const NativeRoofOpeningTransform& proposal) {
+        if (proposal.axis_scale!=std::array<double,2>{1.0,1.0}) return std::nullopt;
+        const gp_Pnt pivot(proposal.pivot_world_m[0],proposal.pivot_world_m[1],proposal.pivot_world_m[2]);
+        gp_Trsf scaling,rotation,translation;
+        scaling.SetScale(pivot,proposal.uniform_scale);
+        rotation.SetRotation(gp_Ax1(pivot,gp_Dir(0,0,1)),proposal.rotation_radians);
+        translation.SetTranslation(gp_Vec(proposal.translation_world_m[0],proposal.translation_world_m[1],proposal.translation_world_m[2]));
+        return translation*rotation*scaling;
+    }
+
+    void preview_roof_pointer(const NativeRoofOpeningTransform& proposal) {
+        if (roof_transform_resize_axis) {
+            if (!roof_pointer_frame.IsNull() && roof_pointer_frame_scale==proposal.axis_scale) return;
+            // A directional physical resize cannot deform the existing facets.
+            // Four intent-frame edges give immediate extent feedback instead;
+            // no solid topology or document geometry is regenerated here.
+            const double x=roof_transform_axis_lengths[0]*proposal.axis_scale[0]*.5;
+            const double y=roof_transform_axis_lengths[1]*proposal.axis_scale[1]*.5;
+            const auto& p=proposal.pivot_world_m;
+            const std::array<gp_Pnt,4> corners{gp_Pnt(p[0]-x,p[1]-y,p[2]),gp_Pnt(p[0]+x,p[1]-y,p[2]),
+                gp_Pnt(p[0]+x,p[1]+y,p[2]),gp_Pnt(p[0]-x,p[1]+y,p[2])};
+            TopoDS_Compound frame;BRep_Builder builder;builder.MakeCompound(frame);
+            for(std::size_t index=0;index<corners.size();++index)
+                builder.Add(frame,BRepBuilderAPI_MakeEdge(corners[index],corners[(index+1)%corners.size()]).Edge());
+            if (roof_pointer_frame.IsNull()) {
+                roof_pointer_frame=new AIS_Shape(frame);
+                roof_pointer_frame->SetDisplayMode(AIS_WireFrame);
+                roof_pointer_frame->SetColor(Quantity_Color(.35,.65,1.0,Quantity_TOC_RGB));
+                roof_pointer_frame->SetWidth(2.0);
+                roof_pointer_frame->SetZLayer(Graphic3d_ZLayerId_Topmost);
+                context->Display(roof_pointer_frame,false);
+                context->Deactivate(roof_pointer_frame);
+            } else {
+                roof_pointer_frame->SetShape(frame);
+                context->Redisplay(roof_pointer_frame,false);
+            }
+            roof_pointer_frame_scale=proposal.axis_scale;
+            return;
+        }
+        const auto current=roof_similarity_operator(proposal);
+        if (!current) {
+            if (roof_proxy_displayed && !context.IsNull()) {
+                context->Erase(roof_transform_proxy,false);roof_proxy_displayed=false;
+            }
+            return;
+        }
+        if (roof_presented_proposal) {
+            if (const auto shown=roof_similarity_operator(*roof_presented_proposal)) {
+                const auto residual=*current*shown->Inverted();
+                for (const auto& presentation:roof_selected_preview_presentations) {
+                    presentation->SetLocalTransformation(residual);
+                    // A pending XY move has not yet acquired the host's new
+                    // surface height. Keep its selected preview above the old
+                    // host depth, with normal depth testing inside the cohort.
+                    presentation->SetZLayer(proposal==*roof_presented_proposal ?
+                        Graphic3d_ZLayerId_Default : Graphic3d_ZLayerId_Topmost);
+                }
+            }
+        }
+        if (!roof_preview_presentations.empty()) {
+            if (roof_proxy_displayed && !context.IsNull()) {
+                context->Erase(roof_transform_proxy,false);
+                roof_proxy_displayed=false;
+            }
+        } else if (!roof_transform_proxy.IsNull() && !context.IsNull()) {
+            // The already-captured compound supplies a provisional outline
+            // before the first exact result, without rebuilding any topology.
+            roof_transform_proxy->SetLocalTransformation(*current);
+            if (!roof_proxy_displayed) {
+                roof_transform_proxy->SetDisplayMode(AIS_WireFrame);
+                roof_transform_proxy->SetColor(Quantity_Color(.35,.65,1.0,Quantity_TOC_RGB));
+                // Keep provisional feedback visible across a sloped host;
+                // only exact manufacture establishes the new surface height.
+                roof_transform_proxy->SetZLayer(Graphic3d_ZLayerId_Topmost);
+                context->Display(roof_transform_proxy,false);
+                context->Deactivate(roof_transform_proxy);
+                roof_proxy_displayed=true;
+            }
+        }
+    }
+
+    bool restore_roof_preview(bool redraw = true) noexcept {
+        if (roof_preview_presentations.empty() && roof_original_visibility.empty() && !roof_proxy_displayed) {
             roof_presented_serial=0;
             return true;
         }
         bool restored=!context.IsNull();
         if (!context.IsNull()) {
+            if (roof_proxy_displayed) {
+                try { context->Erase(roof_transform_proxy,false);roof_proxy_displayed=false; } catch (...) { restored=false; }
+            }
             for (const auto& presentation : roof_preview_presentations)
                 try { context->Remove(presentation,false); } catch (...) { restored=false; }
             for (const auto& [presentation,visible] : roof_original_visibility)
@@ -2046,7 +2189,7 @@ public:
         }
         roof_presented_serial = 0;
         try { restore_selection_highlights(); } catch (...) { restored=false; }
-        try { if (!view.IsNull()) view->Redraw(); } catch (...) { restored=false; }
+        try { if (redraw) redraw_interaction_scene(); } catch (...) { restored=false; }
         if (!restored) {
             roof_restoration_needs_republication=true;
             geometry_prepared=false;
@@ -2058,6 +2201,8 @@ public:
             return false;
         }
         roof_preview_presentations.clear();
+        roof_selected_preview_presentations.clear();
+        roof_presented_proposal.reset();
         roof_original_visibility.clear();
         return true;
     }
@@ -2075,6 +2220,7 @@ public:
         roof_candidate_selection.clear();
         roof_preview_timer->stop();
         roof_transform_feedback.clear();
+        clear_roof_pointer_frame();
         (void)restore_roof_preview();
         try { refresh_status_label(); } catch (...) {}
         // Clear all ownership before a cancellation observer can reenter.
@@ -2166,7 +2312,10 @@ public:
                 owner->cancelInteraction(); return;
             }
         }
-        if (roof_transform_proposal && *roof_transform_proposal == proposal) return;
+        if (roof_transform_proposal && *roof_transform_proposal == proposal) {
+            preview_roof_pointer(proposal);
+            return;
+        }
         if (roof_transform_serial == std::numeric_limits<std::uint64_t>::max()) {
             owner->cancelInteraction(); return;
         }
@@ -2177,8 +2326,9 @@ public:
         roof_candidate_visible_ids.reset();
         roof_candidate_targets.clear();
         roof_candidate_selection.clear();
-        // Never retain an older admitted presentation under a newer proposal.
-        if (!restore_roof_preview()) { owner->cancelInteraction(); return; }
+        // Keep the last displayed candidate while its successor is prepared.
+        // Its serial cannot authorize release of the newer proposal.
+        preview_roof_pointer(proposal);
         const double display_factor = roof_transform_metric_units ? 1.0 : 1.0/0.0254;
         const auto display_units=roof_transform_metric_units ? QStringLiteral("m") : QStringLiteral("in");
         const auto vertical_feedback=vertical ? QStringLiteral(" · ΔZ %1 %2")
@@ -2290,7 +2440,8 @@ public:
             for (const auto& id : roof_candidate_selection)
                 if (!found_ordinary.contains(id))
                     throw std::invalid_argument("candidate ordinary cohort is incomplete");
-            if (!restore_roof_preview()) { owner->cancelInteraction(); return; }
+            // Replace candidates in one frame without flashing the source.
+            if (!restore_roof_preview(false)) { owner->cancelInteraction(); return; }
             for (const auto& [id,solid] : solids) {
                 roof_original_visibility.emplace_back(solid.presentation,context->IsDisplayed(solid.presentation));
                 for (const auto& child : solid.roof_openings)
@@ -2302,7 +2453,9 @@ public:
             for (const auto& [presentation,visible] : roof_original_visibility) if (visible) context->Erase(presentation,false);
             context->ClearSelected(false);
             for (const auto& presentation : selected_presentations) context->AddOrRemoveSelected(presentation,false);
-            viewer->Redraw();
+            roof_selected_preview_presentations=selected_presentations;
+            roof_presented_proposal=roof_transform_proposal;
+            redraw_interaction_scene();
             if (!roof_preview_current(serial)) { owner->cancelInteraction(); return; }
             roof_presented_serial = serial;
             roof_transform_feedback.replace(QStringLiteral(" — preparing"),QStringLiteral(" — preview"));
@@ -2614,12 +2767,21 @@ public:
             }
         }
         const bool restore_manipulator = !manipulator.IsNull() && manipulator->IsAttached();
+        const bool restore_proxy=roof_proxy_displayed && !roof_transform_proxy.IsNull();
+        const bool restore_frame=!roof_pointer_frame.IsNull() && context->IsDisplayed(roof_pointer_frame);
         const int control_display_mode = restore_manipulator && manipulator->HasDisplayMode()
             ? manipulator->DisplayMode() : context->DisplayMode();
-        const auto restore_controls = [this, restore_manipulator, control_display_mode] {
+        const auto restore_controls = [this, restore_manipulator, restore_proxy, restore_frame, control_display_mode] {
             try {
+                // ToPixMap's cached main frame omits editing controls and uses
+                // a private depth range. Do not reuse it for the next hover.
+                view->Invalidate();
                 if (restore_manipulator && !context.IsNull())
                     context->MainPrsMgr()->SetVisibility(manipulator, control_display_mode, true);
+                if (restore_proxy && !context.IsNull())
+                    context->MainPrsMgr()->SetVisibility(roof_transform_proxy,AIS_WireFrame,true);
+                if (restore_frame && !context.IsNull())
+                    context->MainPrsMgr()->SetVisibility(roof_pointer_frame,AIS_WireFrame,true);
                 restore_selection_highlights();
                 return true;
             } catch (...) {
@@ -2634,11 +2796,30 @@ public:
                 context->MainPrsMgr()->SetVisibility(manipulator, control_display_mode, false);
                 context->MainPrsMgr()->ClearImmediateDraw();
             }
+            if (restore_proxy && !context.IsNull())
+                context->MainPrsMgr()->SetVisibility(roof_transform_proxy,AIS_WireFrame,false);
+            if (restore_frame && !context.IsNull())
+                context->MainPrsMgr()->SetVisibility(roof_pointer_frame,AIS_WireFrame,false);
             if (!context.IsNull()) context->ClearSelected(false);
             int width = 0, height = 0;
             view->Window()->Size(width, height);
             Image_PixMap pixels;
-            if (width <= 0 || height <= 0 || !view->ToPixMap(pixels, width, height, Graphic3d_BT_RGB)) {
+            const bool captured=width>0 && height>0 && [&] {
+                // ToPixMap copies camera parameters back into its camera,
+                // advancing the projection state even when they are identical.
+                // Render with a private camera so export preserves press-owned
+                // camera identity and screen-to-world mapping during a drag.
+                struct RestoreCamera {
+                    occ::handle<V3d_View> view;
+                    occ::handle<Graphic3d_Camera> camera;
+                    ~RestoreCamera() { view->View()->SetCamera(camera); }
+                } restore{view,view->Camera()};
+                // V3d_View::SetCamera also redraws/AutoZFits. This swap must
+                // leave the live camera untouched until it is restored.
+                view->View()->SetCamera(new Graphic3d_Camera(restore.camera));
+                return view->ToPixMap(pixels,width,height,Graphic3d_BT_RGB);
+            }();
+            if (!captured) {
                 restore_controls();
                 show_export_error(QStringLiteral(
                     "OCCT could not capture the 3D framebuffer"));
@@ -2860,7 +3041,7 @@ void NativeModelView::setSemanticSelections(const QStringList& entity_ids,
         if (!guard) return;
         m_impl->restore_selection_highlights();
         m_impl->attach_manipulator();
-        if (m_impl->native_ready && !m_impl->viewer.IsNull()) m_impl->viewer->Redraw();
+        if (m_impl->native_ready) m_impl->redraw_interaction_scene();
     } catch (const Standard_Failure& error) {
         if (guard) {
             m_impl->detach_manipulator();
@@ -2899,6 +3080,14 @@ bool NativeModelView::transformControlsVisible() const noexcept {
 
 bool NativeModelView::roofOpeningTransformPreviewCurrent(std::uint64_t serial) const noexcept {
     try { return m_impl->roof_preview_current(serial); } catch (...) { return false; }
+}
+
+bool NativeModelView::roofOpeningTransformPreviewPresented(std::uint64_t serial) const noexcept {
+    return serial && m_impl->roof_presented_serial==serial && roofOpeningTransformPreviewCurrent(serial);
+}
+
+bool NativeModelView::roofOpeningTransformReleasePending() const noexcept {
+    return m_impl->roof_release_pending;
 }
 
 bool NativeModelView::completeRoofOpeningTransformPreview(
@@ -3124,6 +3313,27 @@ std::optional<QSize> NativeModelView::nativeRenderSizePixels() const noexcept {
     return QSize(gl_view->GlWindow()->Width(), gl_view->GlWindow()->Height());
 }
 
+QImage NativeModelView::nativeRenderedImage() const {
+    if (QThread::currentThread() != thread() || !m_impl->native_ready || m_impl->view.IsNull()) return {};
+    const auto gl_view = occ::handle<OpenGl_View>::DownCast(m_impl->view->View());
+    if (gl_view.IsNull() || gl_view->GlWindow().IsNull() || !gl_view->GlWindow()->Activate()) return {};
+    const auto& context = gl_view->GlWindow()->GetGlContext();
+    const auto size = nativeRenderSizePixels();
+    if (context.IsNull() || !size || size->isEmpty() || !gl_view->FBO().IsNull() ||
+        context->DrawBuffer() >= GL_COLOR_ATTACHMENT0) return {};
+    Image_PixMap pixels;
+    if (!pixels.InitZero(Image_Format_RGB, size->width(), size->height())) return {};
+    // BufferDump reads the current draw buffer. Read the displayed front
+    // buffer, preserving OCCT's draw-buffer state and its cached scene.
+    struct RestoreDrawBuffer {
+        occ::handle<OpenGl_Context> context;
+        int buffer;
+        ~RestoreDrawBuffer() { context->SetDrawBuffer(buffer); }
+    } restore{context, context->DrawBuffer()};
+    context->SetDrawBuffer(GL_FRONT);
+    return gl_view->BufferDump(pixels, Graphic3d_BT_RGB) ? detail::framebufferImage(pixels) : QImage{};
+}
+
 void NativeModelView::setEntitySelectedCallback(std::function<void(QString)> callback) {
     onEntitySelected = std::move(callback);
 }
@@ -3265,7 +3475,9 @@ void NativeModelView::resetInteraction(bool restore_controls, bool keep_tablet_d
     m_impl->clear_translation_preview();
     if (restore_controls) { try { m_impl->attach_manipulator(); } catch (...) { m_impl->detach_manipulator(); } }
     unsetCursor();
-    if (m_impl->native_ready && !m_impl->view.IsNull()) m_impl->view->Redraw();
+    // Release picking still owns its captured camera after logical reset.
+    // Restoring source geometry or controls must not refit that camera.
+    if (m_impl->native_ready) m_impl->redraw_interaction_scene();
 }
 
 void NativeModelView::resetCompletedPointerInteraction(bool restore_controls) {
@@ -3436,7 +3648,10 @@ void NativeModelView::paintEvent(QPaintEvent* event) {
         const QPointer<NativeModelView> owner_guard(this);
         m_impl->complete_initial_fit();
         if (!owner_guard) return;
-        m_impl->view->Redraw();
+        if (m_impl->gesture==Impl::Gesture::manipulate || m_impl->gesture==Impl::Gesture::move ||
+            m_impl->roof_transform_capture || m_impl->component_rotation_capture)
+            m_impl->redraw_interaction_scene();
+        else m_impl->view->Redraw();
     }
 }
 
@@ -3852,15 +4067,19 @@ void NativeModelView::pointerPress(QSinglePointEvent* event) {
         if (event->button()==Qt::RightButton && isReady()) {
             m_impl->detach_manipulator();
             m_impl->view->Redraw();
-            m_impl->selection_capture=m_impl->capture_selection();
-            m_impl->gesture_snapshot=m_impl->published_snapshot;
         }
         if (!claimPointer(event->button())) { event->accept(); return; }
         m_impl->gesture = event->button() == Qt::RightButton ? Impl::Gesture::orbit : Impl::Gesture::pan;
         m_impl->navigation_start = QPoint(point.x, point.y);
-        if (m_impl->gesture == Impl::Gesture::orbit)
+        if (m_impl->gesture == Impl::Gesture::orbit) {
             m_impl->view->StartRotation(point.x, point.y, 0.4);
-        else
+            // StartRotation writes the camera even at zero rotation. A
+            // stationary context click owns the state after that preparation.
+            if (isReady()) {
+                m_impl->selection_capture=m_impl->capture_selection();
+                m_impl->gesture_snapshot=m_impl->published_snapshot;
+            }
+        } else
             m_impl->view->Pan(0, 0, 1.0, true);
         setCursor(Qt::ClosedHandCursor);
         event->accept();
@@ -3955,11 +4174,17 @@ void NativeModelView::pointerPress(QSinglePointEvent* event) {
         }
         m_impl->gesture = isMoveActive() ? Impl::Gesture::move : Impl::Gesture::select;
         if (m_impl->gesture==Impl::Gesture::select) {
+            if (!m_impl->prepare_pointer_camera(false)) {
+                cancelInteraction();event->accept();return;
+            }
             m_impl->selection_capture=m_impl->capture_selection();
             m_impl->gesture_snapshot=m_impl->published_snapshot;
         }
         m_impl->translation_start.reset();
         if (m_impl->gesture == Impl::Gesture::move) {
+            if (!m_impl->prepare_pointer_camera(true)) {
+                cancelInteraction();event->accept();return;
+            }
             if (!capture_transform(QString::fromStdString(*m_impl->translation_entity_id))) {
                 event->accept();
                 return;
@@ -4060,16 +4285,19 @@ void NativeModelView::pointerMove(QSinglePointEvent* event) {
         return;
     }
     if (m_impl->initiating_button == Qt::LeftButton) {
-        if (m_impl->gesture == Impl::Gesture::manipulate && m_impl->left_moved) {
-            const QPointer<NativeModelView> owner_guard(this);
-            m_impl->preview_manipulation(point,event->modifiers());
-            if (!owner_guard) { event->accept(); return; }
+        if (m_impl->gesture == Impl::Gesture::manipulate) {
+            if (m_impl->left_moved) m_impl->preview_manipulation(point,event->modifiers());
+            // Picking another handle can deactivate OCCT's captured operation.
+            // Hover resumes after the gesture, never during a transform.
+            event->accept();
+            return;
         }
-        if (m_impl->gesture == Impl::Gesture::move && m_impl->left_moved &&
-            m_impl->translation_entity_id.has_value()) {
-            if (const auto current = m_impl->world_point(point)) {
-                m_impl->preview_translation(*current);
+        if (m_impl->gesture == Impl::Gesture::move) {
+            if (m_impl->left_moved && m_impl->translation_entity_id.has_value()) {
+                if (const auto current = m_impl->world_point(point)) m_impl->preview_translation(*current);
             }
+            event->accept();
+            return;
         }
         if (!m_impl->context.IsNull()) {
             m_impl->context->MoveTo(point.x, point.y, m_impl->view, false);
